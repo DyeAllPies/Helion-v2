@@ -1,10 +1,16 @@
 // internal/cluster/persistence.go
 //
-// BadgerJSONPersister — production Persister implementation.
-// NopPersister        — test no-op.
-// MemPersister        — test in-memory implementation.
+// BadgerJSONPersister — production Persister + JobPersister implementation.
+// NopPersister        — test no-op (satisfies both interfaces).
+// MemPersister        — test in-memory node/audit store (satisfies Persister).
 //
-// All three satisfy the Persister interface defined in registry.go.
+// Persister    (registry.go) — node CRUD + audit
+// JobPersister (job.go)      — job CRUD + audit
+//
+// BadgerJSONPersister and NopPersister satisfy both interfaces so a single
+// instance can be injected into both Registry and JobStore in production.
+// MemPersister covers the node side only; MemJobPersister (in job.go) covers
+// the job side — keeping test helpers focused and independently inspectable.
 
 package cluster
 
@@ -22,9 +28,12 @@ import (
 
 // ── BadgerJSONPersister ───────────────────────────────────────────────────────
 
-// BadgerJSONPersister implements Persister using BadgerDB with JSON encoding.
+// BadgerJSONPersister implements both Persister (nodes) and JobPersister (jobs)
+// using BadgerDB with JSON encoding.
+//
 // Migration: replace json.Marshal/Unmarshal with proto.Marshal/Unmarshal once
-// the Node and Job types are generated proto messages.
+// Node and Job are generated proto messages. The key schema and transaction
+// boundaries do not change.
 type BadgerJSONPersister struct {
 	db                *badger.DB
 	heartbeatInterval time.Duration
@@ -44,6 +53,8 @@ func NewBadgerJSONPersister(path string, heartbeatInterval time.Duration) (*Badg
 func (p *BadgerJSONPersister) Close() error {
 	return p.db.Close()
 }
+
+// ── Node methods (satisfies Persister) ───────────────────────────────────────
 
 // SaveNode writes a Node record under nodes/{address} with TTL = 2× heartbeat interval.
 func (p *BadgerJSONPersister) SaveNode(_ context.Context, n *cpb.Node) error {
@@ -81,7 +92,52 @@ func (p *BadgerJSONPersister) LoadAllNodes(_ context.Context) ([]*cpb.Node, erro
 	return nodes, err
 }
 
+// ── Job methods (satisfies JobPersister) ─────────────────────────────────────
+
+// SaveJob writes a Job record under jobs/{id} in a single read-write
+// transaction.  Job entries have no TTL — they are immutable once terminal and
+// are the source of truth for crash recovery.
+func (p *BadgerJSONPersister) SaveJob(_ context.Context, j *cpb.Job) error {
+	data, err := json.Marshal(j)
+	if err != nil {
+		return fmt.Errorf("SaveJob marshal: %w", err)
+	}
+	key := []byte("jobs/" + j.ID)
+	return p.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(key, data)
+	})
+}
+
+// LoadAllJobs reads all jobs/ entries for crash-recovery on startup.
+// It returns every job regardless of status; the caller (JobStore.Restore)
+// filters for non-terminal jobs to build the retry queue.
+func (p *BadgerJSONPersister) LoadAllJobs(_ context.Context) ([]*cpb.Job, error) {
+	var jobs []*cpb.Job
+	prefix := []byte("jobs/")
+	err := p.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = prefix
+		it := txn.NewIterator(opts)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			var j cpb.Job
+			if err := it.Item().Value(func(v []byte) error {
+				return json.Unmarshal(v, &j)
+			}); err != nil {
+				return fmt.Errorf("LoadAllJobs unmarshal %q: %w", it.Item().Key(), err)
+			}
+			jobs = append(jobs, &j)
+		}
+		return nil
+	})
+	return jobs, err
+}
+
+// ── Shared audit method (satisfies both Persister and JobPersister) ───────────
+
 // AppendAudit writes an audit entry under audit/{nano}-{target}.
+// Called by both the Registry (node events) and JobStore (job events).
+// The key schema guarantees chronological order in prefix scans.
 func (p *BadgerJSONPersister) AppendAudit(_ context.Context, eventType, actor, target, detail string) error {
 	record := map[string]string{
 		"event_type":  eventType,
@@ -102,17 +158,23 @@ func (p *BadgerJSONPersister) AppendAudit(_ context.Context, eventType, actor, t
 
 // ── NopPersister ──────────────────────────────────────────────────────────────
 
-// NopPersister is a Persister that does nothing — for unit tests.
+// NopPersister satisfies both Persister and JobPersister — for unit tests that
+// do not need to inspect persisted state.
 type NopPersister struct{}
 
-func (NopPersister) SaveNode(_ context.Context, _ *cpb.Node) error                          { return nil }
-func (NopPersister) LoadAllNodes(_ context.Context) ([]*cpb.Node, error)                    { return nil, nil }
-func (NopPersister) AppendAudit(_ context.Context, _, _, _, _ string) error                 { return nil }
+func (NopPersister) SaveNode(_ context.Context, _ *cpb.Node) error               { return nil }
+func (NopPersister) LoadAllNodes(_ context.Context) ([]*cpb.Node, error)          { return nil, nil }
+func (NopPersister) SaveJob(_ context.Context, _ *cpb.Job) error                  { return nil }
+func (NopPersister) LoadAllJobs(_ context.Context) ([]*cpb.Job, error)            { return nil, nil }
+func (NopPersister) AppendAudit(_ context.Context, _, _, _, _ string) error       { return nil }
 
 // ── MemPersister ──────────────────────────────────────────────────────────────
 
-// MemPersister is an in-memory Persister for integration tests that need to
+// MemPersister is an in-memory Persister (node side) for tests that need to
 // inspect what was persisted without a real database.
+//
+// For the job side, use MemJobPersister (defined in job.go).  Keeping them
+// separate means each test helper stays focused and independently inspectable.
 type MemPersister struct {
 	mu     sync.Mutex
 	Nodes  map[string]*cpb.Node
