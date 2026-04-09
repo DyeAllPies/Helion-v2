@@ -1,5 +1,5 @@
 // src/app/core/guards/auth.guard.spec.ts
-import { TestBed, fakeAsync, tick } from '@angular/core/testing';
+import { TestBed, fakeAsync } from '@angular/core/testing';
 import { UrlTree, provideRouter } from '@angular/router';
 import { BehaviorSubject, isObservable, firstValueFrom } from 'rxjs';
 
