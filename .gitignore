@@ -38,9 +38,9 @@ logs/
 .env.*
 
 # Compiled binaries
-helion-coordinator
-helion-node
-helion-run
+/helion-coordinator
+/helion-node
+/helion-run
 
 # BadgerDB data files
 *.vlog
