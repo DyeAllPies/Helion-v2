@@ -1,64 +1,194 @@
+// proto/coordinator.proto
+//
+// Services and messages exposed by the Helion coordinator.
+// Generated Go stubs live in internal/proto/coordinatorpb/.
+//
+// Regenerate with:
+//   protoc --go_out=internal/proto/coordinatorpb \
+//          --go_opt=paths=source_relative \
+//          --go-grpc_out=internal/proto/coordinatorpb \
+//          --go-grpc_opt=paths=source_relative \
+//          proto/coordinator.proto
+
 syntax = "proto3";
 
-package helion;
+package helion.coordinator;
 
-option go_package = "github.com/DyeAllPies/Helion-v2/proto";
+option go_package = "helion/internal/proto/coordinatorpb";
+
+import "google/protobuf/timestamp.proto";
+
+// ============================================================================
+// CoordinatorService — services the coordinator exposes to node agents
+// ============================================================================
+
+service CoordinatorService {
+  // Register is called once by a node agent on startup.
+  // The coordinator records the node and returns a signed certificate.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Heartbeat is a long-lived client-streaming RPC.
+  // The node agent sends HeartbeatMessage at a fixed interval (default 10 s).
+  // The coordinator acknowledges each message with a HeartbeatAck, which may
+  // carry a NodeCommand (e.g. shutdown, config update).
+  //
+  // Design note: the coordinator never initiates contact with nodes.
+  // All health information flows from node → coordinator via this stream.
+  // This eliminates the v1 CheckHealth() deadlock by architectural choice.
+  rpc Heartbeat(stream HeartbeatMessage) returns (stream HeartbeatAck);
+
+  // ReportResult is called by the node when a job completes, fails, or times out.
+  rpc ReportResult(JobResult) returns (Ack);
+
+  // StreamLogs is a client-streaming RPC; the node sends log chunks in real
+  // time as the job runs.  The coordinator stores them and forwards to the
+  // dashboard WebSocket.
+  rpc StreamLogs(stream LogChunk) returns (Ack);
+}
+
+// ============================================================================
+// Register
+// ============================================================================
 
 message RegisterRequest {
-  string node_id     = 1;
-  string address     = 2;
-  bytes  certificate = 3;
+  // Stable identifier chosen by the node (e.g. hostname + port).
+  string node_id = 1;
+
+  // Network address the coordinator should use to dispatch jobs.
+  // Format: "host:port".
+  string address = 2;
+
+  // DER-encoded X.509 CSR.  The coordinator signs this and returns the cert.
+  // Empty on first registration if the node has no existing certificate.
+  bytes csr_der = 3;
 }
 
 message RegisterResponse {
-  string node_id            = 1;
-  bytes  signed_certificate = 2;
-  string error              = 3;
+  // DER-encoded signed X.509 certificate for this node.
+  bytes cert_der = 1;
+
+  // DER-encoded coordinator CA certificate so the node can verify future RPCs.
+  bytes ca_cert_der = 2;
+
+  // Heartbeat interval the node should use.  The coordinator sets this
+  // cluster-wide; nodes must not use a self-chosen interval.
+  int64 heartbeat_interval_seconds = 3;
 }
+
+// ============================================================================
+// Heartbeat
+// ============================================================================
 
 message HeartbeatMessage {
-  string node_id      = 1;
-  int64  timestamp    = 2;
-  int32  running_jobs = 3;
-  double cpu_percent  = 4;
-  double mem_percent  = 5;
+  string node_id   = 1;
+  string address   = 2;
+
+  // Current number of jobs actively running on this node.
+  int32 running_jobs = 3;
+
+  // Monotonically increasing sequence number.  The coordinator can detect
+  // dropped messages by checking for gaps.
+  uint64 seq = 4;
+
+  google.protobuf.Timestamp sent_at = 5;
 }
 
-message NodeCommand {
-  enum Type {
-    NOOP     = 0;
-    SHUTDOWN = 1;
-    DRAIN    = 2;
-  }
-  Type   type    = 1;
-  string payload = 2;
+message HeartbeatAck {
+  uint64 seq = 1; // echoes the HeartbeatMessage.seq being acknowledged
+
+  // Optional command for the node.  Empty means "nothing to do".
+  NodeCommand command = 2;
 }
+
+// NodeCommand is an instruction the coordinator can piggyback on a HeartbeatAck.
+enum NodeCommand {
+  NODE_COMMAND_NONE     = 0;
+  NODE_COMMAND_SHUTDOWN = 1; // coordinator requests graceful node shutdown
+  NODE_COMMAND_REJOIN   = 2; // coordinator requests re-registration
+}
+
+// ============================================================================
+// Job result reporting
+// ============================================================================
 
 message JobResult {
-  string job_id      = 1;
-  string node_id     = 2;
-  bool   success     = 3;
-  int32  exit_code   = 4;
-  string error       = 5;
-  int64  started_at  = 6;
-  int64  finished_at = 7;
+  string job_id   = 1;
+  string node_id  = 2;
+  JobStatus status = 3;
+  string error    = 4; // populated when status == FAILED or TIMEOUT
+  google.protobuf.Timestamp finished_at = 5;
 }
+
+enum JobStatus {
+  JOB_STATUS_UNKNOWN      = 0;
+  JOB_STATUS_PENDING      = 1;
+  JOB_STATUS_DISPATCHING  = 2;
+  JOB_STATUS_RUNNING      = 3;
+  JOB_STATUS_COMPLETED    = 4;
+  JOB_STATUS_FAILED       = 5;
+  JOB_STATUS_TIMEOUT      = 6;
+  JOB_STATUS_LOST         = 7;
+}
+
+// ============================================================================
+// Log streaming
+// ============================================================================
 
 message LogChunk {
   string job_id  = 1;
   string node_id = 2;
-  bytes  data    = 3;
-  int64  seq     = 4;
+  bytes  data    = 3; // raw stdout/stderr bytes
+  uint64 seq     = 4; // chunk sequence number for ordering on reassembly
+  google.protobuf.Timestamp sent_at = 5;
 }
 
+// ============================================================================
+// Shared types
+// ============================================================================
+
+// Ack is a minimal acknowledgement for one-way RPCs.
 message Ack {
-  bool   ok    = 1;
-  string error = 2;
+  bool ok = 1;
 }
 
-service CoordinatorService {
-  rpc Register(RegisterRequest)                        returns (RegisterResponse);
-  rpc Heartbeat(stream HeartbeatMessage)               returns (stream NodeCommand);
-  rpc ReportResult(JobResult)                          returns (Ack);
-  rpc StreamLogs(stream LogChunk)                      returns (Ack);
+// Node is the persisted record for a registered worker node.
+// Stored under nodes/{address} in BadgerDB.
+message Node {
+  string node_id  = 1;
+  string address  = 2;
+  bool   healthy  = 3;
+
+  // last_seen is the wall-clock time of the most recent heartbeat received.
+  // The coordinator derives health from this: healthy iff
+  // now - last_seen < 2 × heartbeat_interval.
+  google.protobuf.Timestamp last_seen = 4;
+
+  // running_jobs is the node's self-reported count from the last heartbeat.
+  int32 running_jobs = 5;
+
+  google.protobuf.Timestamp registered_at = 6;
+}
+
+// Job is the persisted record for a scheduled job.
+// Stored under jobs/{id} in BadgerDB.
+message Job {
+  string    id      = 1;
+  string    node_id = 2;  // address of the node this was dispatched to
+  string    command = 3;
+  repeated string args = 4;
+  JobStatus status  = 5;
+  google.protobuf.Timestamp created_at  = 6;
+  google.protobuf.Timestamp dispatched_at = 7;
+  google.protobuf.Timestamp finished_at = 8;
+  string error = 9; // populated for FAILED / TIMEOUT / LOST
+}
+
+// AuditEvent is written to audit/{timestamp}-{id} on every security-relevant
+// or job-lifecycle event.  Append-only; never mutated after write.
+message AuditEvent {
+  string event_type = 1; // e.g. "node.registered", "job.dispatched"
+  string actor      = 2; // node_id or "coordinator"
+  string target     = 3; // job_id or node_id being acted on
+  string detail     = 4; // human-readable summary
+  google.protobuf.Timestamp occurred_at = 5;
 }

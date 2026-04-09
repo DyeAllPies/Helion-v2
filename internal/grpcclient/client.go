@@ -1,9 +1,23 @@
 // internal/grpcclient/client.go
+//
+// Client is a node agent's gRPC connection to the coordinator.
+//
+// Heartbeat
+// ─────────
+// SendHeartbeats opens the bidi-streaming Heartbeat RPC and sends one
+// HeartbeatMessage per tick until ctx is cancelled.  It reads NodeCommand
+// responses from the server; SHUTDOWN causes it to return early.
+//
+// The caller (node agent main loop) is responsible for calling this in a
+// goroutine and cancelling ctx on shutdown.
+
 package grpcclient
 
 import (
 	"context"
 	"fmt"
+	"io"
+	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
@@ -40,6 +54,88 @@ func (c *Client) Register(ctx context.Context, nodeID, address string) (*pb.Regi
 		NodeId:  nodeID,
 		Address: address,
 	})
+}
+
+// SendHeartbeats opens the Heartbeat bidi-stream and sends one message every
+// interval until ctx is cancelled or the server sends a SHUTDOWN command.
+//
+// nodeID identifies this node.
+// runningJobs is the current job count reported to the coordinator.
+// onCommand is called for each NodeCommand received; may be nil.
+//
+// Returns nil on clean shutdown (ctx cancelled or SHUTDOWN received).
+// Returns an error if the stream fails unexpectedly.
+func (c *Client) SendHeartbeats(
+	ctx context.Context,
+	nodeID string,
+	interval time.Duration,
+	runningJobs func() int32, // called each tick to get current count
+	onCommand func(*pb.NodeCommand), // called for each server command; may be nil
+) error {
+	stream, err := c.Client.Heartbeat(ctx)
+	if err != nil {
+		return fmt.Errorf("open heartbeat stream: %w", err)
+	}
+
+	// Receive loop — runs in a goroutine so sends and receives are concurrent.
+	cmdErr := make(chan error, 1)
+	go func() {
+		for {
+			cmd, err := stream.Recv()
+			if err == io.EOF || ctx.Err() != nil {
+				cmdErr <- nil
+				return
+			}
+			if err != nil {
+				cmdErr <- err
+				return
+			}
+			if onCommand != nil {
+				onCommand(cmd)
+			}
+			if cmd.Type == pb.NodeCommand_SHUTDOWN {
+				cmdErr <- nil
+				return
+			}
+		}
+	}()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var seq uint64
+	for {
+		select {
+		case <-ctx.Done():
+			_ = stream.CloseSend()
+			return nil
+
+		case err := <-cmdErr:
+			return err
+
+		case <-ticker.C:
+			jobs := int32(0)
+			if runningJobs != nil {
+				jobs = runningJobs()
+			}
+			msg := &pb.HeartbeatMessage{
+				NodeId:      nodeID,
+				Timestamp:   time.Now().UnixNano(),
+				RunningJobs: jobs,
+			}
+			// Increment seq locally — proto field unused by coordinator for now
+			// but useful for debugging dropped messages.
+			seq++
+			_ = seq
+
+			if err := stream.Send(msg); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return fmt.Errorf("heartbeat send: %w", err)
+			}
+		}
+	}
 }
 
 // Close tears down the connection.
