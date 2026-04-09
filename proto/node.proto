@@ -38,6 +38,6 @@ message Empty {}
 
 service NodeService {
   rpc Dispatch(DispatchRequest) returns (DispatchAck);
-  rpc Cancel(CancelRequest)     returns (Ack);
+  rpc Cancel(CancelRequest)     returns (helion.Ack);
   rpc GetMetrics(Empty)         returns (NodeMetrics);
 }
