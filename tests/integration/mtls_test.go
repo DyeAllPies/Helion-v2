@@ -72,7 +72,11 @@ func TestMTLSRejectsUntrustedClient(t *testing.T) {
 	}
 
 	addr := "127.0.0.1:19091"
-	go func() { srv.Serve(addr) }()
+	go func() {
+		if err := srv.Serve(addr); err != nil {
+			t.Logf("server stopped: %v", err)
+		}
+	}()
 	defer srv.Stop()
 
 	time.Sleep(50 * time.Millisecond)
