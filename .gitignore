@@ -30,3 +30,23 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Helion runtime artifacts
+state/
+logs/
+*.env
+.env.*
+
+# Compiled binaries
+helion-coordinator
+helion-node
+helion-run
+
+# BadgerDB data files
+*.vlog
+*.sst
+MANIFEST
+
+# Proto generated files (regenerate with make proto)
+**/*.pb.go
+**/*_grpc.pb.go
