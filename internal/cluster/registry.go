@@ -64,15 +64,32 @@ type Persister interface {
 // nodeEntry is the in-memory record for one registered node.
 // Fields updated on every heartbeat are plain int32/int64 values accessed via
 // the sync/atomic package — no mutex needed for those updates.
+// address is stored as atomic.Value because Register() may update it
+// concurrently with snapshot() calls from persist goroutines.
 type nodeEntry struct {
 	// Immutable after insertion into the map.
 	nodeID       string
-	address      string
 	registeredAt time.Time
+
+	// address may be updated by Register() on node restart.
+	// Stored as atomic.Value to avoid races with concurrent snapshot() calls.
+	_address atomic.Value // holds string
 
 	// Mutable; written atomically by HandleHeartbeat.
 	_lastSeenNano int64 // Unix nanoseconds; 0 means "never seen"
 	_runningJobs  int32
+}
+
+func (e *nodeEntry) storeAddress(addr string) {
+	e._address.Store(addr)
+}
+
+func (e *nodeEntry) loadAddress() string {
+	v := e._address.Load()
+	if v == nil {
+		return ""
+	}
+	return v.(string)
 }
 
 func (e *nodeEntry) storeLastSeen(t time.Time) {
@@ -103,7 +120,7 @@ func (e *nodeEntry) isHealthy(staleAfter time.Duration) bool {
 func (e *nodeEntry) snapshot(staleAfter time.Duration) *cpb.Node {
 	return &cpb.Node{
 		NodeID:       e.nodeID,
-		Address:      e.address,
+		Address:      e.loadAddress(),
 		Healthy:      e.isHealthy(staleAfter),
 		LastSeen:     e.loadLastSeen(),
 		RunningJobs:  e.loadRunning(),
@@ -154,13 +171,13 @@ func (r *Registry) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.R
 	if !exists {
 		entry = &nodeEntry{
 			nodeID:       req.NodeId,
-			address:      req.Address,
 			registeredAt: now,
 		}
+		entry.storeAddress(req.Address)
 		r.nodes[req.NodeId] = entry
 	} else {
 		// Node restarted — update address in case port changed.
-		entry.address = req.Address
+		entry.storeAddress(req.Address)
 	}
 	entry.storeLastSeen(now)
 	r.mu.Unlock()
@@ -224,9 +241,9 @@ func (r *Registry) HandleHeartbeat(ctx context.Context, msg *pb.HeartbeatMessage
 		if entry == nil {
 			entry = &nodeEntry{
 				nodeID:       msg.NodeId,
-				address:      "", // unknown until Register arrives
 				registeredAt: seen,
 			}
+			entry.storeAddress("") // unknown until Register arrives
 			r.nodes[msg.NodeId] = entry
 			r.log.Info("registry: implicit registration via heartbeat",
 				slog.String("node_id", msg.NodeId))
@@ -275,7 +292,7 @@ func (r *Registry) PruneStaleNodes(ctx context.Context) []string {
 
 			r.log.Warn("registry: node stale",
 				slog.String("node_id", e.nodeID),
-				slog.String("address", e.address),
+				slog.String("address", e.loadAddress()),
 				slog.Duration("since_last_heartbeat",
 					now.Sub(ls).Round(time.Second)),
 			)
@@ -363,9 +380,9 @@ func (r *Registry) Restore(ctx context.Context) error {
 	for _, n := range nodes {
 		entry := &nodeEntry{
 			nodeID:       n.NodeID,
-			address:      n.Address,
 			registeredAt: n.RegisteredAt,
 		}
+		entry.storeAddress(n.Address)
 		// _lastSeenNano stays 0 → isHealthy() returns false until heartbeat arrives.
 		r.nodes[n.NodeID] = entry
 	}
