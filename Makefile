@@ -1,7 +1,7 @@
 PROTO_DIR   := proto
-PROTO_FILES := $(wildcard $(PROTO_DIR)/*.proto)
+PROTO_FILES := coordinator.proto node.proto
 
-.PHONY: proto build test lint clean
+.PHONY: proto build test test-short lint clean
 
 proto:
 	protoc \
@@ -16,10 +16,10 @@ build:
 	go build ./...
 
 test:
-	CGO_ENABLED=0 go test -race ./...
+	CGO_ENABLED=0 go test ./internal/... ./tests/integration/...
 
 test-short:
-	CGO_ENABLED=0 go test -short ./...
+	CGO_ENABLED=0 go test -short ./internal/...
 
 lint:
 	go vet ./...
