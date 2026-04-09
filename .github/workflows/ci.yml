@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: ["main"]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build, lint, and test
@@ -29,19 +32,14 @@ jobs:
 
       - name: Install protoc plugins
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
 
       - name: Regenerate proto stubs
         run: make proto
 
       - name: Verify no proto drift
-        run: |
-          git diff --exit-code proto/
-          if [ $? -ne 0 ]; then
-            echo "Generated proto files are out of sync. Run 'make proto' and commit the result."
-            exit 1
-          fi
+        run: git diff --exit-code proto/
 
       - name: go vet
         run: go vet ./...
@@ -49,7 +47,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v1.64.8
           args: --timeout=5m
 
       - name: go test

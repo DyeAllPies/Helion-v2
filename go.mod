@@ -1,6 +1,6 @@
 module github.com/DyeAllPies/Helion-v2
 
-go 1.26.2
+go 1.24.0
 
 require (
 	google.golang.org/grpc v1.80.0
