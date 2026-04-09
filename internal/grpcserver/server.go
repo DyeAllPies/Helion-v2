@@ -71,9 +71,8 @@ type RegistryIface interface {
 // ── JobStoreIface ─────────────────────────────────────────────────────────────
 
 // JobStoreIface is the narrow interface the server needs from the JobStore.
-// Only the transition method is needed here — the full JobStore API is not
-// exposed to the gRPC layer.
 type JobStoreIface interface {
+	Get(jobID string) (*cpb.Job, error)
 	Transition(ctx context.Context, jobID string, to cpb.JobStatus, opts cluster.TransitionOptions) error
 }
 
@@ -237,6 +236,26 @@ func (s *Server) ReportResult(
 		toStatus = cpb.JobStatusFailed
 	}
 
+	// The state machine requires dispatching → running → terminal.
+	// A node calls ReportResult after the job finishes, so the job may still
+	// be in dispatching state (the coordinator never saw a separate "started"
+	// notification). Step through running first if needed.
+	current, err := s.jobStore.Get(result.JobId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "job not found: %v", err)
+	}
+
+	if current.Status == cpb.JobStatusDispatching {
+		if err := s.jobStore.Transition(ctx, result.JobId, cpb.JobStatusRunning,
+			cluster.TransitionOptions{}); err != nil {
+			s.log.Error("ReportResult: transition to running failed",
+				slog.String("job_id", result.JobId),
+				slog.Any("err", err),
+			)
+			return nil, status.Errorf(codes.Internal, "transition to running: %v", err)
+		}
+	}
+
 	opts := cluster.TransitionOptions{
 		NodeID:   result.NodeId,
 		ExitCode: result.ExitCode,
@@ -244,14 +263,12 @@ func (s *Server) ReportResult(
 	}
 
 	if err := s.jobStore.Transition(ctx, result.JobId, toStatus, opts); err != nil {
-		s.log.Error("ReportResult: transition failed",
+		s.log.Error("ReportResult: transition to terminal failed",
 			slog.String("job_id", result.JobId),
 			slog.String("node_id", result.NodeId),
 			slog.String("to", toStatus.String()),
 			slog.Any("err", err),
 		)
-		// Return Internal so the node agent knows the coordinator did not
-		// record the result and can retry.
 		return nil, status.Errorf(codes.Internal, "record job result: %v", err)
 	}
 

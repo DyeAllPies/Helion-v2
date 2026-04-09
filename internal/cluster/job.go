@@ -296,11 +296,12 @@ func (s *JobStore) MarkLost(ctx context.Context, jobID string, reason string) er
 func (s *JobStore) Get(jobID string) (*cpb.Job, error) {
 	s.mu.RLock()
 	j, ok := s.jobs[jobID]
-	s.mu.RUnlock()
 	if !ok {
+		s.mu.RUnlock()
 		return nil, ErrJobNotFound
 	}
-	snap := *j
+	snap := *j // copy while holding the lock — prevents races with Transition
+	s.mu.RUnlock()
 	return &snap, nil
 }
 
@@ -407,4 +408,36 @@ func (m *MemJobPersister) AllJobs() map[string]*cpb.Job {
 		out[k] = &cp
 	}
 	return out
+}
+
+// ── resetToPending ────────────────────────────────────────────────────────────
+
+// resetToPending forcibly sets a non-terminal job's status back to pending so
+// that the normal pending→dispatching transition can be applied.
+//
+// This is used exclusively by RecoveryManager to re-enter the dispatch pipeline
+// for a job that was in-flight (dispatching or running) at coordinator shutdown.
+// It is NOT a normal lifecycle transition — it bypasses the transition table
+// intentionally and is therefore unexported.
+func (s *JobStore) resetToPending(ctx context.Context, jobID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	j, ok := s.jobs[jobID]
+	if !ok {
+		return ErrJobNotFound
+	}
+	if j.Status == cpb.JobStatusPending {
+		return nil // already pending, nothing to do
+	}
+	if j.Status.IsTerminal() {
+		return nil // terminal jobs are not re-entered
+	}
+
+	j.Status = cpb.JobStatusPending
+	if err := s.persister.SaveJob(ctx, j); err != nil {
+		j.Status = cpb.JobStatusDispatching // best-effort rollback
+		return fmt.Errorf("resetToPending persist: %w", err)
+	}
+	return nil
 }
