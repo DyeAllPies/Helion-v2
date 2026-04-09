@@ -1,0 +1,185 @@
+// ─── Helion Dashboard — Global Styles ───────────────────────────────────────
+// Aesthetic: Industrial terminal / dark systems console
+// Palette: Near-black backgrounds, Corinthians purple accents, amber warnings
+
+@use '@angular/material' as mat;
+
+// ── Custom colour tokens ─────────────────────────────────────────────────────
+:root {
+  --color-bg:          #0a0c0f;
+  --color-surface:     #111418;
+  --color-surface-2:   #181c22;
+  --color-surface-3:   #1e2329;
+  --color-border:      #2a2040;
+  --color-border-soft: #1e1830;
+
+  --color-accent:      #c084fc;
+  --color-accent-dim:  #a855f7;
+  --color-accent-glow: rgba(192, 132, 252, 0.15);
+
+  --color-healthy:     #c084fc;
+  --color-warning:     #ffab40;
+  --color-error:       #ff5252;
+  --color-info:        #818cf8;
+  --color-muted:       #4a5568;
+
+  --color-pending:     #ffab40;
+  --color-dispatching: #818cf8;
+  --color-running:     #c084fc;
+  --color-completed:   #e9d5ff;
+  --color-failed:      #ff5252;
+  --color-timeout:     #ff6d00;
+  --color-lost:        #b0bec5;
+
+  --font-mono:   'JetBrains Mono', 'Courier New', monospace;
+  --font-ui:     'Space Mono', 'Courier New', monospace;
+
+  --sidebar-width: 220px;
+  --header-height: 56px;
+  --radius:        4px;
+  --radius-sm:     2px;
+}
+
+// ── Material dark theme (v18 API) ─────────────────────────────────────────────
+$helion-theme: mat.define-theme((
+  color: (
+    theme-type: dark,
+    primary:    mat.$violet-palette,
+    tertiary:   mat.$orange-palette,
+  ),
+  typography: (
+    brand-family: "'JetBrains Mono', monospace",
+    bold-weight:  700,
+  ),
+  density: (scale: -1)
+));
+
+:root {
+  @include mat.all-component-themes($helion-theme);
+}
+
+// ── Base reset ────────────────────────────────────────────────────────────────
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background-color: var(--color-bg);
+  color: #c8d0dc;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+// ── Scrollbar ─────────────────────────────────────────────────────────────────
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--color-surface); }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-accent-dim); }
+
+// ── Material overrides ────────────────────────────────────────────────────────
+.mat-mdc-table {
+  background: var(--color-surface) !important;
+  font-family: var(--font-mono) !important;
+}
+.mat-mdc-header-row {
+  background: var(--color-surface-2) !important;
+}
+.mat-mdc-header-cell {
+  color: var(--color-accent) !important;
+  font-size: 11px !important;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom-color: var(--color-border) !important;
+}
+.mat-mdc-row {
+  border-bottom-color: var(--color-border-soft) !important;
+  transition: background 0.12s;
+}
+.mat-mdc-row:hover { background: var(--color-surface-2) !important; }
+.mat-mdc-cell {
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+  color: #c8d0dc !important;
+}
+.mat-mdc-paginator {
+  background: var(--color-surface-2) !important;
+  color: #8896aa !important;
+  font-family: var(--font-mono) !important;
+  border-top: 1px solid var(--color-border);
+}
+.mat-mdc-form-field  { font-family: var(--font-mono) !important; }
+.mat-mdc-select-panel { background: var(--color-surface-2) !important; }
+.mat-mdc-card {
+  background: var(--color-surface) !important;
+  border: 1px solid var(--color-border) !important;
+}
+.mat-mdc-snack-bar-container { font-family: var(--font-mono) !important; }
+
+// ── Utility classes ───────────────────────────────────────────────────────────
+.text-accent  { color: var(--color-accent); }
+.text-muted   { color: var(--color-muted); }
+.text-warning { color: var(--color-warning); }
+.text-error   { color: var(--color-error); }
+.text-info    { color: var(--color-info); }
+.text-mono    { font-family: var(--font-mono); }
+
+// ── Badges ───────────────────────────────────────────────────────────────────
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.badge-healthy     { color: var(--color-healthy);     background: rgba(192,132,252,0.1);  }
+.badge-healthy::before     { background: var(--color-healthy); }
+.badge-unhealthy   { color: var(--color-error);       background: rgba(255,82,82,0.1);    }
+.badge-unhealthy::before   { background: var(--color-error); }
+.badge-pending     { color: var(--color-pending);     background: rgba(255,171,64,0.1);   }
+.badge-pending::before     { background: var(--color-pending); }
+.badge-running     { color: var(--color-running);     background: rgba(192,132,252,0.1);  }
+.badge-running::before     { background: var(--color-running); animation: blink 1.2s infinite; }
+.badge-completed   { color: var(--color-completed);   background: rgba(233,213,255,0.08); }
+.badge-completed::before   { background: var(--color-completed); }
+.badge-failed      { color: var(--color-failed);      background: rgba(255,82,82,0.1);    }
+.badge-failed::before      { background: var(--color-failed); }
+.badge-timeout     { color: var(--color-timeout);     background: rgba(255,109,0,0.1);    }
+.badge-timeout::before     { background: var(--color-timeout); }
+.badge-lost        { color: var(--color-lost);        background: rgba(176,190,197,0.1);  }
+.badge-lost::before        { background: var(--color-lost); }
+.badge-dispatching { color: var(--color-dispatching); background: rgba(129,140,248,0.1);  }
+.badge-dispatching::before { background: var(--color-dispatching); }
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+// ── Scanline CRT overlay ──────────────────────────────────────────────────────
+.scanlines {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+}
