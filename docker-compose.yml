@@ -1,0 +1,71 @@
+name: helion-v2
+
+services:
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile.coordinator
+    container_name: helion-coordinator
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - helion-net
+    volumes:
+      - ./state:/app/state
+      - ./logs:/app/logs
+    environment:
+      - HELION_SCHEDULER=roundrobin
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  node1:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: helion-node-1
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - helion-net
+    volumes:
+      - ./state:/app/state
+      - ./logs:/app/logs
+    environment:
+      - PORT=8080
+      - HELION_COORDINATOR=coordinator:9090
+      - HELION_ALLOW_ISOLATION=false
+    depends_on:
+      coordinator:
+        condition: service_started
+    restart: "no"
+
+  node2:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: helion-node-2
+    ports:
+      - "127.0.0.1:8081:8081"
+    networks:
+      - helion-net
+    volumes:
+      - ./state:/app/state
+      - ./logs:/app/logs
+    environment:
+      - PORT=8081
+      - HELION_COORDINATOR=coordinator:9090
+      - HELION_ALLOW_ISOLATION=false
+    depends_on:
+      coordinator:
+        condition: service_started
+    restart: "no"
+
+networks:
+  helion-net:
+    driver: bridge
+    internal: false

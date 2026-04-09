@@ -1,0 +1,28 @@
+# Version control
+.git
+.gitignore
+
+# Local state and logs
+state/
+logs/
+
+# Test artifacts
+*_test.go
+tests/
+
+# Dashboard source (built separately)
+dashboard/
+
+# Docs
+docs/
+*.md
+*.docx
+*.txt
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
