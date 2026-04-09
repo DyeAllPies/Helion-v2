@@ -122,3 +122,4 @@ In `environment.ts` (local dev):
 | GET    | `/audit`                   | AuditLogComponent       |
 | WS     | `/ws/jobs/{id}/logs`       | JobDetailComponent      |
 | WS     | `/ws/metrics`              | ClusterMetricsComponent |
+
