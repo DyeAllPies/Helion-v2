@@ -63,57 +63,6 @@ const (
 	staleAfter        = 2 * heartbeatInterval  // 1 s — matches NewRegistry default × 2
 )
 
-// startServer spins up a coordinator gRPC server with a real Registry and
-// returns the server, the registry, and the address it is listening on.
-// The server is stopped by t.Cleanup.
-func startServer(t *testing.T, addr string) (*grpcserver.Server, *cluster.Registry) {
-	t.Helper()
-
-	coordBundle, err := auth.NewCoordinatorBundle()
-	if err != nil {
-		t.Fatalf("coordinator bundle: %v", err)
-	}
-
-	reg := cluster.NewRegistry(cluster.NopPersister{}, heartbeatInterval, nil)
-
-	srv, err := grpcserver.New(coordBundle,
-		grpcserver.WithRegistry(reg),
-	)
-	if err != nil {
-		t.Fatalf("grpcserver.New: %v", err)
-	}
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(addr) }()
-
-	// Give the listener a moment to be ready.
-	time.Sleep(30 * time.Millisecond)
-
-	t.Cleanup(func() {
-		srv.Stop()
-		// Drain the serve error (ErrServerStopped is expected).
-		<-errCh
-	})
-
-	return srv, reg
-}
-
-// dialNode creates a node gRPC client using a certificate signed by the
-// coordinator's CA — the only way to pass mTLS.
-func dialNode(t *testing.T, coordBundle *auth.Bundle, addr, nodeID string) *grpcclient.Client {
-	t.Helper()
-	nodeBundle, err := auth.NewNodeBundle(coordBundle.CA, nodeID)
-	if err != nil {
-		t.Fatalf("node bundle for %s: %v", nodeID, err)
-	}
-	client, err := grpcclient.New(addr, "helion-coordinator", nodeBundle)
-	if err != nil {
-		t.Fatalf("dial for %s: %v", nodeID, err)
-	}
-	t.Cleanup(func() { client.Close() })
-	return client
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 // TestRegistryIntegration_HeartbeatStream is the primary exit-criterion test.
@@ -129,8 +78,7 @@ func TestRegistryIntegration_HeartbeatStream(t *testing.T) {
 	}
 	dur := testDuration()
 
-	// We need the coordBundle to create node certs — grab it from startServer
-	// by building it ourselves and passing it in.
+	// Build the coordinator bundle directly so we can also use it to issue node certs.
 	coordBundle, err := auth.NewCoordinatorBundle()
 	if err != nil {
 		t.Fatalf("coordinator bundle: %v", err)

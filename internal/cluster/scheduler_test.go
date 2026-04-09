@@ -50,14 +50,6 @@ func node(id, addr string, running int32) *cpb.Node {
 	}
 }
 
-// nodeIDs extracts NodeID values from a slice in order.
-func nodeIDs(nodes []*cpb.Node) []string {
-	ids := make([]string, len(nodes))
-	for i, n := range nodes {
-		ids[i] = n.NodeID
-	}
-	return ids
-}
 
 // staticSource is a NodeSource that always returns the same slice.
 // Used for Scheduler unit tests; swap the slice pointer to simulate node loss.
