@@ -377,6 +377,16 @@ func (r *Registry) Len() int {
 	return n
 }
 
+// CountTotal implements metrics.NodeCounter.
+func (r *Registry) CountTotal(_ context.Context) (int, error) {
+	return r.Len(), nil
+}
+
+// CountHealthy implements metrics.NodeCounter.
+func (r *Registry) CountHealthy(_ context.Context) (int, error) {
+	return len(r.HealthyNodes()), nil
+}
+
 // ── Revocation ────────────────────────────────────────────────────────────────
 
 // RevokeNode marks a node as revoked.  Its current gRPC stream is not

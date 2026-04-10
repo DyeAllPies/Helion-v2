@@ -51,6 +51,15 @@ coordinator:
     name: ""
     annotations: {}
 
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  # Extra labels so the Prometheus Operator's label selector can find this ServiceMonitor.
+  # Match whatever your Prometheus CR sets in spec.serviceMonitorSelector.
+  # e.g. labels: { release: prometheus }
+  labels: {}
+
 node:
   image:
     repository: helion-node

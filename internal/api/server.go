@@ -186,16 +186,17 @@ type ReadinessChecker interface {
 
 // Server is the coordinator's HTTP API server.
 type Server struct {
-	jobs         JobStoreIface
-	nodes        NodeRegistryIface
-	metrics      MetricsProvider
-	audit        *audit.Logger
-	tokenManager *auth.TokenManager
-	rateLimiter  *ratelimit.NodeLimiter
-	readiness    ReadinessChecker
-	mux          *http.ServeMux
-	httpSrv      *http.Server
-	upgrader     websocket.Upgrader
+	jobs           JobStoreIface
+	nodes          NodeRegistryIface
+	metrics        MetricsProvider
+	audit          *audit.Logger
+	tokenManager   *auth.TokenManager
+	rateLimiter    *ratelimit.NodeLimiter
+	readiness      ReadinessChecker
+	promHandler    http.Handler // Prometheus /metrics handler; nil disables
+	mux            *http.ServeMux
+	httpSrv        *http.Server
+	upgrader       websocket.Upgrader
 }
 
 // NewServer creates an HTTP API server with all Phase 3/4 components.
@@ -207,6 +208,7 @@ func NewServer(
 	tokenMgr *auth.TokenManager,
 	rateLim *ratelimit.NodeLimiter,
 	readiness ReadinessChecker,
+	promHandler http.Handler,
 ) *Server {
 	s := &Server{
 		jobs:         jobs,
@@ -216,6 +218,7 @@ func NewServer(
 		tokenManager: tokenMgr,
 		rateLimiter:  rateLim,
 		readiness:    readiness,
+		promHandler:  promHandler,
 		mux:          http.NewServeMux(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
@@ -239,7 +242,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /jobs/{id}", s.authMiddleware(s.handleGetJob))
 	s.mux.HandleFunc("GET /jobs", s.authMiddleware(s.handleListJobs))
 	s.mux.HandleFunc("GET /nodes", s.authMiddleware(s.handleListNodes))
-	s.mux.HandleFunc("GET /metrics", s.authMiddleware(s.handleGetMetrics))
+	// /metrics serves Prometheus text format — no auth so scrapers work without tokens.
+	// Falls back to JSON snapshot if no Prometheus handler was injected (tests/dev).
+	if s.promHandler != nil {
+		s.mux.Handle("GET /metrics", s.promHandler)
+	} else {
+		s.mux.HandleFunc("GET /metrics", s.authMiddleware(s.handleGetMetrics))
+	}
 	s.mux.HandleFunc("GET /audit", s.authMiddleware(s.handleGetAudit))
 	s.mux.HandleFunc("POST /admin/nodes/{id}/revoke", s.authMiddleware(s.handleRevokeNode))
 	

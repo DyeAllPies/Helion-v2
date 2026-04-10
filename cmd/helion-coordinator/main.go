@@ -34,6 +34,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/grpcserver"
+	"github.com/DyeAllPies/Helion-v2/internal/metrics"
 	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
 )
 
@@ -174,8 +175,11 @@ func main() {
 	nodeRegistry := api.NewStubNodeRegistry()
 	metricsProvider := api.NewStubMetricsProvider()
 
+	// ── Prometheus metrics ────────────────────────────────────────────────────
+	_, promHandler := metrics.NewRegistry(jobs, registry, jobsAdapter)
+
 	readiness := &coordinatorReadiness{db: persister, reg: registry}
-	apiSrv := api.NewServer(jobsAdapter, nodeRegistry, metricsProvider, auditLogger, tokenManager, rateLimiter, readiness)
+	apiSrv := api.NewServer(jobsAdapter, nodeRegistry, metricsProvider, auditLogger, tokenManager, rateLimiter, readiness, promHandler)
 	go func() {
 		log.Info("HTTP API listening", slog.String("addr", httpAddr))
 		if err := apiSrv.Serve(httpAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {

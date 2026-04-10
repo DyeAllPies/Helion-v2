@@ -1,0 +1,177 @@
+// internal/metrics/prometheus.go
+//
+// Prometheus collector for Helion cluster metrics.
+//
+// Metrics exposed
+// ───────────────
+//   helion_jobs_total{status}       Counter  — terminal jobs by status
+//   helion_running_jobs             Gauge    — jobs currently running
+//   helion_pending_jobs             Gauge    — jobs currently pending
+//   helion_healthy_nodes            Gauge    — healthy node agents
+//   helion_total_nodes              Gauge    — all registered nodes
+//   helion_job_duration_seconds     Histogram — durations of terminal jobs
+//
+// The Collector is a pull-based prometheus.Collector: all values are computed
+// on each scrape from the live in-memory state, so no background goroutine
+// is needed.
+
+package metrics
+
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+// DurationSource returns the elapsed durations (seconds) of all terminal jobs.
+// Implemented by JobStoreAdapter in the api package.
+type DurationSource interface {
+	TerminalJobDurations(ctx context.Context) ([]float64, error)
+}
+
+// Collector implements prometheus.Collector for Helion cluster metrics.
+type Collector struct {
+	jobs      JobCounter
+	nodes     NodeCounter
+	durations DurationSource
+
+	descJobsTotal          *prometheus.Desc
+	descRunningJobs        *prometheus.Desc
+	descPendingJobs        *prometheus.Desc
+	descHealthyNodes       *prometheus.Desc
+	descTotalNodes         *prometheus.Desc
+	descJobDurationSeconds *prometheus.Desc
+}
+
+// NewCollector creates a Collector backed by the given counters and duration source.
+func NewCollector(jobs JobCounter, nodes NodeCounter, dur DurationSource) *Collector {
+	return &Collector{
+		jobs:      jobs,
+		nodes:     nodes,
+		durations: dur,
+		descJobsTotal: prometheus.NewDesc(
+			"helion_jobs_total",
+			"Total number of terminal jobs by status.",
+			[]string{"status"}, nil,
+		),
+		descRunningJobs: prometheus.NewDesc(
+			"helion_running_jobs",
+			"Number of jobs currently running.",
+			nil, nil,
+		),
+		descPendingJobs: prometheus.NewDesc(
+			"helion_pending_jobs",
+			"Number of jobs currently pending.",
+			nil, nil,
+		),
+		descHealthyNodes: prometheus.NewDesc(
+			"helion_healthy_nodes",
+			"Number of healthy node agents.",
+			nil, nil,
+		),
+		descTotalNodes: prometheus.NewDesc(
+			"helion_total_nodes",
+			"Total number of registered node agents.",
+			nil, nil,
+		),
+		descJobDurationSeconds: prometheus.NewDesc(
+			"helion_job_duration_seconds",
+			"Histogram of completed/failed job durations in seconds.",
+			nil, nil,
+		),
+	}
+}
+
+// Describe sends all metric descriptors to ch.
+func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- c.descJobsTotal
+	ch <- c.descRunningJobs
+	ch <- c.descPendingJobs
+	ch <- c.descHealthyNodes
+	ch <- c.descTotalNodes
+	ch <- c.descJobDurationSeconds
+}
+
+// Collect computes current metric values and sends them to ch.
+func (c *Collector) Collect(ch chan<- prometheus.Metric) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Terminal job counts (counter semantics — monotonically increasing totals).
+	for _, status := range []string{"COMPLETED", "FAILED", "TIMEOUT", "LOST"} {
+		if n, err := c.jobs.CountByStatus(ctx, status); err == nil {
+			ch <- prometheus.MustNewConstMetric(
+				c.descJobsTotal, prometheus.CounterValue, float64(n), status,
+			)
+		}
+	}
+
+	// In-flight job counts.
+	if n, err := c.jobs.CountByStatus(ctx, "RUNNING"); err == nil {
+		ch <- prometheus.MustNewConstMetric(c.descRunningJobs, prometheus.GaugeValue, float64(n))
+	}
+	if n, err := c.jobs.CountByStatus(ctx, "PENDING"); err == nil {
+		ch <- prometheus.MustNewConstMetric(c.descPendingJobs, prometheus.GaugeValue, float64(n))
+	}
+
+	// Node counts.
+	if n, err := c.nodes.CountHealthy(ctx); err == nil {
+		ch <- prometheus.MustNewConstMetric(c.descHealthyNodes, prometheus.GaugeValue, float64(n))
+	}
+	if n, err := c.nodes.CountTotal(ctx); err == nil {
+		ch <- prometheus.MustNewConstMetric(c.descTotalNodes, prometheus.GaugeValue, float64(n))
+	}
+
+	// Job duration histogram — built from all terminal job records on each scrape.
+	if c.durations != nil {
+		c.collectDurationHistogram(ctx, ch)
+	}
+}
+
+// buckets are the upper bounds used for helion_job_duration_seconds.
+var buckets = []float64{0.01, 0.1, 0.5, 1, 5, 10, 30, 60, 300}
+
+func (c *Collector) collectDurationHistogram(ctx context.Context, ch chan<- prometheus.Metric) {
+	durs, err := c.durations.TerminalJobDurations(ctx)
+	if err != nil || len(durs) == 0 {
+		return
+	}
+
+	// cumCounts[upperBound] = number of observations with value <= upperBound.
+	cumCounts := make(map[float64]uint64, len(buckets))
+	var sum float64
+	var count uint64
+
+	for _, d := range durs {
+		sum += d
+		count++
+		for _, b := range buckets {
+			if d <= b {
+				cumCounts[b]++
+			}
+		}
+	}
+
+	ch <- prometheus.MustNewConstHistogram(
+		c.descJobDurationSeconds, count, sum, cumCounts,
+	)
+}
+
+// NewRegistry creates a prometheus.Registry with Go runtime, process, and
+// Helion collectors registered, and returns the matching HTTP handler for
+// the /metrics endpoint.
+func NewRegistry(jobs JobCounter, nodes NodeCounter, dur DurationSource) (*prometheus.Registry, http.Handler) {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		NewCollector(jobs, nodes, dur),
+	)
+	return reg, promhttp.HandlerFor(reg, promhttp.HandlerOpts{
+		EnableOpenMetrics: true,
+	})
+}

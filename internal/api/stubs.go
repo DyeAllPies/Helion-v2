@@ -26,12 +26,14 @@ type JobStoreAdapter struct {
 }
 
 // NewJobStoreAdapter creates an adapter for cluster.JobStore.
+// Returns the concrete type so callers can pass it to both JobStoreIface
+// and metrics.DurationSource without a type assertion.
 func NewJobStoreAdapter(store interface {
 	Submit(ctx context.Context, j *cpb.Job) error
 	Get(jobID string) (*cpb.Job, error)
 	List() []*cpb.Job
 	GetJobsByStatus(ctx context.Context, status string) ([]*cpb.Job, error)
-}) JobStoreIface {
+}) *JobStoreAdapter {
 	return &JobStoreAdapter{store: store}
 }
 
@@ -78,6 +80,27 @@ func (a *JobStoreAdapter) List(ctx context.Context, statusFilter string, page, s
 	}
 
 	return allJobs[start:end], total, nil
+}
+
+// TerminalJobDurations returns elapsed seconds for all completed/failed jobs.
+// Implements metrics.DurationSource.
+func (a *JobStoreAdapter) TerminalJobDurations(ctx context.Context) ([]float64, error) {
+	var durations []float64
+	for _, status := range []string{"COMPLETED", "FAILED", "TIMEOUT", "LOST"} {
+		jobs, err := a.store.GetJobsByStatus(ctx, status)
+		if err != nil {
+			continue
+		}
+		for _, j := range jobs {
+			if !j.FinishedAt.IsZero() && !j.CreatedAt.IsZero() {
+				d := j.FinishedAt.Sub(j.CreatedAt).Seconds()
+				if d >= 0 {
+					durations = append(durations, d)
+				}
+			}
+		}
+	}
+	return durations, nil
 }
 
 // ── Stub Node Registry ───────────────────────────────────────────────────────

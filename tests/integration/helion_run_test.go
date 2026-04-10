@@ -52,7 +52,7 @@ func startAPIServer(t *testing.T, jobs *cluster.JobStore) string {
 	// Wrap JobStore in adapter to provide paginated List method
 	jobsAdapter := api.NewJobStoreAdapter(jobs)
 	rateLimiter := ratelimit.NewNodeLimiter()
-	srv := api.NewServer(jobsAdapter, nil, nil, nil, nil, rateLimiter, nil)
+	srv := api.NewServer(jobsAdapter, nil, nil, nil, nil, rateLimiter, nil, nil)
 
 	go func() {
 		if err := srv.Serve(addr); err != nil && err != http.ErrServerClosed {
