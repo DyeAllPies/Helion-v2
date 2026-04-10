@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "helion.fullname" . }}-coordinator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "helion.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "helion.coordinator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ .Values.coordinator.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+    - name: http
+      port: {{ .Values.coordinator.service.httpPort }}
+      targetPort: http
+      protocol: TCP

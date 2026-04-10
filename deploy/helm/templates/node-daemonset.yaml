@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "helion.fullname" . }}-node
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "helion.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node
+spec:
+  updateStrategy:
+    {{- toYaml .Values.node.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "helion.node.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "helion.labels" . | nindent 8 }}
+        {{- include "helion.node.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "helion.node.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.node.securityContext | nindent 8 }}
+      # Wait for coordinator to be reachable before starting
+      initContainers:
+        - name: wait-for-coordinator
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z {{ include "helion.fullname" . }}-coordinator {{ .Values.coordinator.service.grpcPort }}; do
+                echo "waiting for coordinator..."; sleep 2
+              done
+      containers:
+        - name: node
+          image: "{{ .Values.node.image.repository }}:{{ .Values.node.image.tag }}"
+          imagePullPolicy: {{ .Values.node.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.node.env.port | int }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.node.env.port | quote }}
+            - name: HELION_COORDINATOR
+              value: {{ include "helion.coordinator.address" . | quote }}
+            - name: HELION_ALLOW_ISOLATION
+              value: {{ .Values.node.env.allowIsolation | quote }}
+            # Expose the node's own pod IP so it can advertise its address to the coordinator
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          resources:
+            {{- toYaml .Values.node.resources | nindent 12 }}
+      {{- with .Values.node.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

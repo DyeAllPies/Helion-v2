@@ -1,0 +1,34 @@
+{{- if .Values.coordinator.serviceAccount.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "helion.fullname" . }}-coordinator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "helion.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+rules:
+  # Coordinator reads its own Secret (JWT secret, TLS material)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ include "helion.fullname" . }}-coordinator"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "helion.fullname" . }}-coordinator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "helion.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "helion.fullname" . }}-coordinator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "helion.coordinator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -1,0 +1,21 @@
+{{- if .Values.coordinator.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "helion.fullname" . }}-coordinator-db
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "helion.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+  annotations:
+    helm.sh/resource-policy: keep  # Preserve BadgerDB data across helm upgrades/deletions
+spec:
+  accessModes:
+    - {{ .Values.coordinator.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.coordinator.persistence.size }}
+  {{- if .Values.coordinator.persistence.storageClass }}
+  storageClassName: {{ .Values.coordinator.persistence.storageClass }}
+  {{- end }}
+{{- end }}

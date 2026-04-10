@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helion.fullname" . }}-coordinator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "helion.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  replicas: {{ .Values.coordinator.replicaCount }}
+  # BadgerDB is single-writer; recreate avoids two pods holding the PVC simultaneously
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "helion.coordinator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "helion.labels" . | nindent 8 }}
+        {{- include "helion.coordinator.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "helion.coordinator.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.coordinator.securityContext | nindent 8 }}
+      containers:
+        - name: coordinator
+          image: "{{ .Values.coordinator.image.repository }}:{{ .Values.coordinator.image.tag }}"
+          imagePullPolicy: {{ .Values.coordinator.image.pullPolicy }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.coordinator.service.grpcPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.coordinator.service.httpPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "helion.fullname" . }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.coordinator.resources | nindent 12 }}
+          {{- if .Values.coordinator.persistence.enabled }}
+          volumeMounts:
+            - name: db
+              mountPath: {{ .Values.coordinator.env.dbPath }}
+          {{- end }}
+      {{- if .Values.coordinator.persistence.enabled }}
+      volumes:
+        - name: db
+          persistentVolumeClaim:
+            claimName: {{ include "helion.fullname" . }}-coordinator-db
+      {{- end }}
