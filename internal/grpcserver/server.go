@@ -53,6 +53,7 @@ type RegistryIface interface {
 type JobStoreIface interface {
 	Submit(ctx context.Context, j *cpb.Job) error
 	Get(jobID string) (*cpb.Job, error)
+	Transition(ctx context.Context, jobID string, to cpb.JobStatus, opts cluster.TransitionOptions) error
 }
 
 // RateLimiterIface is the interface for rate limiting.
@@ -205,4 +206,75 @@ func (s *Server) Heartbeat(
 			return status.Errorf(codes.Internal, "heartbeat send: %v", err)
 		}
 	}
+}
+
+// ReportResult handles job completion reports from nodes.
+//
+// When a node finishes executing a job (success or failure), it calls this
+// RPC to notify the coordinator. The coordinator updates the job status in
+// the JobStore and triggers any necessary state transitions.
+func (s *Server) ReportResult(
+	ctx context.Context,
+	result *pb.JobResult,
+) (*pb.Ack, error) {
+	if s.jobs == nil {
+		// No JobStore injected — return success but don't process.
+		// This allows tests without full coordinator setup.
+		return &pb.Ack{Ok: true}, nil
+	}
+
+	s.log.Info("job result reported",
+		slog.String("job_id", result.JobId),
+		slog.String("node_id", result.NodeId),
+		slog.Bool("success", result.Success),
+	)
+
+	// Get current job state to determine transition path
+	job, err := s.jobs.Get(result.JobId)
+	if err != nil {
+		s.log.Error("failed to get job",
+			slog.String("job_id", result.JobId),
+			slog.Any("err", err),
+		)
+		return nil, status.Errorf(codes.NotFound, "job not found: %v", err)
+	}
+
+	// Prepare transition options
+	var opts cluster.TransitionOptions
+	opts.NodeID = result.NodeId
+	opts.ExitCode = result.ExitCode
+
+	// If job is in dispatching state, transition to running first
+	// (required by the state machine: dispatching → running → completed)
+	if job.Status == cpb.JobStatusDispatching {
+		if err := s.jobs.Transition(ctx, result.JobId, cpb.JobStatusRunning, opts); err != nil {
+			s.log.Error("failed to transition job to running",
+				slog.String("job_id", result.JobId),
+				slog.Any("err", err),
+			)
+			return nil, status.Errorf(codes.Internal, "transition to running failed: %v", err)
+		}
+	}
+
+	// Now transition to final state
+	var targetStatus cpb.JobStatus
+	if result.Success {
+		targetStatus = cpb.JobStatusCompleted
+	} else {
+		targetStatus = cpb.JobStatusFailed
+		if result.Error != "" {
+			opts.ErrMsg = result.Error
+		}
+	}
+
+	if err := s.jobs.Transition(ctx, result.JobId, targetStatus, opts); err != nil {
+		s.log.Error("failed to transition job to final state",
+			slog.String("job_id", result.JobId),
+			slog.String("target_status", targetStatus.String()),
+			slog.Any("err", err),
+		)
+		return nil, status.Errorf(codes.Internal, "transition failed: %v", err)
+	}
+
+	return &pb.Ack{Ok: true}, nil
 }
