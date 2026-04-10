@@ -52,6 +52,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
+          livenessProbe:
+            grpc:
+              port: {{ .Values.node.env.port | int }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.node.resources | nindent 12 }}
       {{- with .Values.node.tolerations }}

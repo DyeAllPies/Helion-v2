@@ -174,7 +174,8 @@ func main() {
 	nodeRegistry := api.NewStubNodeRegistry()
 	metricsProvider := api.NewStubMetricsProvider()
 
-	apiSrv := api.NewServer(jobsAdapter, nodeRegistry, metricsProvider, auditLogger, tokenManager, rateLimiter)
+	readiness := &coordinatorReadiness{db: persister, reg: registry}
+	apiSrv := api.NewServer(jobsAdapter, nodeRegistry, metricsProvider, auditLogger, tokenManager, rateLimiter, readiness)
 	go func() {
 		log.Info("HTTP API listening", slog.String("addr", httpAddr))
 		if err := apiSrv.Serve(httpAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -204,6 +205,16 @@ func main() {
 
 	log.Info("helion-coordinator stopped")
 }
+
+// coordinatorReadiness implements api.ReadinessChecker using the real
+// BadgerDB persister and node registry.
+type coordinatorReadiness struct {
+	db  interface{ Ping() error }
+	reg interface{ Len() int }
+}
+
+func (r *coordinatorReadiness) Ping() error    { return r.db.Ping() }
+func (r *coordinatorReadiness) RegistryLen() int { return r.reg.Len() }
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {

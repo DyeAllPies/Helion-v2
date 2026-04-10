@@ -173,6 +173,15 @@ type MetricsProvider interface {
 	GetClusterMetrics(ctx context.Context) (*ClusterMetrics, error)
 }
 
+// ReadinessChecker reports whether the coordinator is ready to serve traffic.
+// Both conditions must pass for /readyz to return 200:
+//   - Ping: BadgerDB is open and can execute transactions
+//   - RegistryLen > 0: at least one node has registered
+type ReadinessChecker interface {
+	Ping() error
+	RegistryLen() int
+}
+
 // ── Server ────────────────────────────────────────────────────────────────────
 
 // Server is the coordinator's HTTP API server.
@@ -183,6 +192,7 @@ type Server struct {
 	audit        *audit.Logger
 	tokenManager *auth.TokenManager
 	rateLimiter  *ratelimit.NodeLimiter
+	readiness    ReadinessChecker
 	mux          *http.ServeMux
 	httpSrv      *http.Server
 	upgrader     websocket.Upgrader
@@ -196,6 +206,7 @@ func NewServer(
 	auditLog *audit.Logger,
 	tokenMgr *auth.TokenManager,
 	rateLim *ratelimit.NodeLimiter,
+	readiness ReadinessChecker,
 ) *Server {
 	s := &Server{
 		jobs:         jobs,
@@ -204,6 +215,7 @@ func NewServer(
 		audit:        auditLog,
 		tokenManager: tokenMgr,
 		rateLimiter:  rateLim,
+		readiness:    readiness,
 		mux:          http.NewServeMux(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
@@ -218,8 +230,9 @@ func NewServer(
 
 // registerRoutes sets up all HTTP endpoints with authentication middleware.
 func (s *Server) registerRoutes() {
-	// Public endpoint (no auth)
+	// Public endpoints (no auth)
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
 	
 	// Authenticated endpoints
 	s.mux.HandleFunc("POST /jobs", s.authMiddleware(s.handleSubmitJob))
@@ -344,6 +357,31 @@ func (s *Server) wsAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if s.readiness == nil {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ready":true}`))
+		return
+	}
+
+	if err := s.readiness.Ping(); err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "db not ready: " + err.Error()})
+		return
+	}
+
+	if s.readiness.RegistryLen() == 0 {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no nodes registered"})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"ready":true}`))
 }
 
 func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {

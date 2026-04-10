@@ -54,6 +54,11 @@ func (p *BadgerJSONPersister) Close() error {
 	return p.db.Close()
 }
 
+// Ping does a lightweight read transaction to verify BadgerDB is open and operational.
+func (p *BadgerJSONPersister) Ping() error {
+	return p.db.View(func(_ *badger.Txn) error { return nil })
+}
+
 // ── Node methods (satisfies Persister) ───────────────────────────────────────
 
 // SaveNode writes a Node record under nodes/{address} with TTL = 2× heartbeat interval.
