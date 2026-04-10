@@ -57,6 +57,15 @@ import (
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
+// ── context keys ──────────────────────────────────────────────────────────────
+
+// contextKey is a custom type for context keys to avoid collisions.
+type contextKey string
+
+const (
+	claimsContextKey contextKey = "claims"
+)
+
 // ── request / response types ─────────────────────────────────────────────────
 
 // SubmitRequest is the JSON body for POST /jobs.
@@ -265,7 +274,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			if s.audit != nil {
-				s.audit.LogAuthFailure(r.Context(), "missing authorization header", r.RemoteAddr)
+				_ = s.audit.LogAuthFailure(r.Context(), "missing authorization header", r.RemoteAddr)
 			}
 			writeError(w, http.StatusUnauthorized, "missing or invalid authorization header")
 			return
@@ -277,14 +286,14 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		claims, err := s.tokenManager.ValidateToken(token)
 		if err != nil {
 			if s.audit != nil {
-				s.audit.LogAuthFailure(r.Context(), err.Error(), r.RemoteAddr)
+				_ = s.audit.LogAuthFailure(r.Context(), err.Error(), r.RemoteAddr)
 			}
 			writeError(w, http.StatusUnauthorized, "invalid token: "+err.Error())
 			return
 		}
 
 		// Store claims in request context
-		ctx := context.WithValue(r.Context(), "claims", claims)
+		ctx := context.WithValue(r.Context(), claimsContextKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
@@ -310,7 +319,7 @@ func (s *Server) wsAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		if token == "" {
 			if s.audit != nil {
-				s.audit.LogAuthFailure(r.Context(), "missing token", r.RemoteAddr)
+				_ = s.audit.LogAuthFailure(r.Context(), "missing token", r.RemoteAddr)
 			}
 			http.Error(w, "unauthorized: missing token", http.StatusUnauthorized)
 			return
@@ -325,7 +334,7 @@ func (s *Server) wsAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "claims", claims)
+		ctx := context.WithValue(r.Context(), claimsContextKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
@@ -368,14 +377,13 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	if s.audit != nil {
 		actor := "anonymous"
 		if s.tokenManager != nil {
-			if claims, ok := r.Context().Value("claims").(*auth.Claims); ok {
+			if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
 				actor = claims.Subject
 			}
 		}
-		if err := s.audit.LogJobSubmit(r.Context(), actor, job.ID, job.Command); err != nil {
-			// Log error but don't fail the request
-			// Audit logging is important but shouldn't break job submission
-		}
+		// Audit logging is important but errors are intentionally ignored
+		// to avoid breaking job submission
+		_ = s.audit.LogJobSubmit(r.Context(), actor, job.ID, job.Command)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -560,7 +568,7 @@ func (s *Server) handleRevokeNode(w http.ResponseWriter, r *http.Request) {
 	// Get actor from claims (if auth is enabled)
 	actor := "system"
 	if s.tokenManager != nil {
-		if claims, ok := r.Context().Value("claims").(*auth.Claims); ok {
+		if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
 			actor = claims.Subject
 		}
 	}
@@ -573,7 +581,7 @@ func (s *Server) handleRevokeNode(w http.ResponseWriter, r *http.Request) {
 	
 	// Log revocation (if audit is enabled)
 	if s.audit != nil {
-		s.audit.LogNodeRevoke(r.Context(), actor, nodeID, req.Reason)
+		_ = s.audit.LogNodeRevoke(r.Context(), actor, nodeID, req.Reason)
 	}
 	
 	resp := RevokeNodeResponse{

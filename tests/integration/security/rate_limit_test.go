@@ -118,7 +118,7 @@ func TestRateLimitPerNode(t *testing.T) {
 
 	// Exhaust node1's burst
 	for i := 0; i < 20; i++ {
-		limiter.Allow(ctx, node1)
+		_ = limiter.Allow(ctx, node1)
 	}
 
 	// Node2 should still have its full burst available
@@ -220,7 +220,7 @@ func TestRateLimitReset(t *testing.T) {
 
 	// Exhaust burst
 	for i := 0; i < 20; i++ {
-		limiter.Allow(ctx, nodeID)
+		_ = limiter.Allow(ctx, nodeID)
 	}
 
 	// Should be rate limited
@@ -253,7 +253,7 @@ func TestRateLimitStats(t *testing.T) {
 
 	// Make some requests
 	for i := 0; i < 5; i++ {
-		limiter.Allow(ctx, nodeID)
+		_ = limiter.Allow(ctx, nodeID)
 	}
 
 	// Get stats
