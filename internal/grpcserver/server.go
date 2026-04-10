@@ -72,6 +72,7 @@ type RateLimiterIface interface {
 type AuditLoggerIface interface {
 	LogJobSubmit(ctx context.Context, actor, jobID, command string) error
 	LogRateLimitHit(ctx context.Context, nodeID string, limit float64) error
+	LogSecurityViolation(ctx context.Context, nodeID, jobID, violation string) error
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────
@@ -333,6 +334,16 @@ func (s *Server) ReportResult(
 			slog.Any("err", err),
 		)
 		return nil, status.Errorf(codes.Internal, "transition failed: %v", err)
+	}
+
+	// Audit security violations (Seccomp, OOMKilled) reported by the node.
+	if s.audit != nil && result.Error != "" {
+		switch result.Error {
+		case "Seccomp", "OOMKilled":
+			if aerr := s.audit.LogSecurityViolation(ctx, result.NodeId, result.JobId, result.Error); aerr != nil {
+				s.log.Warn("audit security violation failed", slog.Any("err", aerr))
+			}
+		}
 	}
 
 	return &pb.Ack{Ok: true}, nil

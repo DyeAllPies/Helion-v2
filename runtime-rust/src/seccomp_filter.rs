@@ -1,7 +1,7 @@
 // src/seccomp_filter.rs — seccomp-bpf allowlist for job processes.
 //
 // Builds a BPF program that allows a conservative set of syscalls and
-// returns EPERM for everything else.  The filter is installed in the child
+// kills the process (SIGSYS) for everything else.  The filter is installed in the child
 // process via pre_exec (after fork, before exec) so it does not restrict
 // the runtime process itself.
 //
@@ -21,7 +21,12 @@ use std::collections::BTreeMap;
 /// Allowed syscalls cover normal process execution (I/O, memory, threading,
 /// signals, file operations).  Dangerous syscalls such as ptrace(2),
 /// process_vm_readv(2), and kexec_load(2) are not in the list and will
-/// return EPERM.
+/// cause the kernel to send SIGSYS to the process and kill it immediately.
+///
+/// KillProcess is chosen over Errno(EPERM) so that:
+///   1. The violation is unambiguously detectable (SIGSYS / signal 31).
+///   2. A malicious job cannot inspect the EPERM return and adapt its
+///      behaviour — it is terminated before it can react.
 pub fn build_allowlist() -> Result<BpfProgram> {
     // Each entry: (syscall_number, vec_of_conditions).
     // An empty conditions vec means "always allow this syscall".
@@ -32,8 +37,10 @@ pub fn build_allowlist() -> Result<BpfProgram> {
 
     let filter = SeccompFilter::new(
         rules,
-        // Default action for syscalls NOT in the allowlist.
-        SeccompAction::Errno(libc::EPERM as u32),
+        // Default action for syscalls NOT in the allowlist:
+        // kill the process and deliver SIGSYS (signal 31), which the
+        // runtime detects as kill_reason = "Seccomp".
+        SeccompAction::KillProcess,
         // Action for syscalls IN the allowlist (matching empty conditions).
         SeccompAction::Allow,
         // Target architecture — must match the process being filtered.

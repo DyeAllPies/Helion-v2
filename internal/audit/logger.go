@@ -44,6 +44,7 @@ const (
 	EventRateLimitHit       = "rate_limit_hit"
 	EventCoordinatorStart   = "coordinator_start"
 	EventCoordinatorStop    = "coordinator_stop"
+	EventSecurityViolation  = "security_violation"
 )
 
 // Event represents a single audit log entry.
@@ -162,6 +163,15 @@ func (l *Logger) LogCoordinatorStart(ctx context.Context, version string) error 
 func (l *Logger) LogCoordinatorStop(ctx context.Context, reason string) error {
 	return l.Log(ctx, EventCoordinatorStop, "system", map[string]interface{}{
 		"reason": reason,
+	})
+}
+
+// LogSecurityViolation logs a security event such as a seccomp violation or
+// OOM kill that is attributed to a specific job and node.
+func (l *Logger) LogSecurityViolation(ctx context.Context, nodeID, jobID, violation string) error {
+	return l.Log(ctx, EventSecurityViolation, nodeID, map[string]interface{}{
+		"job_id":    jobID,
+		"violation": violation,
 	})
 }
 

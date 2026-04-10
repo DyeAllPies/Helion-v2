@@ -138,6 +138,47 @@ func (c *Client) SendHeartbeats(
 	}
 }
 
+// ReportResult sends a job completion result to the coordinator.
+func (c *Client) ReportResult(ctx context.Context, result *pb.JobResult) error {
+	_, err := c.Client.ReportResult(ctx, result)
+	return err
+}
+
+// StreamLogs sends captured stdout and stderr for a completed job to the
+// coordinator.  Each non-empty slice is sent as one LogChunk.
+func (c *Client) StreamLogs(ctx context.Context, jobID, nodeID string, stdout, stderr []byte) error {
+	stream, err := c.Client.StreamLogs(ctx)
+	if err != nil {
+		return fmt.Errorf("open StreamLogs: %w", err)
+	}
+
+	var seq int64
+	send := func(data []byte) error {
+		if len(data) == 0 {
+			return nil
+		}
+		seq++
+		return stream.Send(&pb.LogChunk{
+			JobId:  jobID,
+			NodeId: nodeID,
+			Data:   data,
+			Seq:    seq,
+		})
+	}
+
+	if err := send(stdout); err != nil {
+		return fmt.Errorf("stream stdout: %w", err)
+	}
+	if err := send(stderr); err != nil {
+		return fmt.Errorf("stream stderr: %w", err)
+	}
+
+	if _, err := stream.CloseAndRecv(); err != nil {
+		return fmt.Errorf("close StreamLogs: %w", err)
+	}
+	return nil
+}
+
 // Close tears down the connection.
 func (c *Client) Close() error {
 	return c.conn.Close()
