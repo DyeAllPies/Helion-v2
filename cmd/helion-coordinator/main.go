@@ -147,13 +147,14 @@ func main() {
 	log.Info("rate limiter initialized",
 		slog.Float64("limit_rps", rateLimiter.GetRate()))
 
-	// ── gRPC server with Phase 4 rate limiting ───────────────────────────
+	// ── gRPC server with Phase 4 security ────────────────────────────────
 	grpcSrv, err := grpcserver.New(bundle,
 		grpcserver.WithRegistry(registry),
 		grpcserver.WithJobStore(jobs),
 		grpcserver.WithLogger(log),
 		grpcserver.WithRateLimiter(rateLimiter),
 		grpcserver.WithAuditLogger(auditLogger),
+		grpcserver.WithRevocationChecker(registry),
 	)
 	if err != nil {
 		log.Error("create gRPC server", slog.Any("err", err))

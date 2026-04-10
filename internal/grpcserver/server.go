@@ -144,9 +144,18 @@ func New(bundle *auth.Bundle, opts ...Option) (*Server, error) {
 	// Build gRPC server options; always include transport credentials.
 	grpcOpts := []grpc.ServerOption{grpc.Creds(creds)}
 
-	// Phase 4: attach the revocation interceptor when a checker was injected.
+	// Phase 4: chain revocation and rate-limit interceptors for all unary RPCs.
+	// Order matters: revocation runs first so a revoked node is rejected before
+	// its request consumes a rate-limit token.
+	var interceptors []grpc.UnaryServerInterceptor
 	if s.revocationChecker != nil {
-		grpcOpts = append(grpcOpts, grpc.UnaryInterceptor(s.revocationInterceptor()))
+		interceptors = append(interceptors, s.revocationInterceptor())
+	}
+	if s.rateLimiter != nil {
+		interceptors = append(interceptors, s.rateLimitInterceptor())
+	}
+	if len(interceptors) > 0 {
+		grpcOpts = append(grpcOpts, grpc.ChainUnaryInterceptor(interceptors...))
 	}
 
 	g := grpc.NewServer(grpcOpts...)
@@ -174,6 +183,31 @@ func (s *Server) revocationInterceptor() grpc.UnaryServerInterceptor {
 		if nodeID != "" && s.revocationChecker.IsRevoked(nodeID) {
 			return nil, status.Errorf(codes.Unauthenticated,
 				"node %s has been revoked — re-register with a new certificate", nodeID)
+		}
+		return handler(ctx, req)
+	}
+}
+
+// rateLimitInterceptor returns a gRPC UnaryServerInterceptor that enforces
+// per-node rate limits. Requests whose node ID exceeds the limit are rejected
+// with ResourceExhausted and a rate_limit_hit audit event is written.
+// Requests with no extractable node ID are passed through unchanged.
+func (s *Server) rateLimitInterceptor() grpc.UnaryServerInterceptor {
+	return func(
+		ctx context.Context,
+		req interface{},
+		_ *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler,
+	) (interface{}, error) {
+		nodeID := extractNodeID(req)
+		if nodeID == "" {
+			return handler(ctx, req)
+		}
+		if err := s.rateLimiter.Allow(ctx, nodeID); err != nil {
+			if s.audit != nil {
+				_ = s.audit.LogRateLimitHit(ctx, nodeID, s.rateLimiter.GetRate())
+			}
+			return nil, err // already a gRPC ResourceExhausted status
 		}
 		return handler(ctx, req)
 	}
@@ -247,6 +281,16 @@ func (s *Server) Heartbeat(
 				return nil
 			}
 			return status.Errorf(codes.Internal, "heartbeat recv: %v", err)
+		}
+
+		// Rate-limit per heartbeat message; streaming RPCs bypass unary interceptors.
+		if s.rateLimiter != nil && msg.NodeId != "" {
+			if err := s.rateLimiter.Allow(ctx, msg.NodeId); err != nil {
+				if s.audit != nil {
+					_ = s.audit.LogRateLimitHit(ctx, msg.NodeId, s.rateLimiter.GetRate())
+				}
+				return err // ResourceExhausted — terminates the heartbeat stream
+			}
 		}
 
 		// Delegate to registry if available.
