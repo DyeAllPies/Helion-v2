@@ -279,5 +279,11 @@ fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_getrandom,
         libc::SYS_rseq,
         libc::SYS_membarrier,
+        // exec — must be allowed: the filter is installed in pre_exec (after fork,
+        // before exec), so execve/execveat must be permitted or the kernel blocks
+        // the exec itself and kills the child with SIGSYS before it starts.
+        // Child processes inherit this filter, so the sandbox still applies.
+        libc::SYS_execve,
+        libc::SYS_execveat,
     ]
 }
