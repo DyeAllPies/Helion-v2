@@ -1,6 +1,6 @@
 module github.com/DyeAllPies/Helion-v2
 
-go 1.25.0
+go 1.24.0
 
 require (
 	github.com/cloudflare/circl v1.6.3
@@ -40,6 +40,10 @@ require (
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
-	google.golang.org/genproto v0.0.0-20260406210006-6f92a3bedf2d
+	// Explicit override: BadgerDB v4.3.0 requires the pre-split genproto monorepo
+	// (v0.0.0-20230410155749) which contains googleapis/rpc/status, conflicting with
+	// the split genproto/googleapis/rpc module. Pinning to a post-split stub version
+	// resolves the ambiguous import. Do NOT run `go mod tidy` without re-adding this.
+	google.golang.org/genproto v0.0.0-20260406210006-6f92a3bedf2d // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 )
