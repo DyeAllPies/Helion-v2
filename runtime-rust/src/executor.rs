@@ -113,7 +113,7 @@ impl Executor {
         }
 
         // ── spawn ─────────────────────────────────────────────────────────────
-        let mut child = match cmd.spawn() {
+        let child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
                 return RunResponse {
@@ -176,7 +176,7 @@ impl Executor {
         let timed_out = killer.join().unwrap_or(false);
 
         // ── determine kill reason (before cgroup is dropped) ─────────────────
-        let exit_code = output.status.code().unwrap_or(-1) as i32;
+        let exit_code = output.status.code().unwrap_or(-1);
 
         #[cfg(target_os = "linux")]
         let oom_killed = cgroup.as_ref().map(|cg| cg.was_oom_killed()).unwrap_or(false);

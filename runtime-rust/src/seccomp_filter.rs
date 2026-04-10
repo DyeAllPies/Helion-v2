@@ -55,7 +55,7 @@ pub fn build_allowlist() -> Result<BpfProgram> {
 /// Call this inside the `pre_exec` hook (child side, after fork).
 pub fn apply(program: &BpfProgram) -> std::io::Result<()> {
     seccompiler::apply_filter(program).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        std::io::Error::other(e.to_string())
     })
 }
 
