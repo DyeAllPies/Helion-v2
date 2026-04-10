@@ -257,6 +257,11 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /ws/metrics", s.wsAuthMiddleware(s.handleMetricsStream))
 }
 
+// Handler returns the underlying http.Handler for testing.
+func (s *Server) Handler() http.Handler {
+	return s.mux
+}
+
 // Serve starts listening on addr. Blocks until the server is closed.
 // Returns http.ErrServerClosed on graceful shutdown — callers should treat
 // that as a clean exit.

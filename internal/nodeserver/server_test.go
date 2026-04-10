@@ -3,13 +3,15 @@ package nodeserver
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	"github.com/DyeAllPies/Helion-v2/internal/grpcclient"
 	"github.com/DyeAllPies/Helion-v2/internal/runtime"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
-	"log/slog"
 )
 
 // ── mock runtime ──────────────────────────────────────────────────────────────
@@ -208,6 +210,23 @@ func TestCancel_MissingJobID(t *testing.T) {
 	}
 }
 
+// failCancelRuntime always returns an error from Cancel.
+type failCancelRuntime struct{ *mockRuntime }
+
+func (f *failCancelRuntime) Cancel(_ string) error {
+	return errors.New("runtime cancel failed")
+}
+
+func TestCancel_RuntimeError_ReturnsNotFound(t *testing.T) {
+	rt := &failCancelRuntime{newMock(runtime.RunResult{}, nil)}
+	srv := newServer(rt)
+
+	_, err := srv.Cancel(context.Background(), &pb.CancelRequest{JobId: "nonexistent"})
+	if err == nil {
+		t.Error("expected error when runtime Cancel fails, got nil")
+	}
+}
+
 // ── GetMetrics tests ──────────────────────────────────────────────────────────
 
 func TestGetMetrics_Idle(t *testing.T) {
@@ -221,6 +240,44 @@ func TestGetMetrics_Idle(t *testing.T) {
 	}
 	if m.TotalJobs != 0 {
 		t.Errorf("TotalJobs: got %d want 0", m.TotalJobs)
+	}
+}
+
+// ── reportResult (with non-nil client) ───────────────────────────────────────
+
+func TestReportResult_WithFailingClient_LogsWarning(t *testing.T) {
+	// Create a real node bundle + a client pointing to an unreachable address.
+	// This exercises the reportResult code path after the nil-client early return.
+	coordBundle, err := auth.NewCoordinatorBundle()
+	if err != nil {
+		t.Fatalf("NewCoordinatorBundle: %v", err)
+	}
+	nb, err := auth.NewNodeBundle(coordBundle.CA, "rr-node")
+	if err != nil {
+		t.Fatalf("NewNodeBundle: %v", err)
+	}
+	// Point to an address where nothing is listening — ReportResult will fail.
+	client, err := grpcclient.New("127.0.0.1:1", "helion-coordinator", nb)
+	if err != nil {
+		t.Fatalf("grpcclient.New: %v", err)
+	}
+	defer client.Close()
+
+	rt := newMock(runtime.RunResult{ExitCode: 0}, nil)
+	srv := New(rt, client, "rr-node", slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Dispatch runs the job, then calls reportResult which calls client.ReportResult.
+	// The RPC will fail (nothing listening) and a warning will be logged.
+	// The Dispatch itself should still succeed.
+	ack, err := srv.Dispatch(ctx, &pb.DispatchRequest{JobId: "rr-job", Command: "/bin/true"})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if !ack.Accepted {
+		t.Errorf("expected Accepted=true, got: %q", ack.Error)
 	}
 }
 

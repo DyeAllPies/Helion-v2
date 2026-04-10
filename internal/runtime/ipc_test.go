@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
 
@@ -24,6 +25,29 @@ func TestFrameRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Errorf("payload mismatch: got %q want %q", got, payload)
+	}
+}
+
+func TestWriteFrame_OversizedPayload_ReturnsError(t *testing.T) {
+	// Allocate a payload that exceeds maxFrameBytes (64 MiB + 1 byte).
+	// The slice is allocated but never written to, so it's cheap.
+	big := make([]byte, maxFrameBytes+1)
+	var buf bytes.Buffer
+	err := writeFrame(&buf, MsgRunRequest, big)
+	if err == nil {
+		t.Error("expected error for oversized payload, got nil")
+	}
+}
+
+func TestReadFrame_OversizedFrame_ReturnsError(t *testing.T) {
+	// Craft a header that claims the payload is maxFrameBytes+1.
+	var hdr [8]byte
+	binary.BigEndian.PutUint32(hdr[0:4], MsgRunResponse)
+	binary.BigEndian.PutUint32(hdr[4:8], maxFrameBytes+1) // exceeds limit
+	buf := bytes.NewReader(hdr[:])
+	_, _, err := readFrame(buf)
+	if err == nil {
+		t.Error("expected error for oversized frame, got nil")
 	}
 }
 
@@ -218,5 +242,166 @@ func TestDecodeCancelResponseEmpty(t *testing.T) {
 	}
 	if errMsg != "" {
 		t.Errorf("expected empty error for empty input, got %q", errMsg)
+	}
+}
+
+// ── skipField ─────────────────────────────────────────────────────────────────
+
+func TestSkipField_VarintType(t *testing.T) {
+	// Varint: encode a small value (1 = 0x01).
+	data := []byte{0x01}
+	n, err := skipField(data, 0) // VarintType = 0
+	if err != nil {
+		t.Fatalf("skipField varint: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("want n=1, got %d", n)
+	}
+}
+
+func TestSkipField_Fixed64Type(t *testing.T) {
+	data := make([]byte, 8)
+	n, err := skipField(data, 1) // Fixed64Type = 1
+	if err != nil {
+		t.Fatalf("skipField fixed64: %v", err)
+	}
+	if n != 8 {
+		t.Errorf("want n=8, got %d", n)
+	}
+}
+
+func TestSkipField_Fixed64Type_TooShort_ReturnsError(t *testing.T) {
+	data := make([]byte, 4) // only 4 bytes, need 8
+	_, err := skipField(data, 1)
+	if err == nil {
+		t.Error("expected error for short fixed64")
+	}
+}
+
+func TestSkipField_BytesType(t *testing.T) {
+	// Length-prefixed: 1-byte length prefix (3) + 3 bytes payload.
+	data := []byte{0x03, 'a', 'b', 'c'}
+	n, err := skipField(data, 2) // BytesType = 2
+	if err != nil {
+		t.Fatalf("skipField bytes: %v", err)
+	}
+	if n != 4 {
+		t.Errorf("want n=4, got %d", n)
+	}
+}
+
+func TestSkipField_Fixed32Type(t *testing.T) {
+	data := make([]byte, 4)
+	n, err := skipField(data, 5) // Fixed32Type = 5
+	if err != nil {
+		t.Fatalf("skipField fixed32: %v", err)
+	}
+	if n != 4 {
+		t.Errorf("want n=4, got %d", n)
+	}
+}
+
+func TestSkipField_Fixed32Type_TooShort_ReturnsError(t *testing.T) {
+	data := make([]byte, 2) // only 2 bytes, need 4
+	_, err := skipField(data, 5)
+	if err == nil {
+		t.Error("expected error for short fixed32")
+	}
+}
+
+func TestSkipField_UnknownType_ReturnsError(t *testing.T) {
+	data := make([]byte, 8)
+	_, err := skipField(data, 3) // StartGroup = 3, not handled
+	if err == nil {
+		t.Error("expected error for unknown wire type")
+	}
+}
+
+// ── skipField called via decode functions with unknown field numbers ──────────
+
+func TestDecodeRunResponse_UnknownVarintField_Skipped(t *testing.T) {
+	// Field 9 (unknown), VarintType (0): tag = (9 << 3) | 0 = 72 = 0x48, value = 1
+	// followed by field 1 (job_id): tag=0x0a, length=3, "abc"
+	data := []byte{
+		0x48, 0x01, // field 9, varint, value=1
+		0x0a, 0x03, 'a', 'b', 'c', // field 1, job_id="abc"
+	}
+	jobID, _, err := decodeRunResponse(data)
+	if err != nil {
+		t.Fatalf("decodeRunResponse with unknown field: %v", err)
+	}
+	if jobID != "abc" {
+		t.Errorf("want job_id='abc', got %q", jobID)
+	}
+}
+
+func TestDecodeRunResponse_InvalidTag_ReturnsError(t *testing.T) {
+	// A single byte 0xFF is an invalid varint tag (needs continuation byte).
+	data := []byte{0xFF}
+	_, _, err := decodeRunResponse(data)
+	if err == nil {
+		t.Error("expected error for invalid tag, got nil")
+	}
+}
+
+func TestDecodeRunResponse_BadField1_ReturnsError(t *testing.T) {
+	// Tag for field 1, BytesType (0x0a), then truncated length prefix.
+	data := []byte{0x0a, 0xFF} // 0xFF alone is an invalid varint (no continuation)
+	_, _, err := decodeRunResponse(data)
+	if err == nil {
+		t.Error("expected error for bad field 1")
+	}
+}
+
+func TestDecodeRunResponse_BadField2_ReturnsError(t *testing.T) {
+	// Tag for field 2, VarintType (0x10), then truncated varint.
+	data := []byte{0x10, 0xFF} // 0xFF alone is an invalid varint
+	_, _, err := decodeRunResponse(data)
+	if err == nil {
+		t.Error("expected error for bad field 2")
+	}
+}
+
+func TestDecodeRunResponse_BadField5_ReturnsError(t *testing.T) {
+	// Field 5 (error), BytesType (0x2a), truncated length.
+	data := []byte{0x2a, 0xFF}
+	_, _, err := decodeRunResponse(data)
+	if err == nil {
+		t.Error("expected error for bad field 5")
+	}
+}
+
+func TestDecodeRunResponse_BadField6_ReturnsError(t *testing.T) {
+	// Field 6 (kill_reason), BytesType (0x32), truncated.
+	data := []byte{0x32, 0xFF}
+	_, _, err := decodeRunResponse(data)
+	if err == nil {
+		t.Error("expected error for bad field 6")
+	}
+}
+
+func TestDecodeCancelResponse_InvalidTag_ReturnsDefaults(t *testing.T) {
+	// 0xFF alone is an invalid varint — ConsumeTag returns n < 0.
+	ok, errMsg := decodeCancelResponse([]byte{0xFF})
+	// Should return defaults (ok=false, errMsg="") without panic.
+	if ok {
+		t.Error("expected ok=false on bad tag")
+	}
+	_ = errMsg
+}
+
+func TestDecodeCancelResponse_UnknownField_Skipped(t *testing.T) {
+	// Field 3 (unknown), VarintType (0): tag = (3 << 3) | 0 = 24 = 0x18, value = 42
+	// followed by field 1 (ok): tag=0x08, value=1
+	data := []byte{
+		0x18, 0x2a, // field 3, varint, value=42 (unknown field)
+		0x08, 0x01, // field 1, ok=true
+	}
+	ok, errMsg := decodeCancelResponse(data)
+	if !ok {
+		t.Error("expected ok=true after skipping unknown field")
+	}
+	if errMsg != "" {
+		t.Errorf("expected empty errMsg, got %q", errMsg)
 	}
 }
