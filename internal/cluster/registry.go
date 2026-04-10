@@ -135,6 +135,9 @@ type Registry struct {
 	mu    sync.RWMutex
 	nodes map[string]*nodeEntry // keyed by nodeID
 
+	revokedMu sync.RWMutex
+	revoked   map[string]struct{} // nodeIDs that have been revoked
+
 	persister         Persister
 	heartbeatInterval time.Duration
 	staleAfter        time.Duration // 2 × heartbeatInterval
@@ -148,6 +151,7 @@ func NewRegistry(p Persister, heartbeatInterval time.Duration, log *slog.Logger)
 	}
 	return &Registry{
 		nodes:             make(map[string]*nodeEntry),
+		revoked:           make(map[string]struct{}),
 		persister:         p,
 		heartbeatInterval: heartbeatInterval,
 		staleAfter:        2 * heartbeatInterval,
@@ -164,6 +168,13 @@ func NewRegistry(p Persister, heartbeatInterval time.Duration, log *slog.Logger)
 //	Address     string
 //	Certificate []byte  (DER; used in Phase 4)
 func (r *Registry) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
+	// Phase 4: reject registration from a revoked node.
+	if r.IsRevoked(req.NodeId) {
+		r.log.Warn("registry: revoked node attempted re-registration",
+			slog.String("node_id", req.NodeId))
+		return nil, fmt.Errorf("node %s is revoked: re-register with a new certificate", req.NodeId)
+	}
+
 	now := time.Now()
 
 	r.mu.Lock()
@@ -364,6 +375,43 @@ func (r *Registry) Len() int {
 	n := len(r.nodes)
 	r.mu.RUnlock()
 	return n
+}
+
+// ── Revocation ────────────────────────────────────────────────────────────────
+
+// RevokeNode marks a node as revoked.  Its current gRPC stream is not
+// forcibly terminated here — the gRPC interceptor (grpcserver.RevocationCheck)
+// will return codes.Unauthenticated on the next incoming RPC from that node.
+// The node must re-register with a new node ID to reconnect.
+func (r *Registry) RevokeNode(ctx context.Context, nodeID, reason string) error {
+	r.revokedMu.Lock()
+	r.revoked[nodeID] = struct{}{}
+	r.revokedMu.Unlock()
+
+	// Remove from active nodes map so it won't be scheduled.
+	r.mu.Lock()
+	delete(r.nodes, nodeID)
+	r.mu.Unlock()
+
+	r.log.Warn("registry: node revoked",
+		slog.String("node_id", nodeID),
+		slog.String("reason", reason))
+
+	go func() {
+		_ = r.persister.AppendAudit(context.Background(),
+			"node.revoked", "coordinator", nodeID,
+			fmt.Sprintf("reason=%s", reason))
+	}()
+	return nil
+}
+
+// IsRevoked reports whether nodeID has been revoked.
+// Safe for concurrent use; called on every incoming gRPC RPC.
+func (r *Registry) IsRevoked(nodeID string) bool {
+	r.revokedMu.RLock()
+	_, ok := r.revoked[nodeID]
+	r.revokedMu.RUnlock()
+	return ok
 }
 
 // ── Restore ───────────────────────────────────────────────────────────────────

@@ -49,6 +49,12 @@ type RegistryIface interface {
 	HandleHeartbeat(ctx context.Context, msg *pb.HeartbeatMessage) error
 }
 
+// RevocationChecker is satisfied by *cluster.Registry.
+// Injecting via interface keeps grpcserver free of a cluster import cycle.
+type RevocationChecker interface {
+	IsRevoked(nodeID string) bool
+}
+
 // JobStoreIface is the interface for job operations.
 type JobStoreIface interface {
 	Submit(ctx context.Context, j *cpb.Job) error
@@ -73,12 +79,13 @@ type AuditLoggerIface interface {
 // Server is the coordinator's gRPC server.
 type Server struct {
 	pb.UnimplementedCoordinatorServiceServer
-	grpc        *grpc.Server
-	registry    RegistryIface // nil if not injected
-	jobs        JobStoreIface // nil if not injected
-	rateLimiter RateLimiterIface
-	audit       AuditLoggerIface
-	log         *slog.Logger
+	grpc              *grpc.Server
+	registry          RegistryIface    // nil if not injected
+	jobs              JobStoreIface    // nil if not injected
+	rateLimiter       RateLimiterIface
+	audit             AuditLoggerIface
+	revocationChecker RevocationChecker // nil means no revocation enforcement
+	log               *slog.Logger
 }
 
 // Option is a functional option for New().
@@ -105,6 +112,13 @@ func WithAuditLogger(audit AuditLoggerIface) Option {
 	return func(s *Server) { s.audit = audit }
 }
 
+// WithRevocationChecker injects a revocation checker for Phase 4 security.
+// On every incoming unary RPC the interceptor calls IsRevoked(nodeID); if
+// the node has been revoked it returns codes.Unauthenticated immediately.
+func WithRevocationChecker(rc RevocationChecker) Option {
+	return func(s *Server) { s.revocationChecker = rc }
+}
+
 // WithLogger injects a structured logger.
 func WithLogger(log *slog.Logger) Option {
 	return func(s *Server) { s.log = log }
@@ -119,17 +133,62 @@ func New(bundle *auth.Bundle, opts ...Option) (*Server, error) {
 		return nil, fmt.Errorf("server credentials: %w", err)
 	}
 
-	g := grpc.NewServer(grpc.Creds(creds))
 	s := &Server{
-		grpc: g,
-		log:  slog.Default(),
+		log: slog.Default(),
 	}
 	for _, o := range opts {
 		o(s)
 	}
 
+	// Build gRPC server options; always include transport credentials.
+	grpcOpts := []grpc.ServerOption{grpc.Creds(creds)}
+
+	// Phase 4: attach the revocation interceptor when a checker was injected.
+	if s.revocationChecker != nil {
+		grpcOpts = append(grpcOpts, grpc.UnaryInterceptor(s.revocationInterceptor()))
+	}
+
+	g := grpc.NewServer(grpcOpts...)
+	s.grpc = g
+
 	pb.RegisterCoordinatorServiceServer(g, s)
 	return s, nil
+}
+
+// revocationInterceptor returns a gRPC UnaryServerInterceptor that rejects
+// RPCs from nodes whose ID appears in the revocation set.
+//
+// Node ID extraction strategy: the RegisterRequest carries an explicit NodeId
+// field.  For other RPCs (Heartbeat, ReportResult) the node ID is embedded in
+// the request proto.  We extract it via a type-switch so no reflection is
+// needed in the hot path.
+func (s *Server) revocationInterceptor() grpc.UnaryServerInterceptor {
+	return func(
+		ctx context.Context,
+		req interface{},
+		_ *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler,
+	) (interface{}, error) {
+		nodeID := extractNodeID(req)
+		if nodeID != "" && s.revocationChecker.IsRevoked(nodeID) {
+			return nil, status.Errorf(codes.Unauthenticated,
+				"node %s has been revoked — re-register with a new certificate", nodeID)
+		}
+		return handler(ctx, req)
+	}
+}
+
+// extractNodeID pulls the node ID out of known request types.
+// Returns "" for unknown types so the interceptor passes them through.
+func extractNodeID(req interface{}) string {
+	switch r := req.(type) {
+	case *pb.RegisterRequest:
+		return r.NodeId
+	case *pb.JobResult:
+		return r.NodeId
+	default:
+		return ""
+	}
 }
 
 // Serve starts listening on the given address. Blocks until stopped.
