@@ -41,6 +41,7 @@ jobs:
         run: |
           go test -race -count=1 \
             -coverprofile=coverage.out -covermode=atomic \
+            -coverpkg=./internal/... \
             ./...
 
       - name: Coverage threshold (≥ 90 %)
