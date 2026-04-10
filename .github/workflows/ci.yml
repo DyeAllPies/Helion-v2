@@ -37,12 +37,14 @@ jobs:
       - name: golangci-lint
         run: $(go env GOPATH)/bin/golangci-lint run --timeout=5m
 
-      - name: go test with coverage
+      - name: go test (all packages)
+        run: go test -race -count=1 ./...
+
+      - name: go test with coverage (internal packages)
         run: |
           go test -race -count=1 \
             -coverprofile=coverage.out -covermode=atomic \
-            -coverpkg=./internal/... \
-            ./...
+            ./internal/...
 
       - name: Coverage threshold (≥ 90 %)
         run: |
