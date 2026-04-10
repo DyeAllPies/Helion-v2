@@ -1,0 +1,84 @@
+## Helion — AWS EKS overrides
+##
+## Usage:
+##   helm install helion ./deploy/helm -f values-eks.yaml \
+##     --set coordinator.image.repository=<account>.dkr.ecr.<region>.amazonaws.com/helion-coordinator \
+##     --set node.image.repository=<account>.dkr.ecr.<region>.amazonaws.com/helion-node \
+##     --set coordinator.ingress.host=helion.example.com
+##
+## Prerequisites:
+##   - AWS Load Balancer Controller installed in the cluster
+##   - EBS CSI Driver addon enabled (provides gp3 StorageClass)
+##   - ECR repositories created and images pushed
+
+coordinator:
+  image:
+    # Replace with your ECR URI: <account>.dkr.ecr.<region>.amazonaws.com/helion-coordinator
+    repository: helion-coordinator
+    tag: latest
+    pullPolicy: Always
+
+  persistence:
+    enabled: true
+    # gp3 is cheaper and faster than gp2; requires EBS CSI Driver addon.
+    # If your cluster predates the CSI addon, use "gp2" instead.
+    storageClass: gp3
+    size: 10Gi
+    accessMode: ReadWriteOnce
+
+  ingress:
+    enabled: true
+    className: alb
+    annotations:
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+      alb.ingress.kubernetes.io/ssl-redirect: "443"
+    host: helion.example.com   # override at install time
+    tls: []                    # ALB handles TLS via ACM; cert-manager not needed
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+  serviceAccount:
+    create: true
+    annotations: {}
+    # Uncomment to attach an IAM role via IRSA if the coordinator ever needs
+    # AWS API access (e.g. Secrets Manager, S3 for audit export):
+    # annotations:
+    #   eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/helion-coordinator
+
+node:
+  image:
+    # Replace with your ECR URI: <account>.dkr.ecr.<region>.amazonaws.com/helion-node
+    repository: helion-node
+    tag: latest
+    pullPolicy: Always
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  serviceAccount:
+    create: true
+    annotations: {}
+    # eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/helion-node
+
+serviceMonitor:
+  enabled: false   # set true if you have the Prometheus Operator installed
+  labels:
+    release: prometheus

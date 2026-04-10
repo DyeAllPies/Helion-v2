@@ -1,0 +1,84 @@
+## Helion — Google GKE overrides
+##
+## Usage:
+##   helm install helion ./deploy/helm -f values-gke.yaml \
+##     --set coordinator.image.repository=gcr.io/<project>/helion-coordinator \
+##     --set node.image.repository=gcr.io/<project>/helion-node \
+##     --set coordinator.ingress.host=helion.example.com
+##
+## Prerequisites:
+##   - GKE cluster with HTTP Load Balancing add-on enabled (default)
+##   - Artifact Registry or GCR repositories created and images pushed
+##   - (Optional) cert-manager + Workload Identity for managed TLS
+
+coordinator:
+  image:
+    # Replace with your GCR/Artifact Registry URI:
+    #   gcr.io/<project>/helion-coordinator
+    #   <region>-docker.pkg.dev/<project>/<repo>/helion-coordinator
+    repository: helion-coordinator
+    tag: latest
+    pullPolicy: Always
+
+  persistence:
+    enabled: true
+    # standard-rwo: regional SSD (ReadWriteOnce, recommended for production).
+    # Alternatives: "standard" (HDD, cheaper), "premium-rwo" (faster SSD).
+    storageClass: standard-rwo
+    size: 10Gi
+    accessMode: ReadWriteOnce
+
+  ingress:
+    enabled: true
+    className: gce
+    annotations:
+      kubernetes.io/ingress.class: gce
+      # Uncomment to provision a Google-managed TLS certificate:
+      # networking.gke.io/managed-certificates: helion-cert
+      # kubernetes.io/ingress.global-static-ip-name: helion-ip
+    host: helion.example.com   # override at install time
+    tls: []
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+  serviceAccount:
+    create: true
+    annotations: {}
+    # Uncomment to bind a GCP service account via Workload Identity:
+    # annotations:
+    #   iam.gke.io/gcp-service-account: helion-coordinator@<project>.iam.gserviceaccount.com
+
+node:
+  image:
+    repository: helion-node
+    tag: latest
+    pullPolicy: Always
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  serviceAccount:
+    create: true
+    annotations: {}
+    # iam.gke.io/gcp-service-account: helion-node@<project>.iam.gserviceaccount.com
+
+serviceMonitor:
+  enabled: false   # set true if you have the Prometheus Operator installed
+  labels:
+    release: prometheus

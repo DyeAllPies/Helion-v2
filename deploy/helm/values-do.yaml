@@ -1,0 +1,85 @@
+## Helion — DigitalOcean Kubernetes (DOKS) overrides
+##
+## Usage:
+##   helm install helion ./deploy/helm -f values-do.yaml \
+##     --set coordinator.image.repository=registry.digitalocean.com/<registry>/helion-coordinator \
+##     --set node.image.repository=registry.digitalocean.com/<registry>/helion-node \
+##     --set coordinator.ingress.host=helion.example.com
+##
+## Prerequisites:
+##   - DOKS cluster created (doctl kubernetes cluster create ...)
+##   - Nginx Ingress Controller add-on enabled in the DOKS console, or installed manually
+##   - DigitalOcean Container Registry created and images pushed
+##   - (Optional) cert-manager for Let's Encrypt TLS
+
+coordinator:
+  image:
+    # Replace with your DO Registry URI:
+    #   registry.digitalocean.com/<registry>/helion-coordinator
+    repository: helion-coordinator
+    tag: latest
+    pullPolicy: Always
+
+  persistence:
+    enabled: true
+    # do-block-storage: DigitalOcean Block Storage (SSD-backed, default).
+    # do-block-storage-retain: same but with Retain reclaim policy (data survives PVC deletion).
+    # do-block-storage-xfs: XFS filesystem variant.
+    storageClass: do-block-storage
+    size: 5Gi    # DO volumes start at 1 GiB, billed per GiB
+    accessMode: ReadWriteOnce
+
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      kubernetes.io/ingress.class: nginx
+      # Uncomment for automatic Let's Encrypt TLS via cert-manager:
+      # cert-manager.io/cluster-issuer: letsencrypt-prod
+    host: helion.example.com   # override at install time
+    tls: []
+    # tls:
+    #   - hosts:
+    #       - helion.example.com
+    #     secretName: helion-tls
+
+  # DO nodes are smaller — keep requests lean to fit on s-2vcpu-4gb droplets.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+  serviceAccount:
+    create: true
+    annotations: {}
+
+node:
+  image:
+    repository: helion-node
+    tag: latest
+    pullPolicy: Always
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+  serviceAccount:
+    create: true
+    annotations: {}
+
+serviceMonitor:
+  enabled: false
+  labels:
+    release: prometheus
