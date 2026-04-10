@@ -441,3 +441,59 @@ func (s *JobStore) resetToPending(ctx context.Context, jobID string) error {
 	}
 	return nil
 }
+
+// ── Phase 4 additions ────────────────────────────────────────────────────────
+
+// GetJobsByStatus returns all jobs with the given status.
+// This is used by the metrics provider to count jobs by status.
+func (s *JobStore) GetJobsByStatus(ctx context.Context, status string) ([]*cpb.Job, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Parse status string to protobuf enum
+	var targetStatus cpb.JobStatus
+	switch status {
+	case "PENDING":
+		targetStatus = cpb.JobStatusPending
+	case "DISPATCHING":
+		targetStatus = cpb.JobStatusDispatching
+	case "RUNNING":
+		targetStatus = cpb.JobStatusRunning
+	case "COMPLETED":
+		targetStatus = cpb.JobStatusCompleted
+	case "FAILED":
+		targetStatus = cpb.JobStatusFailed
+	case "TIMEOUT":
+		targetStatus = cpb.JobStatusTimeout
+	case "LOST":
+		targetStatus = cpb.JobStatusLost
+	default:
+		return nil, fmt.Errorf("unknown job status: %s", status)
+	}
+
+	var result []*cpb.Job
+	for _, j := range s.jobs {
+		if j.Status == targetStatus {
+			result = append(result, j)
+		}
+	}
+	return result, nil
+}
+
+// CountByStatus returns the number of jobs with the given status.
+// Implements metrics.JobCounter interface.
+func (s *JobStore) CountByStatus(ctx context.Context, status string) (int, error) {
+	jobs, err := s.GetJobsByStatus(ctx, status)
+	if err != nil {
+		return 0, err
+	}
+	return len(jobs), nil
+}
+
+// CountTotal returns the total number of jobs.
+// Implements metrics.JobCounter interface.
+func (s *JobStore) CountTotal(ctx context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.jobs), nil
+}

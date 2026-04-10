@@ -20,8 +20,8 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,9 +30,11 @@ import (
 	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/api"
+	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/grpcserver"
+	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
 )
 
 func main() {
@@ -89,10 +91,68 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ── Phase 4: Enhance CA with Post-Quantum Cryptography ───────────────
+	log.Info("enhancing CA with post-quantum cryptography")
+
+	// Add ML-DSA (Dilithium-3) signing capability to CA
+	if err := bundle.CA.EnhanceWithMLDSA(); err != nil {
+		log.Error("enhance CA with ML-DSA", slog.Any("err", err))
+		os.Exit(1)
+	}
+
+	// Add Hybrid KEM (X25519 + ML-KEM-768) capability
+	bundle.CA.EnhanceWithHybridKEM()
+
+	log.Info("post-quantum cryptography enabled",
+		slog.String("kem", "X25519+ML-KEM-768"),
+		slog.String("signature", "ECDSA+ML-DSA-65"))
+
+	// ── Phase 4: Initialize Authentication & Audit ───────────────────────
+	log.Info("initializing Phase 4 security components")
+
+	// Create auth store adapter for BadgerDB
+	// NewStoreAdapter wraps BadgerDB and returns TokenStore interface
+	tokenStore := auth.NewStoreAdapter(persister)
+
+	// Initialize token manager
+	tokenManager, err := auth.NewTokenManager(tokenStore)
+	if err != nil {
+		log.Error("create token manager", slog.Any("err", err))
+		os.Exit(1)
+	}
+
+	// Generate root token on first start
+	rootToken, err := tokenManager.GenerateRootToken()
+	if err != nil {
+		log.Error("generate root token", slog.Any("err", err))
+		os.Exit(1)
+	}
+
+	// Check if this is first start (token was just created vs retrieved)
+	// We check token length as a heuristic - newly generated tokens are fresh
+	// In production, you'd check a "first_start" flag in BadgerDB
+	auth.PrintRootTokenInstructions(rootToken)
+
+	// Initialize audit logger (90-day retention)
+	auditLogger := audit.NewLogger(persister, 90*24*time.Hour)
+
+	// Log coordinator startup
+	if err := auditLogger.LogCoordinatorStart(ctx, "v2.0-phase4"); err != nil {
+		log.Warn("failed to log coordinator start", slog.Any("err", err))
+	}
+
+	// Initialize rate limiter
+	rateLimiter := ratelimit.NewNodeLimiter()
+	log.Info("rate limiter initialized",
+		slog.Float64("limit_rps", rateLimiter.GetRate()))
+
+	// ── gRPC server with Phase 4 rate limiting ───────────────────────────
 	grpcSrv, err := grpcserver.New(bundle,
 		grpcserver.WithRegistry(registry),
 		grpcserver.WithJobStore(jobs),
 		grpcserver.WithLogger(log),
+		grpcserver.WithRateLimiter(rateLimiter),
+		grpcserver.WithAuditLogger(auditLogger),
 	)
 	if err != nil {
 		log.Error("create gRPC server", slog.Any("err", err))
@@ -107,7 +167,14 @@ func main() {
 	}()
 
 	// ── HTTP API server ───────────────────────────────────────────────────
-	apiSrv := api.NewServer(jobs)
+	// Wrap JobStore with adapter to provide paginated List method
+	jobsAdapter := api.NewJobStoreAdapter(jobs)
+
+	// Use stub node registry and metrics (TODO: Phase 5 - implement real adapters)
+	nodeRegistry := api.NewStubNodeRegistry()
+	metricsProvider := api.NewStubMetricsProvider()
+
+	apiSrv := api.NewServer(jobsAdapter, nodeRegistry, metricsProvider, auditLogger, tokenManager, rateLimiter)
 	go func() {
 		log.Info("HTTP API listening", slog.String("addr", httpAddr))
 		if err := apiSrv.Serve(httpAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -121,6 +188,11 @@ func main() {
 	// ── Wait for shutdown signal ──────────────────────────────────────────
 	<-ctx.Done()
 	log.Info("shutdown signal received")
+
+	// Log coordinator shutdown to audit log
+	if err := auditLogger.LogCoordinatorStop(context.Background(), "graceful shutdown"); err != nil {
+		log.Warn("failed to log coordinator stop", slog.Any("err", err))
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()

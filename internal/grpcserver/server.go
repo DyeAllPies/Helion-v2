@@ -9,16 +9,7 @@
 // Register returns a minimal response and Heartbeat is a no-op — both are
 // still valid gRPC responses, so the mTLS test continues to pass unchanged.
 //
-// JobStore injection
-// ──────────────────
-// The server accepts an optional cluster.JobStoreIface via WithJobStore().
-// When injected, ReportResult translates the incoming *pb.JobResult into the
-// correct internal state transition (completed, failed, or timeout) and
-// delegates to the JobStore.
-//
-// When no JobStore is injected (mTLS handshake test, any test that doesn't
-// care about job reporting), ReportResult returns a successful Ack — the RPC
-// is acknowledged without side effects, which is valid gRPC behaviour.
+// When a registry is injected, Register and Heartbeat delegate fully to it.
 //
 // Heartbeat stream
 // ────────────────
@@ -29,15 +20,6 @@
 // registry.HandleHeartbeat() for each one.  It sends back a NodeCommand
 // (NOOP by default) after each message.  The stream stays open until the
 // node closes it or the context is cancelled.
-//
-// ReportResult mapping
-// ────────────────────
-// The proto JobResult uses Success bool + ExitCode int32 for outcomes.
-// The internal state machine uses JobStatus (completed / failed / timeout).
-// Mapping:
-//   Success == true                   → JobStatusCompleted
-//   Success == false && Error == "timeout" → JobStatusTimeout
-//   Success == false (otherwise)      → JobStatusFailed
 
 package grpcserver
 
@@ -47,7 +29,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"strings"
 
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
@@ -68,12 +49,22 @@ type RegistryIface interface {
 	HandleHeartbeat(ctx context.Context, msg *pb.HeartbeatMessage) error
 }
 
-// ── JobStoreIface ─────────────────────────────────────────────────────────────
-
-// JobStoreIface is the narrow interface the server needs from the JobStore.
+// JobStoreIface is the interface for job operations.
 type JobStoreIface interface {
+	Submit(ctx context.Context, j *cpb.Job) error
 	Get(jobID string) (*cpb.Job, error)
-	Transition(ctx context.Context, jobID string, to cpb.JobStatus, opts cluster.TransitionOptions) error
+}
+
+// RateLimiterIface is the interface for rate limiting.
+type RateLimiterIface interface {
+	Allow(ctx context.Context, nodeID string) error
+	GetRate() float64
+}
+
+// AuditLoggerIface is the interface for audit logging.
+type AuditLoggerIface interface {
+	LogJobSubmit(ctx context.Context, actor, jobID, command string) error
+	LogRateLimitHit(ctx context.Context, nodeID string, limit float64) error
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────
@@ -81,10 +72,12 @@ type JobStoreIface interface {
 // Server is the coordinator's gRPC server.
 type Server struct {
 	pb.UnimplementedCoordinatorServiceServer
-	grpc     *grpc.Server
-	registry RegistryIface  // nil if not injected
-	jobStore JobStoreIface  // nil if not injected
-	log      *slog.Logger
+	grpc        *grpc.Server
+	registry    RegistryIface // nil if not injected
+	jobs        JobStoreIface // nil if not injected
+	rateLimiter RateLimiterIface
+	audit       AuditLoggerIface
+	log         *slog.Logger
 }
 
 // Option is a functional option for New().
@@ -96,10 +89,19 @@ func WithRegistry(r *cluster.Registry) Option {
 	return func(s *Server) { s.registry = r }
 }
 
-// WithJobStore injects a JobStore into the server so that ReportResult RPCs
-// are translated into state transitions and persisted.
-func WithJobStore(js *cluster.JobStore) Option {
-	return func(s *Server) { s.jobStore = js }
+// WithJobStore injects a JobStore for job dispatch.
+func WithJobStore(jobs JobStoreIface) Option {
+	return func(s *Server) { s.jobs = jobs }
+}
+
+// WithRateLimiter injects a rate limiter for Phase 4 security.
+func WithRateLimiter(limiter RateLimiterIface) Option {
+	return func(s *Server) { s.rateLimiter = limiter }
+}
+
+// WithAuditLogger injects an audit logger for Phase 4 security.
+func WithAuditLogger(audit AuditLoggerIface) Option {
+	return func(s *Server) { s.audit = audit }
 }
 
 // WithLogger injects a structured logger.
@@ -109,8 +111,7 @@ func WithLogger(log *slog.Logger) Option {
 
 // New creates a gRPC server wired with mTLS from the provided auth bundle.
 // Existing callers (e.g. TestMTLSHandshake) pass no options and continue to
-// work — Register returns a minimal echo response, Heartbeat and ReportResult
-// are no-ops that return valid gRPC responses.
+// work — Register returns a minimal echo response, Heartbeat is a no-op.
 func New(bundle *auth.Bundle, opts ...Option) (*Server, error) {
 	creds, err := bundle.ServerCredentials()
 	if err != nil {
@@ -204,80 +205,4 @@ func (s *Server) Heartbeat(
 			return status.Errorf(codes.Internal, "heartbeat send: %v", err)
 		}
 	}
-}
-
-// ReportResult handles job completion reports from node agents.
-//
-// The proto JobResult encodes outcomes as Success bool + ExitCode + Error.
-// This method translates that into the internal state machine:
-//
-//	Success == true                          → JobStatusCompleted
-//	Success == false && error contains "timeout" → JobStatusTimeout
-//	Success == false (all other errors)      → JobStatusFailed
-//
-// If no JobStore is injected, the RPC is acknowledged without side effects —
-// this preserves backward compatibility with callers that don't inject a store.
-func (s *Server) ReportResult(
-	ctx context.Context,
-	result *pb.JobResult,
-) (*pb.Ack, error) {
-	if s.jobStore == nil {
-		// No store injected — acknowledge without state change.
-		return &pb.Ack{}, nil
-	}
-
-	var toStatus cpb.JobStatus
-	switch {
-	case result.Success:
-		toStatus = cpb.JobStatusCompleted
-	case strings.Contains(strings.ToLower(result.Error), "timeout"):
-		toStatus = cpb.JobStatusTimeout
-	default:
-		toStatus = cpb.JobStatusFailed
-	}
-
-	// The state machine requires dispatching → running → terminal.
-	// A node calls ReportResult after the job finishes, so the job may still
-	// be in dispatching state (the coordinator never saw a separate "started"
-	// notification). Step through running first if needed.
-	current, err := s.jobStore.Get(result.JobId)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "job not found: %v", err)
-	}
-
-	if current.Status == cpb.JobStatusDispatching {
-		if err := s.jobStore.Transition(ctx, result.JobId, cpb.JobStatusRunning,
-			cluster.TransitionOptions{}); err != nil {
-			s.log.Error("ReportResult: transition to running failed",
-				slog.String("job_id", result.JobId),
-				slog.Any("err", err),
-			)
-			return nil, status.Errorf(codes.Internal, "transition to running: %v", err)
-		}
-	}
-
-	opts := cluster.TransitionOptions{
-		NodeID:   result.NodeId,
-		ExitCode: result.ExitCode,
-		ErrMsg:   result.Error,
-	}
-
-	if err := s.jobStore.Transition(ctx, result.JobId, toStatus, opts); err != nil {
-		s.log.Error("ReportResult: transition to terminal failed",
-			slog.String("job_id", result.JobId),
-			slog.String("node_id", result.NodeId),
-			slog.String("to", toStatus.String()),
-			slog.Any("err", err),
-		)
-		return nil, status.Errorf(codes.Internal, "record job result: %v", err)
-	}
-
-	s.log.Info("job result recorded",
-		slog.String("job_id", result.JobId),
-		slog.String("node_id", result.NodeId),
-		slog.String("status", toStatus.String()),
-		slog.Int("exit_code", int(result.ExitCode)),
-	)
-
-	return &pb.Ack{}, nil
 }

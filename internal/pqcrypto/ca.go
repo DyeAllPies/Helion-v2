@@ -15,10 +15,17 @@ import (
 )
 
 // CA holds the root certificate and private key for the cluster.
+// Phase 4 enhancement: Added ML-DSA signing keys and hybrid KEM config.
 type CA struct {
 	Cert    *x509.Certificate
 	CertPEM []byte
 	key     *ecdsa.PrivateKey
+	
+	// Phase 4: Post-quantum cryptography fields
+	mldsaPub   *MLDSAPublicKey    // ML-DSA-65 public key for signature verification
+	mldsaPriv  *MLDSAPrivateKey   // ML-DSA-65 private key for signing certificates
+	mldsaSigs  map[string][]byte  // Pre-computed ML-DSA signatures (serial -> sig)
+	hybridCfg  *HybridConfig      // Hybrid KEM configuration (X25519+ML-KEM-768)
 }
 
 // NewCA generates a self-signed ECDSA P-256 root CA.

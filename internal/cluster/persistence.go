@@ -222,3 +222,78 @@ func (m *MemPersister) AppendAudit(_ context.Context, eventType, actor, target, 
 	m.mu.Unlock()
 	return nil
 }
+
+// ── Generic key-value methods for Phase 4 auth storage ───────────────────────
+
+// Get retrieves a value by key from BadgerDB.
+func (p *BadgerJSONPersister) Get(ctx context.Context, key string) ([]byte, error) {
+	var value []byte
+	err := p.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte(key))
+		if err != nil {
+			return err
+		}
+		value, err = item.ValueCopy(nil)
+		return err
+	})
+	if err == badger.ErrKeyNotFound {
+		return nil, fmt.Errorf("key not found: %s", key)
+	}
+	return value, err
+}
+
+// Put stores a value by key in BadgerDB.
+func (p *BadgerJSONPersister) Put(ctx context.Context, key string, value []byte) error {
+	return p.db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(key), value)
+	})
+}
+
+// PutWithTTL stores a value by key with a TTL in BadgerDB.
+func (p *BadgerJSONPersister) PutWithTTL(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	return p.db.Update(func(txn *badger.Txn) error {
+		entry := badger.NewEntry([]byte(key), value).WithTTL(ttl)
+		return txn.SetEntry(entry)
+	})
+}
+
+// Delete removes a key from BadgerDB.
+func (p *BadgerJSONPersister) Delete(ctx context.Context, key string) error {
+	return p.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete([]byte(key))
+	})
+}
+
+// Scan retrieves all keys with a given prefix, up to limit entries.
+// Used by audit.Logger to query events.
+func (p *BadgerJSONPersister) Scan(ctx context.Context, prefix string, limit int) ([][]byte, error) {
+	var results [][]byte
+	
+	err := p.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte(prefix)
+		
+		it := txn.NewIterator(opts)
+		defer it.Close()
+		
+		count := 0
+		for it.Rewind(); it.Valid(); it.Next() {
+			if limit > 0 && count >= limit {
+				break
+			}
+			
+			item := it.Item()
+			value, err := item.ValueCopy(nil)
+			if err != nil {
+				return err
+			}
+			
+			results = append(results, value)
+			count++
+		}
+		
+		return nil
+	})
+	
+	return results, err
+}

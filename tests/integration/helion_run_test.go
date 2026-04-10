@@ -36,6 +36,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/api"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -46,7 +47,12 @@ import (
 func startAPIServer(t *testing.T, jobs *cluster.JobStore) string {
 	t.Helper()
 	addr := freePort(t)
-	srv := api.NewServer(jobs)
+	
+	// Phase 4: NewServer requires additional components
+	// Wrap JobStore in adapter to provide paginated List method
+	jobsAdapter := api.NewJobStoreAdapter(jobs)
+	rateLimiter := ratelimit.NewNodeLimiter()
+	srv := api.NewServer(jobsAdapter, nil, nil, nil, nil, rateLimiter)
 
 	go func() {
 		if err := srv.Serve(addr); err != nil && err != http.ErrServerClosed {
