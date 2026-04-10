@@ -1,6 +1,6 @@
 module github.com/DyeAllPies/Helion-v2
 
-go 1.23.0
+go 1.25.0
 
 require (
 	github.com/cloudflare/circl v1.6.3
@@ -10,8 +10,8 @@ require (
 	github.com/gorilla/websocket v1.5.1
 	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/time v0.5.0
-	google.golang.org/grpc v1.64.0
-	google.golang.org/protobuf v1.36.8
+	google.golang.org/grpc v1.79.3
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -37,8 +37,9 @@ require (
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	golang.org/x/net v0.43.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
-	golang.org/x/text v0.28.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240701130421-f6361c86f094 // indirect
+	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
+	google.golang.org/genproto v0.0.0-20260406210006-6f92a3bedf2d
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 )

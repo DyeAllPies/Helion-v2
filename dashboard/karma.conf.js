@@ -19,6 +19,16 @@ module.exports = function (config) {
       dir: require('path').join(__dirname, './coverage/helion-dashboard'),
       subdir: '.',
       reporters: [{ type: 'html' }, { type: 'text-summary' }, { type: 'lcovonly' }],
+      // Threshold gate: ng test exits non-zero if coverage falls below these values.
+      // Raise these as the test suite grows.
+      check: {
+        global: {
+          statements: 50,
+          branches:   40,
+          functions:  50,
+          lines:      50,
+        },
+      },
     },
     reporters: ['progress', 'kjhtml'],
     port: 9876,

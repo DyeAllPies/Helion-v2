@@ -1,7 +1,8 @@
 PROTO_DIR   := proto
 PROTO_FILES := coordinator.proto node.proto runtime.proto
 
-.PHONY: proto build build-rust build-all test test-short lint clean
+.PHONY: proto build build-rust build-all test test-short lint clean \
+        test-dashboard lint-dashboard coverage-go test-all lint-all
 
 # ── protobuf ──────────────────────────────────────────────────────────────────
 
@@ -42,9 +43,33 @@ test-rust:
 lint-rust:
 	cargo clippy --manifest-path runtime-rust/Cargo.toml -- -D warnings
 
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+test-dashboard:
+	cd dashboard && $(MAKE) test
+
+lint-dashboard:
+	cd dashboard && $(MAKE) lint
+
 # ── combined ──────────────────────────────────────────────────────────────────
 
 build-all: build build-rust
+
+# Go coverage: generates coverage.out + coverage.html, enforced in CI at 25 %
+coverage-go:
+	CGO_ENABLED=0 go test -coverprofile=coverage.out -covermode=atomic \
+	    ./internal/... ./tests/integration/...
+	go tool cover -func=coverage.out | tail -10
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "HTML report → coverage.html"
+
+test-all: test test-rust test-dashboard
+	@echo ""
+	@echo "==> All test suites passed."
+
+lint-all: lint lint-rust lint-dashboard
+	@echo ""
+	@echo "==> All lint checks passed."
 
 # ── clean ─────────────────────────────────────────────────────────────────────
 
