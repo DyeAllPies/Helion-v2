@@ -47,7 +47,7 @@ import { AuditEvent, AuditEventType } from '../../shared/models';
       <ng-container matColumnDef="type">
         <th mat-header-cell *matHeaderCellDef>EVENT TYPE</th>
         <td mat-cell *matCellDef="let e">
-          <span class="event-type" [class]="'evt-' + e.type.split('_')[0]">
+          <span class="event-type" [ngClass]="eventClass(e.type)">
             {{ e.type | uppercase }}
           </span>
         </td>
@@ -134,10 +134,17 @@ import { AuditEvent, AuditEventType } from '../../shared/models';
       padding: 2px 7px;
       border-radius: var(--radius-sm);
 
-      &.evt-job  { color: var(--color-info);    background: rgba(64,196,255,0.1);  }
-      &.evt-node { color: var(--color-accent);  background: rgba(192,132,252,0.1);   }
-      &.evt-auth { color: var(--color-warning); background: rgba(255,171,64,0.1);  }
-      &.evt-token{ color: var(--color-warning); background: rgba(255,171,64,0.1);  }
+      &.evt-job         { color: var(--color-info);    background: rgba(64,196,255,0.1);  }
+      &.evt-node        { color: var(--color-accent);  background: rgba(192,132,252,0.1); }
+      &.evt-auth        { color: var(--color-warning); background: rgba(255,171,64,0.1);  }
+      &.evt-rate        { color: var(--color-warning); background: rgba(255,171,64,0.1);  }
+      &.evt-coordinator { color: var(--color-muted);   background: rgba(136,150,170,0.1); }
+      &.evt-security    {
+        color: var(--color-error);
+        background: rgba(255,82,82,0.12);
+        border: 1px solid rgba(255,82,82,0.3);
+        font-weight: 600;
+      }
     }
 
     .msg-cell {
@@ -160,10 +167,12 @@ export class AuditLogComponent implements OnInit {
   typeFilter   = '';
 
   readonly cols        = ['timestamp','type','actor','target_id','message'];
+  // Must stay in sync with EventXxx constants in internal/audit/logger.go.
   readonly eventTypes: AuditEventType[] = [
-    'job_submitted','job_dispatched','job_completed','job_failed',
-    'node_registered','node_unhealthy',
-    'auth_success','auth_failure','token_issued'
+    'job_submit', 'job_state_transition',
+    'node_register', 'node_revoke',
+    'security_violation', 'auth_failure', 'rate_limit_hit',
+    'coordinator_start', 'coordinator_stop',
   ];
 
   constructor(private api: ApiService) {}
@@ -195,5 +204,14 @@ export class AuditLogComponent implements OnInit {
   onFilterChange(): void {
     this.pageIndex = 0;
     this.load();
+  }
+
+  // Returns the CSS class for a given event type badge.
+  // security_violation gets a dedicated red class; everything else is
+  // derived from the first word of the underscore-separated type name.
+  eventClass(type: string): string {
+    if (type === 'security_violation') return 'evt-security';
+    if (type === 'rate_limit_hit')     return 'evt-rate';
+    return 'evt-' + type.split('_')[0];
   }
 }

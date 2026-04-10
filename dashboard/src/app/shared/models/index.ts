@@ -67,17 +67,26 @@ export interface ClusterMetrics {
 }
 
 // ── Audit ─────────────────────────────────────────────────────────────────────
+//
+// AuditEventType values must match the EventXxx constants in internal/audit/logger.go.
+// Any new event type added there must be mirrored here.
 
 export type AuditEventType =
-  | 'job_submitted'
-  | 'job_dispatched'
-  | 'job_completed'
-  | 'job_failed'
-  | 'node_registered'
-  | 'node_unhealthy'
-  | 'auth_success'
+  // Job lifecycle
+  | 'job_submit'
+  | 'job_state_transition'
+  // Node lifecycle
+  | 'node_register'
+  | 'node_revoke'
+  // Security
+  | 'security_violation'
   | 'auth_failure'
-  | 'token_issued';
+  | 'rate_limit_hit'
+  // Coordinator lifecycle
+  | 'coordinator_start'
+  | 'coordinator_stop'
+  // Catch-all so future event types don't crash the UI
+  | (string & Record<never, never>);
 
 export interface AuditEvent {
   id:         string;
