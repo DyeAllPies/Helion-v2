@@ -218,6 +218,7 @@ fn kill_pid(pid: u32) {
 
 /// Returns "Seccomp" if the process was killed by SIGSYS (seccomp default
 /// action on Linux), otherwise returns an empty string.
+#[allow(dead_code)] // called only on Linux inside kill_reason()
 fn seccomp_kill_reason(output: &std::process::Output) -> String {
     #[cfg(target_os = "linux")]
     {
@@ -230,4 +231,112 @@ fn seccomp_kill_reason(output: &std::process::Output) -> String {
     #[cfg(not(target_os = "linux"))]
     let _ = output;
     String::new()
+}
+
+// ── unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn executor_new() {
+        let exec = Executor::new();
+        // Should have an empty cancel map.
+        assert!(exec.cancels.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_true_succeeds() {
+        let exec = Executor::new();
+        let req = RunRequest {
+            job_id: "test-true".into(),
+            command: "/bin/true".into(),
+            args: vec![],
+            env: Default::default(),
+            timeout_seconds: 5,
+            limits: None,
+        };
+        let resp = exec.run(req);
+        assert_eq!(resp.exit_code, 0, "stderr: {}", String::from_utf8_lossy(&resp.stderr));
+        assert!(resp.kill_reason.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_false_fails() {
+        let exec = Executor::new();
+        let req = RunRequest {
+            job_id: "test-false".into(),
+            command: "/bin/false".into(),
+            args: vec![],
+            env: Default::default(),
+            timeout_seconds: 5,
+            limits: None,
+        };
+        let resp = exec.run(req);
+        assert_ne!(resp.exit_code, 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_captures_stdout() {
+        let exec = Executor::new();
+        let req = RunRequest {
+            job_id: "test-echo".into(),
+            command: "/usr/bin/echo".into(),
+            args: vec!["hello-rust".into()],
+            env: Default::default(),
+            timeout_seconds: 5,
+            limits: None,
+        };
+        let resp = exec.run(req);
+        assert_eq!(resp.exit_code, 0);
+        assert!(
+            String::from_utf8_lossy(&resp.stdout).contains("hello-rust"),
+            "stdout: {:?}",
+            resp.stdout
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_timeout_kills_job() {
+        let exec = Executor::new();
+        let req = RunRequest {
+            job_id: "test-timeout".into(),
+            command: "/bin/sleep".into(),
+            args: vec!["60".into()],
+            env: Default::default(),
+            timeout_seconds: 1,
+            limits: None,
+        };
+        let resp = exec.run(req);
+        assert_eq!(resp.kill_reason, "Timeout", "expected Timeout kill_reason");
+    }
+
+    #[test]
+    fn cancel_unknown_job_returns_error() {
+        let exec = Executor::new();
+        let resp = exec.cancel("does-not-exist");
+        assert!(!resp.ok);
+        assert!(!resp.error.is_empty());
+    }
+
+    #[test]
+    fn run_bad_command_returns_error() {
+        let exec = Executor::new();
+        let req = RunRequest {
+            job_id: "test-bad-cmd".into(),
+            command: "/nonexistent/binary".into(),
+            args: vec![],
+            env: Default::default(),
+            timeout_seconds: 5,
+            limits: None,
+        };
+        let resp = exec.run(req);
+        assert_ne!(resp.exit_code, 0);
+        assert!(!resp.error.is_empty(), "expected error message for missing binary");
+    }
 }

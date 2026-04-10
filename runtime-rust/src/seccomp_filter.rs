@@ -59,6 +59,64 @@ pub fn apply(program: &BpfProgram) -> std::io::Result<()> {
     })
 }
 
+// ── unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify the allowlist compiles to a valid BPF program without panicking.
+    #[test]
+    fn build_allowlist_compiles() {
+        let prog = build_allowlist().expect("build_allowlist should succeed");
+        // A valid BPF program is non-empty.
+        assert!(!prog.is_empty(), "BPF program should have at least one instruction");
+    }
+
+    /// Verify the allowed syscalls list is non-trivially populated.
+    #[test]
+    fn allowed_syscalls_non_empty() {
+        let syscalls = allowed_syscalls();
+        assert!(syscalls.len() > 50, "expected >50 allowed syscalls, got {}", syscalls.len());
+    }
+
+    /// Verify there are no duplicate syscall numbers in the allowlist.
+    #[test]
+    fn no_duplicate_syscalls() {
+        let mut syscalls = allowed_syscalls();
+        syscalls.sort();
+        let before = syscalls.len();
+        syscalls.dedup();
+        assert_eq!(syscalls.len(), before, "duplicate syscall numbers found in allowlist");
+    }
+
+    /// Verify that common safe syscalls are present.
+    #[test]
+    fn common_syscalls_allowed() {
+        let syscalls = allowed_syscalls();
+        for nr in [libc::SYS_read, libc::SYS_write, libc::SYS_exit_group, libc::SYS_mmap] {
+            assert!(
+                syscalls.contains(&nr),
+                "syscall {} must be in allowlist",
+                nr
+            );
+        }
+    }
+
+    /// Verify that dangerous syscalls are NOT in the allowlist.
+    #[test]
+    fn dangerous_syscalls_blocked() {
+        let syscalls = allowed_syscalls();
+        for nr in [libc::SYS_ptrace, libc::SYS_kexec_load, libc::SYS_process_vm_readv] {
+            assert!(
+                !syscalls.contains(&nr),
+                "dangerous syscall {} must NOT be in allowlist",
+                nr
+            );
+        }
+    }
+}
+
 /// Returns the list of allowed syscall numbers for x86-64.
 ///
 /// Covers typical needs of a subprocess (process management, file I/O,
