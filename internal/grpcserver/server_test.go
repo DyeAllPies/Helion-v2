@@ -159,7 +159,7 @@ func TestRegister_NoRegistry_EchoesNodeID(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -200,7 +200,7 @@ func TestRevocationInterceptor_RevokedNode_ReturnsUnauthenticated(t *testing.T) 
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -244,7 +244,7 @@ func TestRevocationInterceptor_AllowedNode_Passes(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -293,7 +293,7 @@ func TestRateLimitInterceptor_BlockedNode_ReturnsResourceExhausted(t *testing.T)
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -333,7 +333,7 @@ func TestReportResult_NoJobStore_ReturnsAck(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -366,7 +366,7 @@ func TestReportResult_JobNotFound_ReturnsNotFound(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -405,7 +405,7 @@ func TestReportResult_SuccessfulJob_TransitionsToCompleted(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -442,7 +442,7 @@ func TestReportResult_FailedJob_TransitionsToFailed(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -484,7 +484,7 @@ func TestReportResult_SecurityViolation_AuditLogged(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -529,7 +529,7 @@ func TestWithRegistry_DelegatesToRegistry(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -583,7 +583,7 @@ func TestHeartbeat_SendAndCancel_ReturnsNil(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -633,7 +633,7 @@ func TestHeartbeat_NoRegistry_AcceptsAndResponds(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -687,7 +687,7 @@ func TestRevocationInterceptor_ReportResult_RevokedNode_ReturnsUnauthenticated(t
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -739,7 +739,7 @@ func TestHeartbeat_RateLimited_TerminatesStream(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -804,7 +804,7 @@ func TestRateLimitInterceptor_EmptyNodeID_PassesThrough(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -843,7 +843,7 @@ func TestReportResult_DispatchingJob_TransitionsToRunningThenCompleted(t *testin
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -883,7 +883,7 @@ func TestReportResult_FinalTransitionFails_ReturnsInternal(t *testing.T) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
@@ -932,7 +932,7 @@ func TestRateLimitInterceptor_ReportResult_ExtractsNodeID(t *testing.T) {
 	lis, _ := net.Listen("tcp", "127.0.0.1:0")
 	addr := lis.Addr().String()
 	lis.Close()
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 

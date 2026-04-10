@@ -33,7 +33,7 @@ func startTestServer(t *testing.T) (string, *auth.Bundle) {
 	addr := lis.Addr().String()
 	lis.Close()
 
-	go srv.Serve(addr)
+	go func() { _ = srv.Serve(addr) }()
 	t.Cleanup(srv.Stop)
 	time.Sleep(40 * time.Millisecond)
 
