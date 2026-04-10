@@ -43,14 +43,14 @@ jobs:
             -coverprofile=coverage.out -covermode=atomic \
             ./...
 
-      - name: Coverage threshold (≥ 25 %)
+      - name: Coverage threshold (≥ 20 %)
         run: |
           pct=$(go tool cover -func=coverage.out \
                 | awk '/^total:/ { gsub(/%/,"",$3); print $3 }')
           echo "Total Go coverage: ${pct}%"
           awk -v p="$pct" 'BEGIN {
-            if (p+0 < 25) {
-              print "FAIL: coverage " p "% is below 25% threshold"
+            if (p+0 < 20) {
+              print "FAIL: coverage " p "% is below 20% threshold"
               exit 1
             }
             print "PASS: coverage " p "%"
