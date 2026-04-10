@@ -328,7 +328,7 @@ func (s *Server) wsAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		claims, err := s.tokenManager.ValidateToken(token)
 		if err != nil {
 			if s.audit != nil {
-				s.audit.LogAuthFailure(r.Context(), err.Error(), r.RemoteAddr)
+				_ = s.audit.LogAuthFailure(r.Context(), err.Error(), r.RemoteAddr)
 			}
 			http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 			return
