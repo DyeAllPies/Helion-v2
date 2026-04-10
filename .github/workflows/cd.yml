@@ -1,0 +1,151 @@
+name: CD
+
+# Triggers on semver tags (e.g. v1.2.3).
+# Pipeline: CI checks → build & push images → helm deploy to test cluster.
+# All three jobs must pass; failure in any stage aborts and Helm rolls back.
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  COORDINATOR_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/helion-coordinator
+  NODE_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/helion-node
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ── 1. CI gate ─────────────────────────────────────────────────────────────
+  # Re-runs the full test suite on the tagged commit so the deploy is always
+  # gated on green tests, regardless of what happened on the branch.
+  ci:
+    name: CI checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+          args: --timeout=5m
+
+      - name: go test (race detector)
+        run: go test -race -count=1 ./...
+
+  # ── 2. Build & push images ─────────────────────────────────────────────────
+  # Builds coordinator and node images in parallel and pushes to Docker Hub
+  # tagged with both the semver tag and latest.
+  build-push:
+    name: Build & push images
+    runs-on: ubuntu-latest
+    needs: ci
+    outputs:
+      version: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push coordinator
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.coordinator
+          push: true
+          tags: |
+            ${{ env.COORDINATOR_IMAGE }}:${{ steps.version.outputs.tag }}
+            ${{ env.COORDINATOR_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build & push node
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.node
+          push: true
+          tags: |
+            ${{ env.NODE_IMAGE }}:${{ steps.version.outputs.tag }}
+            ${{ env.NODE_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── 3. Helm deploy ─────────────────────────────────────────────────────────
+  # Runs helm upgrade --install against the test cluster.
+  # --atomic rolls back automatically if pods don't become ready within 5m.
+  #
+  # Required GitHub secrets:
+  #   DOCKERHUB_USERNAME   Docker Hub username (already used by CI)
+  #   DOCKERHUB_TOKEN      Docker Hub access token (already used by CI)
+  #   KUBE_CONFIG          base64-encoded kubeconfig for the test cluster
+  #                        Generate with: base64 -w0 ~/.kube/config
+  deploy:
+    name: Deploy to test cluster
+    runs-on: ubuntu-latest
+    needs: build-push
+    environment: test-cluster   # optional: add manual approval gate in GitHub env settings
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v4.1.4"
+
+      - name: Write kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Create namespace
+        run: |
+          kubectl create namespace helion --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Helm upgrade --install
+        env:
+          VERSION: ${{ needs.build-push.outputs.version }}
+        run: |
+          helm upgrade --install helion ./deploy/helm \
+            --namespace helion \
+            --set coordinator.image.repository=${{ env.COORDINATOR_IMAGE }} \
+            --set coordinator.image.tag=${VERSION} \
+            --set coordinator.image.pullPolicy=Always \
+            --set node.image.repository=${{ env.NODE_IMAGE }} \
+            --set node.image.tag=${VERSION} \
+            --set node.image.pullPolicy=Always \
+            --atomic \
+            --timeout 5m \
+            --wait
+
+      - name: Smoke test — coordinator healthz
+        run: |
+          # Port-forward and hit /healthz to confirm the pod is live.
+          kubectl port-forward -n helion svc/helion-coordinator 18080:8080 &
+          PF_PID=$!
+          sleep 3
+          curl -sf http://localhost:18080/healthz
+          kill $PF_PID
