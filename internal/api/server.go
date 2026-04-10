@@ -47,6 +47,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -195,6 +196,7 @@ type Server struct {
 	readiness      ReadinessChecker
 	promHandler    http.Handler // Prometheus /metrics handler; nil disables
 	mux            *http.ServeMux
+	httpSrvMu      sync.Mutex
 	httpSrv        *http.Server
 	upgrader       websocket.Upgrader
 }
@@ -270,20 +272,26 @@ func (s *Server) Serve(addr string) error {
 	if err != nil {
 		return fmt.Errorf("api.Server listen %s: %w", addr, err)
 	}
-	s.httpSrv = &http.Server{
+	hsrv := &http.Server{
 		Handler:      s.mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
-	return s.httpSrv.Serve(lis)
+	s.httpSrvMu.Lock()
+	s.httpSrv = hsrv
+	s.httpSrvMu.Unlock()
+	return hsrv.Serve(lis)
 }
 
 // Shutdown gracefully stops the HTTP server.
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.httpSrv == nil {
+	s.httpSrvMu.Lock()
+	hsrv := s.httpSrv
+	s.httpSrvMu.Unlock()
+	if hsrv == nil {
 		return nil
 	}
-	return s.httpSrv.Shutdown(ctx)
+	return hsrv.Shutdown(ctx)
 }
 
 // ── handlers ─────────────────────────────────────────────────────────────────
