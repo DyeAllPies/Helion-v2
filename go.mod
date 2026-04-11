@@ -1,11 +1,11 @@
 module github.com/DyeAllPies/Helion-v2
 
-go 1.25.0
+go 1.26.2
 
 require (
 	github.com/cloudflare/circl v1.6.3
 	github.com/dgraph-io/badger/v4 v4.3.0
-	github.com/golang-jwt/jwt/v5 v5.2.0
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.1
 	github.com/prometheus/client_golang v1.23.2
