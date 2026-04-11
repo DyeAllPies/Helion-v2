@@ -60,12 +60,21 @@ func (s *Server) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.Dis
 	)
 
 	startedAt := time.Now()
+	var lim runtime.ResourceLimits
+	if req.Limits != nil {
+		lim = runtime.ResourceLimits{
+			MemoryBytes: req.Limits.MemoryBytes,
+			CPUQuotaUS:  req.Limits.CpuQuotaUs,
+			CPUPeriodUS: req.Limits.CpuPeriodUs,
+		}
+	}
 	result, err := s.rt.Run(ctx, runtime.RunRequest{
 		JobID:          req.JobId,
 		Command:        req.Command,
 		Args:           req.Args,
 		Env:            req.Env,
 		TimeoutSeconds: req.TimeoutSeconds,
+		Limits:         lim,
 	})
 	finishedAt := time.Now()
 

@@ -6,12 +6,21 @@ option go_package = "github.com/DyeAllPies/Helion-v2/proto";
 
 import "coordinator.proto";
 
+// ResourceLimits constrains a job's CPU and memory usage via cgroup v2 (Rust runtime).
+// Zero values mean "no limit".
+message ResourceLimits {
+  uint64 memory_bytes  = 1; // maximum resident memory in bytes
+  uint64 cpu_quota_us  = 2; // CPU quota per period in microseconds
+  uint64 cpu_period_us = 3; // accounting period in microseconds (default 100000)
+}
+
 message DispatchRequest {
   string          job_id          = 1;
   string          command         = 2;
   repeated string args            = 3;
   map<string, string> env         = 4;
   int64           timeout_seconds = 5;
+  ResourceLimits  limits          = 6;
 }
 
 message DispatchAck {

@@ -71,23 +71,37 @@ const (
 
 // ── request / response types ─────────────────────────────────────────────────
 
+// ResourceLimits is the optional cgroup v2 constraint block in SubmitRequest / JobResponse.
+// All fields default to 0 (no limit). Enforced only when using the Rust runtime.
+type ResourceLimits struct {
+	MemoryBytes uint64 `json:"memory_bytes,omitempty"` // maximum RSS in bytes
+	CPUQuotaUS  uint64 `json:"cpu_quota_us,omitempty"` // CPU quota per period in microseconds
+	CPUPeriodUS uint64 `json:"cpu_period_us,omitempty"` // period in microseconds (default 100000)
+}
+
 // SubmitRequest is the JSON body for POST /jobs.
 type SubmitRequest struct {
-	ID      string   `json:"id"`      // client-generated; required
-	Command string   `json:"command"` // required
-	Args    []string `json:"args"`    // optional
+	ID             string            `json:"id"`              // client-generated; required
+	Command        string            `json:"command"`         // required
+	Args           []string          `json:"args"`            // optional
+	Env            map[string]string `json:"env,omitempty"`   // optional key-value environment variables
+	TimeoutSeconds int64             `json:"timeout_seconds"` // optional; 0 means no limit
+	Limits         ResourceLimits    `json:"limits,omitempty"` // optional cgroup v2 resource limits
 }
 
 // JobResponse is the JSON body returned by POST /jobs and GET /jobs/{id}.
 type JobResponse struct {
-	ID          string    `json:"id"`
-	Command     string    `json:"command"`
-	Args        []string  `json:"args"`
-	Status      string    `json:"status"`
-	NodeID      string    `json:"node_id,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	FinishedAt  *time.Time `json:"finished_at,omitempty"`
-	Error       string    `json:"error,omitempty"`
+	ID             string            `json:"id"`
+	Command        string            `json:"command"`
+	Args           []string          `json:"args"`
+	Env            map[string]string `json:"env,omitempty"`
+	TimeoutSeconds int64             `json:"timeout_seconds,omitempty"`
+	Limits         ResourceLimits    `json:"limits,omitempty"`
+	Status         string            `json:"status"`
+	NodeID         string            `json:"node_id,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
+	Error          string            `json:"error,omitempty"`
 }
 
 // ErrorResponse is the JSON body for error responses.
@@ -140,6 +154,30 @@ type AuditListResponse struct {
 	Total  int           `json:"total"`
 	Page   int           `json:"page"`
 	Size   int           `json:"size"`
+}
+
+// IssueTokenRequest is the body for POST /admin/tokens.
+type IssueTokenRequest struct {
+	Subject  string `json:"subject"`   // required; e.g. "alice"
+	Role     string `json:"role"`      // required; "admin" or "node"
+	TTLHours int    `json:"ttl_hours"` // optional; defaults to 8 h; max 720 h (30 days)
+}
+
+// IssueTokenResponse is the response for POST /admin/tokens.
+type IssueTokenResponse struct {
+	Token   string `json:"token"`
+	Subject string `json:"subject"`
+	Role    string `json:"role"`
+	TTLHours int   `json:"ttl_hours"`
+}
+
+// RevokeTokenRequest is the optional body for DELETE /admin/tokens/{jti}.
+type RevokeTokenRequest struct{}
+
+// RevokeTokenResponse is the response for DELETE /admin/tokens/{jti}.
+type RevokeTokenResponse struct {
+	Revoked bool   `json:"revoked"`
+	JTI     string `json:"jti"`
 }
 
 // RevokeNodeRequest is the request body for POST /admin/nodes/{id}/revoke.
@@ -269,6 +307,8 @@ func (s *Server) registerRoutes() {
 	}
 	s.mux.HandleFunc("GET /audit", s.authMiddleware(s.handleGetAudit))
 	s.mux.HandleFunc("POST /admin/nodes/{id}/revoke", s.authMiddleware(s.handleRevokeNode))
+	s.mux.HandleFunc("POST /admin/tokens", s.authMiddleware(s.adminMiddleware(s.handleIssueToken)))
+	s.mux.HandleFunc("DELETE /admin/tokens/{jti}", s.authMiddleware(s.adminMiddleware(s.handleRevokeToken)))
 	
 	// WebSocket endpoints (auth via query param or header)
 	s.mux.HandleFunc("GET /ws/jobs/{id}/logs", s.wsAuthMiddleware(s.handleJobLogStream))
@@ -449,9 +489,16 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := &cpb.Job{
-		ID:      req.ID,
-		Command: req.Command,
-		Args:    req.Args,
+		ID:             req.ID,
+		Command:        req.Command,
+		Args:           req.Args,
+		Env:            req.Env,
+		TimeoutSeconds: req.TimeoutSeconds,
+		Limits: cpb.ResourceLimits{
+			MemoryBytes: req.Limits.MemoryBytes,
+			CPUQuotaUS:  req.Limits.CPUQuotaUS,
+			CPUPeriodUS: req.Limits.CPUPeriodUS,
+		},
 	}
 
 	if err := s.jobs.Submit(r.Context(), job); err != nil {
@@ -785,9 +832,16 @@ func (s *Server) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 
 func jobToResponse(j *cpb.Job) JobResponse {
 	resp := JobResponse{
-		ID:        j.ID,
-		Command:   j.Command,
-		Args:      j.Args,
+		ID:             j.ID,
+		Command:        j.Command,
+		Args:           j.Args,
+		Env:            j.Env,
+		TimeoutSeconds: j.TimeoutSeconds,
+		Limits: ResourceLimits{
+			MemoryBytes: j.Limits.MemoryBytes,
+			CPUQuotaUS:  j.Limits.CPUQuotaUS,
+			CPUPeriodUS: j.Limits.CPUPeriodUS,
+		},
 		Status:    j.Status.String(),
 		NodeID:    j.NodeID,
 		CreatedAt: j.CreatedAt,
@@ -804,4 +858,126 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(ErrorResponse{Error: msg})
+}
+
+// ── Token admin endpoints ─────────────────────────────────────────────────────
+
+const (
+	maxTokenTTLHours     = 720 // 30 days
+	defaultTokenTTLHours = 8
+)
+
+var validRoles = map[string]bool{"admin": true, "node": true}
+
+// adminMiddleware rejects requests whose JWT role is not "admin".
+// Must be composed inside authMiddleware so claims are already in context.
+func (s *Server) adminMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.tokenManager != nil {
+			claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims)
+			if !ok || claims.Role != "admin" {
+				writeError(w, http.StatusForbidden, "admin role required")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	}
+}
+
+// handleIssueToken handles POST /admin/tokens.
+// Issues a short-lived scoped JWT for the given subject and role.
+func (s *Server) handleIssueToken(w http.ResponseWriter, r *http.Request) {
+	if s.tokenManager == nil {
+		writeError(w, http.StatusNotImplemented, "token manager not configured")
+		return
+	}
+
+	var req IssueTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Subject == "" {
+		writeError(w, http.StatusBadRequest, "subject is required")
+		return
+	}
+	if !validRoles[req.Role] {
+		writeError(w, http.StatusBadRequest, "role must be 'admin' or 'node'")
+		return
+	}
+
+	ttl := req.TTLHours
+	if ttl <= 0 {
+		ttl = defaultTokenTTLHours
+	}
+	if ttl > maxTokenTTLHours {
+		writeError(w, http.StatusBadRequest, "ttl_hours must not exceed 720 (30 days)")
+		return
+	}
+
+	token, err := s.tokenManager.GenerateToken(r.Context(), req.Subject, req.Role, time.Duration(ttl)*time.Hour)
+	if err != nil {
+		slog.Error("issue token failed", slog.String("subject", req.Subject), slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "token generation failed")
+		return
+	}
+
+	if s.audit != nil {
+		actor := "system"
+		if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
+			actor = claims.Subject
+		}
+		_ = s.audit.Log(r.Context(), "token.issued", actor, map[string]interface{}{
+			"subject":   req.Subject,
+			"role":      req.Role,
+			"ttl_hours": ttl,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(IssueTokenResponse{
+		Token:    token,
+		Subject:  req.Subject,
+		Role:     req.Role,
+		TTLHours: ttl,
+	})
+}
+
+// handleRevokeToken handles DELETE /admin/tokens/{jti}.
+// Immediately invalidates a token by deleting its JTI from BadgerDB.
+func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
+	if s.tokenManager == nil {
+		writeError(w, http.StatusNotImplemented, "token manager not configured")
+		return
+	}
+
+	jti := r.PathValue("jti")
+	if jti == "" {
+		jti = strings.TrimPrefix(r.URL.Path, "/admin/tokens/")
+	}
+	if jti == "" {
+		writeError(w, http.StatusBadRequest, "jti is required")
+		return
+	}
+
+	if err := s.tokenManager.RevokeToken(r.Context(), jti); err != nil {
+		slog.Error("revoke token failed", slog.String("jti", jti), slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "revocation failed")
+		return
+	}
+
+	if s.audit != nil {
+		actor := "system"
+		if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
+			actor = claims.Subject
+		}
+		_ = s.audit.Log(r.Context(), "token.revoked", actor, map[string]interface{}{
+			"jti":    jti,
+			"reason": "explicit revocation",
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(RevokeTokenResponse{Revoked: true, JTI: jti})
 }

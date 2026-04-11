@@ -298,3 +298,65 @@ func TestGetMetrics_AfterJobs(t *testing.T) {
 		t.Errorf("TotalJobs: got %d want 3", m.TotalJobs)
 	}
 }
+
+// ── Limits forwarded to runtime ───────────────────────────────────────────────
+
+// capturingRuntime records the last RunRequest so tests can inspect it.
+type capturingRuntime struct {
+	last runtime.RunRequest
+}
+
+func (c *capturingRuntime) Run(_ context.Context, req runtime.RunRequest) (runtime.RunResult, error) {
+	c.last = req
+	return runtime.RunResult{ExitCode: 0}, nil
+}
+func (c *capturingRuntime) Cancel(_ string) error { return nil }
+func (c *capturingRuntime) Close() error          { return nil }
+
+func TestDispatch_LimitsForwardedToRuntime(t *testing.T) {
+	cap := &capturingRuntime{}
+	srv := newServer(cap)
+
+	_, err := srv.Dispatch(context.Background(), &pb.DispatchRequest{
+		JobId:   "lim-job",
+		Command: "stress",
+		Limits: &pb.ResourceLimits{
+			MemoryBytes: 536870912,
+			CpuQuotaUs:  50000,
+			CpuPeriodUs: 100000,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	if cap.last.Limits.MemoryBytes != 536870912 {
+		t.Errorf("MemoryBytes: want 536870912, got %d", cap.last.Limits.MemoryBytes)
+	}
+	if cap.last.Limits.CPUQuotaUS != 50000 {
+		t.Errorf("CPUQuotaUS: want 50000, got %d", cap.last.Limits.CPUQuotaUS)
+	}
+	if cap.last.Limits.CPUPeriodUS != 100000 {
+		t.Errorf("CPUPeriodUS: want 100000, got %d", cap.last.Limits.CPUPeriodUS)
+	}
+}
+
+func TestDispatch_NilLimits_NoRuntimePanic(t *testing.T) {
+	cap := &capturingRuntime{}
+	srv := newServer(cap)
+
+	_, err := srv.Dispatch(context.Background(), &pb.DispatchRequest{
+		JobId:   "nolim-job",
+		Command: "echo",
+		// Limits intentionally nil
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	// All limit fields should be zero — no panic.
+	lim := cap.last.Limits
+	if lim.MemoryBytes != 0 || lim.CPUQuotaUS != 0 || lim.CPUPeriodUS != 0 {
+		t.Errorf("expected zero limits, got %+v", lim)
+	}
+}

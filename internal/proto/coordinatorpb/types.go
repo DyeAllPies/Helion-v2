@@ -90,15 +90,26 @@ type Node struct {
 
 // Job is the coordinator's in-memory and persisted record for a scheduled job.
 // Not a proto message — serialised as JSON by BadgerJSONPersister.
+// ResourceLimits mirrors runtime.ResourceLimits for storage in the Job record.
+// Zero values mean "no limit".  Applied by the Rust runtime via cgroup v2.
+type ResourceLimits struct {
+	MemoryBytes uint64 `json:"memory_bytes,omitempty"` // maximum RSS in bytes
+	CPUQuotaUS  uint64 `json:"cpu_quota_us,omitempty"` // CPU quota per period in microseconds
+	CPUPeriodUS uint64 `json:"cpu_period_us,omitempty"` // period in microseconds (default 100000)
+}
+
 type Job struct {
-	ID           string    `json:"id"`
-	NodeID       string    `json:"node_id"`
-	Command      string    `json:"command"`
-	Args         []string  `json:"args"`
-	Status       JobStatus `json:"status"`
-	CreatedAt    time.Time `json:"created_at"`
-	DispatchedAt time.Time `json:"dispatched_at,omitempty"`
-	FinishedAt   time.Time `json:"finished_at,omitempty"`
-	ExitCode     int32     `json:"exit_code,omitempty"`
-	Error        string    `json:"error,omitempty"`
+	ID             string            `json:"id"`
+	NodeID         string            `json:"node_id"`
+	Command        string            `json:"command"`
+	Args           []string          `json:"args"`
+	Env            map[string]string `json:"env,omitempty"`
+	TimeoutSeconds int64             `json:"timeout_seconds,omitempty"`
+	Limits         ResourceLimits    `json:"limits,omitempty"`
+	Status         JobStatus         `json:"status"`
+	CreatedAt      time.Time         `json:"created_at"`
+	DispatchedAt   time.Time         `json:"dispatched_at,omitempty"`
+	FinishedAt     time.Time         `json:"finished_at,omitempty"`
+	ExitCode       int32             `json:"exit_code,omitempty"`
+	Error          string            `json:"error,omitempty"`
 }

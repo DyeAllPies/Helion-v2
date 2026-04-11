@@ -60,3 +60,33 @@ func TestJobStatus_IsTerminal_NonTerminalStatuses(t *testing.T) {
 		}
 	}
 }
+
+// ── Job.Env and Job.TimeoutSeconds ────────────────────────────────────────────
+
+func TestJob_EnvAndTimeout_DefaultToZeroValues(t *testing.T) {
+	j := cpb.Job{ID: "j1", Command: "echo"}
+	if len(j.Env) != 0 {
+		t.Errorf("Env: want nil/empty map, got %v", j.Env)
+	}
+	if j.TimeoutSeconds != 0 {
+		t.Errorf("TimeoutSeconds: want 0, got %d", j.TimeoutSeconds)
+	}
+}
+
+func TestJob_EnvAndTimeout_CanBeSet(t *testing.T) {
+	j := cpb.Job{
+		ID:             "j2",
+		Command:        "python3",
+		Env:            map[string]string{"FOO": "bar", "WORKERS": "4"},
+		TimeoutSeconds: 120,
+	}
+	if j.Env["FOO"] != "bar" {
+		t.Errorf("Env[FOO]: want 'bar', got %q", j.Env["FOO"])
+	}
+	if j.Env["WORKERS"] != "4" {
+		t.Errorf("Env[WORKERS]: want '4', got %q", j.Env["WORKERS"])
+	}
+	if j.TimeoutSeconds != 120 {
+		t.Errorf("TimeoutSeconds: want 120, got %d", j.TimeoutSeconds)
+	}
+}

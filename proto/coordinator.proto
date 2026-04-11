@@ -1,20 +1,17 @@
 // proto/coordinator.proto
 //
 // Services and messages exposed by the Helion coordinator.
-// Generated Go stubs live in internal/proto/coordinatorpb/.
 //
-// Regenerate with:
-//   protoc --go_out=internal/proto/coordinatorpb \
-//          --go_opt=paths=source_relative \
-//          --go-grpc_out=internal/proto/coordinatorpb \
-//          --go-grpc_opt=paths=source_relative \
-//          proto/coordinator.proto
+// Regenerate with (from repo root):
+//   protoc --go_out=proto --go_opt=paths=source_relative \
+//          --go-grpc_out=proto --go-grpc_opt=paths=source_relative \
+//          --proto_path=proto coordinator.proto
 
 syntax = "proto3";
 
-package helion.coordinator;
+package helion;
 
-option go_package = "helion/internal/proto/coordinatorpb";
+option go_package = "github.com/DyeAllPies/Helion-v2/proto";
 
 import "google/protobuf/timestamp.proto";
 
@@ -58,9 +55,10 @@ message RegisterRequest {
   // Format: "host:port".
   string address = 2;
 
-  // DER-encoded X.509 CSR.  The coordinator signs this and returns the cert.
+  // DER-encoded X.509 certificate presented by the node for cert pinning and
+  // ML-DSA out-of-band signature verification.
   // Empty on first registration if the node has no existing certificate.
-  bytes csr_der = 3;
+  bytes certificate = 3;
 }
 
 message RegisterResponse {
@@ -177,10 +175,16 @@ message Job {
   string    command = 3;
   repeated string args = 4;
   JobStatus status  = 5;
-  google.protobuf.Timestamp created_at  = 6;
+  google.protobuf.Timestamp created_at    = 6;
   google.protobuf.Timestamp dispatched_at = 7;
-  google.protobuf.Timestamp finished_at = 8;
+  google.protobuf.Timestamp finished_at   = 8;
   string error = 9; // populated for FAILED / TIMEOUT / LOST
+
+  // env holds arbitrary key-value pairs forwarded to the job process.
+  map<string, string> env = 10;
+
+  // timeout_seconds caps how long a job may run. 0 means no limit.
+  int64 timeout_seconds = 11;
 }
 
 // AuditEvent is written to audit/{timestamp}-{id} on every security-relevant

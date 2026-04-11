@@ -1036,3 +1036,406 @@ func TestListJobs_NonIntegerSize_Returns400(t *testing.T) {
 		t.Errorf("size=big: want 400, got %d", rr.Code)
 	}
 }
+
+// ── env and timeout_seconds in submit / response ──────────────────────────────
+
+func TestSubmitJob_WithEnvAndTimeout_StoredAndReturned(t *testing.T) {
+	js := newMockJobStore()
+	srv := newServer(js, nil, nil)
+
+	body := `{
+		"id": "job-env",
+		"command": "python3",
+		"args": ["-c", "import os; print(os.getenv('FOO'))"],
+		"env": {"FOO": "bar", "WORKERS": "4"},
+		"timeout_seconds": 30
+	}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rr.Code, rr.Body)
+	}
+
+	var resp api.JobResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Env["FOO"] != "bar" {
+		t.Errorf("env FOO: want 'bar', got %q", resp.Env["FOO"])
+	}
+	if resp.Env["WORKERS"] != "4" {
+		t.Errorf("env WORKERS: want '4', got %q", resp.Env["WORKERS"])
+	}
+	if resp.TimeoutSeconds != 30 {
+		t.Errorf("timeout_seconds: want 30, got %d", resp.TimeoutSeconds)
+	}
+
+	// Verify the stored job also has the fields.
+	stored := js.jobs["job-env"]
+	if stored == nil {
+		t.Fatal("job not found in store")
+	}
+	if stored.Env["FOO"] != "bar" {
+		t.Errorf("stored env FOO: want 'bar', got %q", stored.Env["FOO"])
+	}
+	if stored.TimeoutSeconds != 30 {
+		t.Errorf("stored timeout_seconds: want 30, got %d", stored.TimeoutSeconds)
+	}
+}
+
+func TestSubmitJob_NoEnvNoTimeout_DefaultsToZero(t *testing.T) {
+	js := newMockJobStore()
+	srv := newServer(js, nil, nil)
+
+	body := `{"id": "job-plain", "command": "echo"}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d", rr.Code)
+	}
+
+	var resp api.JobResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.TimeoutSeconds != 0 {
+		t.Errorf("timeout_seconds: want 0, got %d", resp.TimeoutSeconds)
+	}
+	if len(resp.Env) != 0 {
+		t.Errorf("env: want empty, got %v", resp.Env)
+	}
+}
+
+func TestGetJob_EnvAndTimeoutRoundtrip(t *testing.T) {
+	js := newMockJobStore()
+	js.jobs["job-get-env"] = &cpb.Job{
+		ID:             "job-get-env",
+		Command:        "bash",
+		Env:            map[string]string{"KEY": "val"},
+		TimeoutSeconds: 60,
+		Status:         cpb.JobStatusPending,
+	}
+	srv := newServer(js, nil, nil)
+
+	rr := do(srv, "GET", "/jobs/job-get-env", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+
+	var resp api.JobResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Env["KEY"] != "val" {
+		t.Errorf("env KEY: want 'val', got %q", resp.Env["KEY"])
+	}
+	if resp.TimeoutSeconds != 60 {
+		t.Errorf("timeout_seconds: want 60, got %d", resp.TimeoutSeconds)
+	}
+}
+
+// ── limits in submit / response ───────────────────────────────────────────────
+
+func TestSubmitJob_WithLimits_StoredAndReturned(t *testing.T) {
+	js := newMockJobStore()
+	srv := newServer(js, nil, nil)
+
+	body := `{
+		"id": "job-limits",
+		"command": "stress",
+		"limits": {
+			"memory_bytes": 536870912,
+			"cpu_quota_us": 50000,
+			"cpu_period_us": 100000
+		}
+	}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rr.Code, rr.Body)
+	}
+
+	var resp api.JobResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Limits.MemoryBytes != 536870912 {
+		t.Errorf("memory_bytes: want 536870912, got %d", resp.Limits.MemoryBytes)
+	}
+	if resp.Limits.CPUQuotaUS != 50000 {
+		t.Errorf("cpu_quota_us: want 50000, got %d", resp.Limits.CPUQuotaUS)
+	}
+	if resp.Limits.CPUPeriodUS != 100000 {
+		t.Errorf("cpu_period_us: want 100000, got %d", resp.Limits.CPUPeriodUS)
+	}
+
+	stored := js.jobs["job-limits"]
+	if stored == nil {
+		t.Fatal("job not found in store")
+	}
+	if stored.Limits.MemoryBytes != 536870912 {
+		t.Errorf("stored memory_bytes: want 536870912, got %d", stored.Limits.MemoryBytes)
+	}
+	if stored.Limits.CPUQuotaUS != 50000 {
+		t.Errorf("stored cpu_quota_us: want 50000, got %d", stored.Limits.CPUQuotaUS)
+	}
+}
+
+func TestSubmitJob_NoLimits_DefaultsToZero(t *testing.T) {
+	js := newMockJobStore()
+	srv := newServer(js, nil, nil)
+
+	rr := do(srv, "POST", "/jobs", `{"id":"job-nolimits","command":"echo"}`)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d", rr.Code)
+	}
+
+	var resp api.JobResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Limits.MemoryBytes != 0 || resp.Limits.CPUQuotaUS != 0 || resp.Limits.CPUPeriodUS != 0 {
+		t.Errorf("limits should be zero, got %+v", resp.Limits)
+	}
+}
+
+func TestGetJob_LimitsRoundtrip(t *testing.T) {
+	js := newMockJobStore()
+	js.jobs["job-get-limits"] = &cpb.Job{
+		ID:      "job-get-limits",
+		Command: "bench",
+		Status:  cpb.JobStatusPending,
+		Limits:  cpb.ResourceLimits{MemoryBytes: 1073741824, CPUQuotaUS: 25000},
+	}
+	srv := newServer(js, nil, nil)
+
+	rr := do(srv, "GET", "/jobs/job-get-limits", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+
+	var resp api.JobResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Limits.MemoryBytes != 1073741824 {
+		t.Errorf("memory_bytes: want 1073741824, got %d", resp.Limits.MemoryBytes)
+	}
+	if resp.Limits.CPUQuotaUS != 25000 {
+		t.Errorf("cpu_quota_us: want 25000, got %d", resp.Limits.CPUQuotaUS)
+	}
+}
+
+// ── POST /admin/tokens ────────────────────────────────────────────────────────
+
+func newAuthServer(t *testing.T) (*api.Server, *auth.TokenManager) {
+	t.Helper()
+	store := newTokenStore()
+	tm, err := auth.NewTokenManager(context.Background(), store)
+	if err != nil {
+		t.Fatalf("NewTokenManager: %v", err)
+	}
+	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
+	return srv, tm
+}
+
+func doWithToken(srv *api.Server, method, path, body, token string) *httptest.ResponseRecorder {
+	var r *strings.Reader
+	if body != "" {
+		r = strings.NewReader(body)
+	} else {
+		r = strings.NewReader("")
+	}
+	req := httptest.NewRequest(method, path, r)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	return rr
+}
+
+func adminToken(t *testing.T, tm *auth.TokenManager) string {
+	t.Helper()
+	tok, err := tm.GenerateToken(context.Background(), "root", "admin", time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken admin: %v", err)
+	}
+	return tok
+}
+
+func TestIssueToken_ValidRequest_Returns201(t *testing.T) {
+	srv, tm := newAuthServer(t)
+	atk := adminToken(t, tm)
+
+	rr := doWithToken(srv, "POST", "/admin/tokens",
+		`{"subject":"alice","role":"admin","ttl_hours":4}`, atk)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rr.Code, rr.Body)
+	}
+
+	var resp api.IssueTokenResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Subject != "alice" {
+		t.Errorf("subject: want alice, got %q", resp.Subject)
+	}
+	if resp.Role != "admin" {
+		t.Errorf("role: want admin, got %q", resp.Role)
+	}
+	if resp.TTLHours != 4 {
+		t.Errorf("ttl_hours: want 4, got %d", resp.TTLHours)
+	}
+	if resp.Token == "" {
+		t.Error("token should not be empty")
+	}
+}
+
+func TestIssueToken_IssuedTokenIsValid(t *testing.T) {
+	srv, tm := newAuthServer(t)
+	atk := adminToken(t, tm)
+
+	rr := doWithToken(srv, "POST", "/admin/tokens",
+		`{"subject":"bob","role":"node","ttl_hours":1}`, atk)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d", rr.Code)
+	}
+
+	var resp api.IssueTokenResponse
+	json.NewDecoder(rr.Body).Decode(&resp) //nolint:errcheck
+
+	// The issued token should pass validation.
+	claims, err := tm.ValidateToken(context.Background(), resp.Token)
+	if err != nil {
+		t.Fatalf("issued token failed validation: %v", err)
+	}
+	if claims.Subject != "bob" {
+		t.Errorf("subject: want bob, got %q", claims.Subject)
+	}
+	if claims.Role != "node" {
+		t.Errorf("role: want node, got %q", claims.Role)
+	}
+}
+
+func TestIssueToken_DefaultTTL_UsedWhenZero(t *testing.T) {
+	srv, tm := newAuthServer(t)
+	atk := adminToken(t, tm)
+
+	rr := doWithToken(srv, "POST", "/admin/tokens",
+		`{"subject":"charlie","role":"admin"}`, atk)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d", rr.Code)
+	}
+
+	var resp api.IssueTokenResponse
+	json.NewDecoder(rr.Body).Decode(&resp) //nolint:errcheck
+	if resp.TTLHours != 8 {
+		t.Errorf("default ttl_hours: want 8, got %d", resp.TTLHours)
+	}
+}
+
+func TestIssueToken_MissingSubject_Returns400(t *testing.T) {
+	srv, tm := newAuthServer(t)
+	atk := adminToken(t, tm)
+
+	rr := doWithToken(srv, "POST", "/admin/tokens",
+		`{"role":"admin"}`, atk)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", rr.Code)
+	}
+}
+
+func TestIssueToken_InvalidRole_Returns400(t *testing.T) {
+	srv, tm := newAuthServer(t)
+	atk := adminToken(t, tm)
+
+	rr := doWithToken(srv, "POST", "/admin/tokens",
+		`{"subject":"dave","role":"superuser"}`, atk)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", rr.Code)
+	}
+}
+
+func TestIssueToken_TTLExceedsMax_Returns400(t *testing.T) {
+	srv, tm := newAuthServer(t)
+	atk := adminToken(t, tm)
+
+	rr := doWithToken(srv, "POST", "/admin/tokens",
+		`{"subject":"eve","role":"admin","ttl_hours":721}`, atk)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", rr.Code)
+	}
+}
+
+func TestIssueToken_NonAdminRole_Returns403(t *testing.T) {
+	srv, tm := newAuthServer(t)
+
+	// Issue a node-role token and try to issue another token with it.
+	nodeTok, _ := tm.GenerateToken(context.Background(), "worker", "node", time.Hour)
+	rr := doWithToken(srv, "POST", "/admin/tokens",
+		`{"subject":"hacker","role":"admin"}`, nodeTok)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d", rr.Code)
+	}
+}
+
+func TestIssueToken_NoAuth_Returns401(t *testing.T) {
+	srv, _ := newAuthServer(t)
+	rr := doWithToken(srv, "POST", "/admin/tokens",
+		`{"subject":"x","role":"admin"}`, "")
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", rr.Code)
+	}
+}
+
+// ── DELETE /admin/tokens/{jti} ────────────────────────────────────────────────
+
+func TestRevokeToken_ValidJTI_Returns200(t *testing.T) {
+	srv, tm := newAuthServer(t)
+	atk := adminToken(t, tm)
+
+	// Issue a token, extract its JTI, then revoke it.
+	issued, _ := tm.GenerateToken(context.Background(), "target", "node", time.Hour)
+	jti, err := auth.ExtractJTI(issued)
+	if err != nil {
+		t.Fatalf("ExtractJTI: %v", err)
+	}
+
+	rr := doWithToken(srv, "DELETE", "/admin/tokens/"+jti, "", atk)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body)
+	}
+
+	var resp api.RevokeTokenResponse
+	json.NewDecoder(rr.Body).Decode(&resp) //nolint:errcheck
+	if !resp.Revoked {
+		t.Error("revoked should be true")
+	}
+	if resp.JTI != jti {
+		t.Errorf("jti: want %q, got %q", jti, resp.JTI)
+	}
+
+	// Token should now be invalid.
+	if _, err := tm.ValidateToken(context.Background(), issued); err == nil {
+		t.Error("revoked token should fail validation")
+	}
+}
+
+func TestRevokeToken_NonAdminRole_Returns403(t *testing.T) {
+	srv, tm := newAuthServer(t)
+	nodeTok, _ := tm.GenerateToken(context.Background(), "worker", "node", time.Hour)
+
+	rr := doWithToken(srv, "DELETE", "/admin/tokens/some-jti", "", nodeTok)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d", rr.Code)
+	}
+}
+
+func TestRevokeToken_NoAuth_Returns401(t *testing.T) {
+	srv, _ := newAuthServer(t)
+	rr := doWithToken(srv, "DELETE", "/admin/tokens/some-jti", "", "")
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", rr.Code)
+	}
+}
