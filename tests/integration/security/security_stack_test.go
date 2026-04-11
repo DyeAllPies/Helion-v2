@@ -1,12 +1,14 @@
-// tests/integration/security/phase4_integration_test.go
+// tests/integration/security/security_stack_test.go
 //
-// Complete Phase 4 integration test verifying all exit criteria:
+// End-to-end integration tests for the full security stack:
 //   1. PQC: ML-DSA CA enhancement
 //   2. JWT: Root token generation, validation, revocation
 //   3. Rate limiting: Enforced on job submission
 //   4. Audit logging: All required events logged
+//   5. Node revocation: Enforced at the gRPC layer
 //
-// This test verifies the full integration, not just individual components.
+// These tests verify that every security component is wired together correctly
+// and that the required events fire in the expected order over a full lifecycle.
 
 package security
 
@@ -26,8 +28,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestPhase4CAEnhancement verifies ML-DSA enhancement works.
-func TestPhase4CAEnhancement(t *testing.T) {
+// TestCA_PQCEnhancement verifies ML-DSA and hybrid-KEM enhancement on the CA.
+func TestCA_PQCEnhancement(t *testing.T) {
 	ca, err := pqcrypto.NewCA()
 	if err != nil {
 		t.Fatalf("create CA: %v", err)
@@ -55,8 +57,9 @@ func TestPhase4CAEnhancement(t *testing.T) {
 	t.Log("✓ CA successfully enhanced with PQC")
 }
 
-// TestPhase4RootTokenWorkflow verifies root token rotation and usage.
-func TestPhase4RootTokenWorkflow(t *testing.T) {
+// TestRootToken_RotationAndRevocation verifies root-token rotation produces
+// a fresh token on every call and revokes the previous one.
+func TestRootToken_RotationAndRevocation(t *testing.T) {
 	ctx := context.Background()
 	store := newMockTokenStore()
 	tm, err := auth.NewTokenManager(ctx, store)
@@ -107,8 +110,9 @@ func TestPhase4RootTokenWorkflow(t *testing.T) {
 	t.Log("✓ Root token rotation workflow complete")
 }
 
-// TestPhase4RateLimitingIntegration verifies rate limiting works as expected.
-func TestPhase4RateLimitingIntegration(t *testing.T) {
+// TestRateLimiting_EnforcedEndToEnd verifies that the node limiter allows the
+// burst and rejects calls that exceed it.
+func TestRateLimiting_EnforcedEndToEnd(t *testing.T) {
 	limiter := ratelimit.NewNodeLimiter()
 	ctx := context.Background()
 	nodeID := "test-node-integration"
@@ -146,8 +150,9 @@ func TestPhase4RateLimitingIntegration(t *testing.T) {
 	t.Log("✓ Rate limiting integration complete")
 }
 
-// TestPhase4AuditLogCompleteness verifies all required events can be logged.
-func TestPhase4AuditLogCompleteness(t *testing.T) {
+// TestAuditLog_RequiredEventsPresent verifies every required audit event type
+// can be logged and retrieved.
+func TestAuditLog_RequiredEventsPresent(t *testing.T) {
 	store := &mockAuditStore{
 		data: make(map[string][]byte),
 	}
@@ -239,21 +244,22 @@ func (m *mockAuditStore) Scan(ctx context.Context, prefix string, limit int) ([]
 	return results, nil
 }
 
-// TestPhase4ExitCriteria is a comprehensive test of all Phase 4 requirements.
-func TestPhase4ExitCriteria(t *testing.T) {
-	t.Run("PQC_Enhancement", TestPhase4CAEnhancement)
-	t.Run("JWT_RootToken", TestPhase4RootTokenWorkflow)
-	t.Run("RateLimiting", TestPhase4RateLimitingIntegration)
-	t.Run("AuditLogging", TestPhase4AuditLogCompleteness)
-	t.Run("RevokedNode_gRPC", TestPhase4RevokedNodeGRPC)
-	t.Run("AuditLifecycle", TestPhase4AuditLifecycleSequence)
+// TestSecurityStack_AllComponentsWired runs every security-stack subtest in
+// sequence to verify the full set is wired together and passing.
+func TestSecurityStack_AllComponentsWired(t *testing.T) {
+	t.Run("PQC_Enhancement", TestCA_PQCEnhancement)
+	t.Run("JWT_RootToken", TestRootToken_RotationAndRevocation)
+	t.Run("RateLimiting", TestRateLimiting_EnforcedEndToEnd)
+	t.Run("AuditLogging", TestAuditLog_RequiredEventsPresent)
+	t.Run("RevokedNode_gRPC", TestRevokedNode_GRPCRejects)
+	t.Run("AuditLifecycle", TestAuditLog_LifecycleOrdering)
 
-	t.Log("✓✓✓ All Phase 4 exit criteria verified ✓✓✓")
+	t.Log("✓✓✓ Full security stack verified ✓✓✓")
 }
 
-// TestPhase4RevokedNodeGRPC verifies the exit criterion:
-// "Revoked node's next gRPC call returns Unauthenticated; node re-registers
-// with new certificate."
+// TestRevokedNode_GRPCRejects verifies that a revoked node's next gRPC call
+// returns codes.Unauthenticated, and that revocation is scoped to that node
+// (a different node ID can still register).
 //
 // Test sequence:
 //  1. Coordinator + real registry, revocation checker wired into gRPC server.
@@ -261,7 +267,7 @@ func TestPhase4ExitCriteria(t *testing.T) {
 //  3. Coordinator revokes the node via registry.RevokeNode().
 //  4. Same node attempts Register again → must get codes.Unauthenticated.
 //  5. A brand-new node ID registers successfully → proves revocation is scoped.
-func TestPhase4RevokedNodeGRPC(t *testing.T) {
+func TestRevokedNode_GRPCRejects(t *testing.T) {
 	// ── coordinator setup ────────────────────────────────────────────────────
 	coordBundle, err := auth.NewCoordinatorBundle()
 	if err != nil {
@@ -348,16 +354,14 @@ func TestPhase4RevokedNodeGRPC(t *testing.T) {
 	t.Log("✓ non-revoked node still registers successfully")
 }
 
-// TestPhase4AuditLifecycleSequence verifies the exit criterion:
-// "Integration test verifies expected event sequence for a full job lifecycle."
+// TestAuditLog_LifecycleOrdering drives the audit logger through a complete
+// job lifecycle and asserts that every required event type appears in the
+// recorded sequence.
 //
 // The required audit events are:
 //   node_register, job_submit, job_state_transition (pending→running, running→completed),
 //   rate_limit_hit, auth_failure, node_revoke, coordinator_start, coordinator_stop
-//
-// This test drives the audit logger through a complete lifecycle and asserts
-// every required event type appears in the recorded sequence.
-func TestPhase4AuditLifecycleSequence(t *testing.T) {
+func TestAuditLog_LifecycleOrdering(t *testing.T) {
 	store := &mockAuditStore{data: make(map[string][]byte)}
 	logger := audit.NewLogger(store, 0)
 	ctx := context.Background()

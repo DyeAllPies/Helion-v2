@@ -82,6 +82,29 @@ func NewMemCertPinner() *MemCertPinner {
 	return &MemCertPinner{pins: make(map[string]string)}
 }
 
+// NewConfiguredCertPinner returns a MemCertPinner pre-populated with the given
+// nodeID → fingerprint map.
+//
+// AUDIT M5 (fixed): operators can pre-provision expected certificate
+// fingerprints at coordinator startup so a malicious node that registers
+// first cannot hijack a legitimate node ID. When Register is called for a
+// pre-configured node ID, GetPin returns the stored fingerprint and the
+// registration is rejected if the presented cert does not match.
+//
+// Nodes that are NOT in the map still fall back to first-seen (TOFU)
+// behaviour. This is the dev-mode path and is NOT hardened — production
+// deployments should enumerate every known node ID in HELION_NODE_PINS.
+//
+// Pins are stored as-is; callers are responsible for validating the
+// fingerprint format before calling this constructor.
+func NewConfiguredCertPinner(pins map[string]string) *MemCertPinner {
+	cp := NewMemCertPinner()
+	for nodeID, fingerprint := range pins {
+		cp.pins[nodeID] = fingerprint
+	}
+	return cp
+}
+
 func (m *MemCertPinner) GetPin(_ context.Context, nodeID string) (string, error) {
 	m.mu.RLock()
 	fp, ok := m.pins[nodeID]

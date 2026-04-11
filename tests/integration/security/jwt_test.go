@@ -169,7 +169,7 @@ func TestJWTRevocation(t *testing.T) {
 	}
 
 	// Extract JTI
-	jti, err := auth.ExtractJTI(token)
+	jti, err := auth.ExtractJTIFromValidatedToken(ctx, token, tm)
 	if err != nil {
 		t.Fatalf("ExtractJTI failed: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestJWTReuseAfterRevocation(t *testing.T) {
 		t.Fatalf("GenerateToken failed: %v", err)
 	}
 
-	jti, err := auth.ExtractJTI(token)
+	jti, err := auth.ExtractJTIFromValidatedToken(ctx, token, tm)
 	if err != nil {
 		t.Fatalf("ExtractJTI failed: %v", err)
 	}

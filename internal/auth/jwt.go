@@ -50,6 +50,8 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -195,7 +197,7 @@ func (tm *TokenManager) RotateRootToken(ctx context.Context) (string, error) {
 	// Revoke the old token's JTI so it is immediately rejected.
 	existing, err := tm.store.Get(ctx, RootTokenKey)
 	if err == nil && len(existing) > 0 {
-		if oldJTI, err := ExtractJTI(string(existing)); err == nil {
+		if oldJTI, err := extractJTIUnchecked(string(existing)); err == nil {
 			// Best-effort revocation; ignore errors (token may already be expired).
 			_ = tm.RevokeToken(ctx, oldJTI)
 		}
@@ -224,9 +226,21 @@ func (tm *TokenManager) GetRootToken(ctx context.Context) (string, error) {
 	return string(token), nil
 }
 
-// ExtractJTI extracts the JTI claim from a JWT without full validation.
-// Used for revocation when we need to revoke a token without validating it.
-func ExtractJTI(tokenString string) (string, error) {
+// extractJTIUnchecked extracts the JTI claim from a JWT without validating
+// the signature or checking the BadgerDB revocation store.
+//
+// AUDIT C3 (fixed): previously this function was exported as ExtractJTI, making
+// it easy for callers to accidentally extract JTIs from attacker-controlled
+// tokens without signature validation. It is now unexported; external callers
+// must use ExtractJTIFromValidatedToken which validates the signature first.
+//
+// SECURITY: This function uses ParseUnverified and MUST only be called on
+// tokens retrieved from trusted internal storage (e.g., the BadgerDB token
+// store). Passing attacker-controlled tokens here is safe only if the JTI is
+// subsequently used solely for revocation — an attacker cannot forge a valid
+// JTI because revocation deletes the JTI from the store, and ValidateToken
+// always re-checks the store. Never use this to authenticate a request.
+func extractJTIUnchecked(tokenString string) (string, error) {
 	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, &Claims{})
 	if err != nil {
 		return "", fmt.Errorf("parse token (unverified): %w", err)
@@ -237,22 +251,51 @@ func ExtractJTI(tokenString string) (string, error) {
 		return "", fmt.Errorf("invalid claims type")
 	}
 
+	if claims.ID == "" {
+		return "", fmt.Errorf("token has no JTI")
+	}
+
 	return claims.ID, nil
 }
 
-// PrintRootTokenInstructions prints the root token to stdout with instructions.
-// Called on every coordinator start after RotateRootToken.
-func PrintRootTokenInstructions(token string) {
-	fmt.Println("╔════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║         HELION COORDINATOR - ROOT TOKEN ROTATED                ║")
-	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
-	fmt.Println("║ A new root API token has been generated. Save it securely!     ║")
-	fmt.Println("║ Previous tokens are now REVOKED.                               ║")
-	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
-	fmt.Printf( "║ Token: %-56s ║\n", token)
-	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
-	fmt.Println("║ Usage:                                                         ║")
-	fmt.Println("║   curl -H 'Authorization: Bearer <token>' \\                    ║")
-	fmt.Println("║        https://coordinator:8443/jobs                           ║")
-	fmt.Println("╚════════════════════════════════════════════════════════════════╝")
+// ExtractJTIFromValidatedToken validates the token's signature and revocation
+// status, then returns its JTI. Use this whenever the token comes from an
+// external (untrusted) source or when you need a strongly authoritative JTI.
+func ExtractJTIFromValidatedToken(ctx context.Context, tokenString string, tm *TokenManager) (string, error) {
+	claims, err := tm.ValidateToken(ctx, tokenString)
+	if err != nil {
+		return "", fmt.Errorf("validate token: %w", err)
+	}
+	if claims.ID == "" {
+		return "", fmt.Errorf("validated token has no JTI")
+	}
+	return claims.ID, nil
+}
+
+// WriteRootToken persists the root token to path with owner-only permissions
+// and prints a single-line message pointing at that path.
+//
+// AUDIT H1 (fixed): previously the raw token was rendered in an ASCII banner
+// to stdout on every coordinator start, leaking into container logs, process
+// supervisors, and any log-aggregation pipeline that captured stdout. Now the
+// token value never touches stdout — the caller reads it from the file on
+// disk (mode 0600) and can apply its own access controls.
+//
+// The parent directory is created with 0700 if it does not already exist.
+// Returns an error if the parent cannot be created or the file cannot be
+// written; callers should treat a non-nil return as a fatal startup error.
+func WriteRootToken(token, path string) error {
+	if path == "" {
+		return fmt.Errorf("WriteRootToken: path is required")
+	}
+	if dir := filepath.Dir(path); dir != "." && dir != "/" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("WriteRootToken: create %s: %w", dir, err)
+		}
+	}
+	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
+		return fmt.Errorf("WriteRootToken: write %s: %w", path, err)
+	}
+	fmt.Printf("root token written to %s (mode 0600)\n", path)
+	return nil
 }

@@ -1,6 +1,6 @@
 # Helion v2 — Architecture Reference
 
-This document is the technical companion to the [README](../README.md). It covers
+This document is the technical companion to the [README](README.md). It covers
 component internals, protocol contracts, persistence design, the CI/CD pipeline, runtime
 benchmarks, and the key decisions behind every major choice.
 

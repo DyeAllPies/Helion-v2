@@ -14,18 +14,24 @@
 //   HELION_GRPC_ADDR        gRPC listen address   (default: 0.0.0.0:9090)
 //   HELION_HTTP_ADDR        HTTP API listen address (default: 0.0.0.0:8080)
 //   HELION_HEARTBEAT_SEC    Heartbeat interval in seconds (default: 10)
-//   HELION_SCHEDULER        Scheduling policy: "least" or "round-robin" (default)
+//   HELION_ROTATE_TOKEN     Rotate root token on startup: "true" or "false" (default: true)
+//   HELION_TOKEN_FILE       Path to write the root token (default: /var/lib/helion/root-token)
+//   HELION_NODE_PINS        Pre-configured cert pins (AUDIT M5), format:
+//                             nodeID1:sha256hex,nodeID2:sha256hex,...
+//                           Unconfigured nodes fall back to first-seen (dev mode).
 
 package main
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -122,14 +128,38 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Rotate root token on every start: revokes the previous token and issues
-	// a fresh one, so a token leaked from a prior run is immediately invalid.
-	rootToken, err := tokenManager.RotateRootToken(ctx)
-	if err != nil {
-		log.Error("rotate root token", slog.Any("err", err))
+	// AUDIT L2 (fixed): root token is rotated on every startup by default,
+	// invalidating any token leaked from a prior run. Set HELION_ROTATE_TOKEN=false
+	// only in automation contexts where the token must remain stable across restarts.
+	// Rotation revokes the previous token so a leaked token from a prior run is
+	// immediately invalid. Disable rotation only when a stable token is required
+	// (e.g. in automation that cannot capture stdout on every restart).
+	var rootToken string
+	if envOr("HELION_ROTATE_TOKEN", "true") != "false" {
+		rootToken, err = tokenManager.RotateRootToken(ctx)
+		if err != nil {
+			log.Error("rotate root token", slog.Any("err", err))
+			os.Exit(1)
+		}
+	} else {
+		rootToken, err = tokenManager.GetRootToken(ctx)
+		if err != nil {
+			// No existing token — issue one for the first time.
+			rootToken, err = tokenManager.RotateRootToken(ctx)
+			if err != nil {
+				log.Error("issue initial root token", slog.Any("err", err))
+				os.Exit(1)
+			}
+		}
+	}
+	// AUDIT H1 (fixed): write the token to a file with mode 0600 instead of
+	// printing it to stdout. HELION_TOKEN_FILE defaults to a well-known path
+	// under /var/lib/helion; override for containers/dev environments.
+	tokenFilePath := envOr("HELION_TOKEN_FILE", "/var/lib/helion/root-token")
+	if err := auth.WriteRootToken(rootToken, tokenFilePath); err != nil {
+		log.Error("write root token", slog.Any("err", err))
 		os.Exit(1)
 	}
-	auth.PrintRootTokenInstructions(rootToken)
 
 	// Initialize audit logger (90-day retention)
 	auditLogger := audit.NewLogger(persister, 90*24*time.Hour)
@@ -162,9 +192,20 @@ func main() {
 	// immediately closes the target node's active heartbeat stream.
 	registry.SetStreamRevoker(grpcSrv)
 
-	// Wire certificate pinning: first Register call stores the cert fingerprint;
-	// subsequent calls with a different cert are rejected.
-	registry.SetCertPinner(cluster.NewMemCertPinner())
+	// AUDIT M5 (fixed): parse HELION_NODE_PINS to pre-provision expected cert
+	// fingerprints. Nodes not in the map fall back to first-seen (TOFU) — an
+	// acceptable dev-mode path but NOT hardened. Production deployments should
+	// enumerate every known node ID in the env var.
+	parsedPins, err := parseNodePins(os.Getenv("HELION_NODE_PINS"))
+	if err != nil {
+		log.Error("parse HELION_NODE_PINS", slog.Any("err", err))
+		os.Exit(1)
+	}
+	if len(parsedPins) > 0 {
+		log.Info("cert pinner: using pre-configured pins",
+			slog.Int("count", len(parsedPins)))
+	}
+	registry.SetCertPinner(cluster.NewConfiguredCertPinner(parsedPins))
 
 	// Wire ML-DSA verifier: at Register time the coordinator checks that the
 	// node cert carries a valid out-of-band ML-DSA signature from this CA.
@@ -181,9 +222,12 @@ func main() {
 	// Wrap JobStore with adapter to provide paginated List method
 	jobsAdapter := api.NewJobStoreAdapter(jobs)
 
-	// Use stub node registry and metrics (TODO: Phase 5 - implement real adapters)
-	nodeRegistry := api.NewStubNodeRegistry()
-	metricsProvider := api.NewStubMetricsProvider()
+	// AUDIT H5 (fixed): use real adapters backed by the live cluster.Registry
+	// and JobStore so GET /nodes and GET /metrics report actual cluster state.
+	// Previously wired NewStubNodeRegistry() / NewStubMetricsProvider() which
+	// returned empty/fabricated data.
+	nodeRegistry := api.NewRegistryNodeAdapter(registry)
+	metricsProvider := api.NewRegistryMetricsAdapter(registry, jobs)
 
 	// ── Prometheus metrics ────────────────────────────────────────────────────
 	_, promHandler := metrics.NewRegistry(jobs, registry, jobsAdapter)
@@ -199,6 +243,28 @@ func main() {
 
 	// ── Background goroutines ─────────────────────────────────────────────
 	go registry.RunPruneLoop(ctx)
+
+	// AUDIT M1 (fixed): rate-limiter map was previously unbounded — each node
+	// that ever connected would accumulate an entry forever. This GC goroutine
+	// evicts entries that have been idle for 2× the heartbeat interval, bounding
+	// the map to O(active nodes) rather than O(all nodes ever seen).
+	// Stale threshold = 2× heartbeat interval; GC runs every 5 minutes.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		staleThreshold := 2 * heartbeatInterval
+		for {
+			select {
+			case <-ticker.C:
+				evicted := rateLimiter.GarbageCollect(staleThreshold)
+				if evicted > 0 {
+					log.Info("rate limiter GC", slog.Int("evicted", evicted))
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	// ── Wait for shutdown signal ──────────────────────────────────────────
 	<-ctx.Done()
@@ -248,4 +314,61 @@ func envInt(key string, def int) int {
 		return n
 	}
 	return def
+}
+
+// parseNodePins parses HELION_NODE_PINS into a nodeID → fingerprint map.
+// Format: "nodeID1:sha256hex,nodeID2:sha256hex,...".  Whitespace around
+// entries and their components is trimmed; empty entries are skipped.
+//
+// Each fingerprint must be exactly 64 hex characters (the output of
+// cluster.CertFingerprint). Any malformed entry is a fatal configuration
+// error so the operator finds out at startup rather than at 3am when a
+// node fails to register.
+//
+// An empty or unset value returns a nil map with no error, meaning
+// "no pre-configured pins — fall back to first-seen".
+func parseNodePins(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	pins := make(map[string]string)
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		nodeID, fp, found := strings.Cut(entry, ":")
+		if !found {
+			return nil, fmt.Errorf("HELION_NODE_PINS: entry %q missing ':' separator", entry)
+		}
+		nodeID = strings.TrimSpace(nodeID)
+		fp = strings.TrimSpace(fp)
+		if nodeID == "" {
+			return nil, fmt.Errorf("HELION_NODE_PINS: entry %q has empty node ID", entry)
+		}
+		if len(fp) != 64 {
+			return nil, fmt.Errorf("HELION_NODE_PINS: entry %q: fingerprint must be 64 hex chars (got %d)", entry, len(fp))
+		}
+		if !isLowerHex(fp) {
+			return nil, fmt.Errorf("HELION_NODE_PINS: entry %q: fingerprint contains non-hex characters", entry)
+		}
+		pins[nodeID] = fp
+	}
+	if len(pins) == 0 {
+		return nil, nil
+	}
+	return pins, nil
+}
+
+// isLowerHex reports whether s contains only lowercase hex digits 0-9 a-f.
+// cluster.CertFingerprint emits lowercase via hex.EncodeToString, so the
+// pinned value must use the same encoding for exact string comparison.
+func isLowerHex(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }

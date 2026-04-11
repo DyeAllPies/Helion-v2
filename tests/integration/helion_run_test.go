@@ -53,6 +53,9 @@ func startAPIServer(t *testing.T, jobs *cluster.JobStore) string {
 	jobsAdapter := api.NewJobStoreAdapter(jobs)
 	rateLimiter := ratelimit.NewNodeLimiter()
 	srv := api.NewServer(jobsAdapter, nil, nil, nil, nil, rateLimiter, nil, nil)
+	// AUDIT H2: this integration test starts a coordinator without a token
+	// manager; opt in explicitly to the dev-mode no-auth behavior.
+	srv.DisableAuth()
 
 	go func() {
 		if err := srv.Serve(addr); err != nil && err != http.ErrServerClosed {

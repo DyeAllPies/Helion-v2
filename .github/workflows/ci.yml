@@ -38,37 +38,87 @@ jobs:
         run: $(go env GOPATH)/bin/golangci-lint run --timeout=5m
 
       - name: go test (all packages)
+        # ./... expands to every package in the module including
+        # internal/..., cmd/..., tests/integration, tests/integration/security,
+        # and tests/bench. The bench package has zero TestXxx funcs (only
+        # BenchmarkXxx funcs), so it compiles here but is executed by the
+        # dedicated benchmark step below.
         run: go test -race -count=1 ./...
 
-      - name: go test with coverage (internal packages)
+      - name: go test (benchmarks — smoke run, 1 iteration)
+        # tests/bench holds Go-vs-Rust runtime benchmarks. `go test ./...`
+        # above never invokes them because they are Benchmark*, not Test*.
+        # Running with -bench=. -benchtime=1x guarantees every benchmark
+        # compiles and executes at least once per CI run so regressions
+        # surface immediately rather than on the next manual run.
+        run: go test -run=^$ -bench=. -benchtime=1x ./tests/bench/...
+
+      # ── Coverage ────────────────────────────────────────────────────────────
+      # Coverage is measured in two tiers with independent thresholds:
+      #
+      #   internal/   ≥ 90 %  — library code, fully unit-testable
+      #   cmd/        ≥ 25 %  — binary entry points dominated by I/O side
+      #                         effects (net.Listen, signal.Notify, os.Exit)
+      #                         that aren't worth mocking. Testable helpers
+      #                         (config parsing, URL building, CLI flows)
+      #                         are covered; the blob of main() is not.
+      #
+      # Integration tests under tests/integration/ exercise the full boot
+      # path end-to-end, so the low cmd/ number does not reflect untested
+      # code — only unreachable-from-unit-tests code.
+
+      - name: go test with coverage (internal/ — 90% threshold)
         run: |
           go test -race -count=1 \
-            -coverprofile=coverage.out -covermode=atomic \
+            -coverprofile=coverage-internal.out -covermode=atomic \
             ./internal/...
 
-      - name: Coverage threshold (≥ 90 %)
+      - name: Internal coverage threshold (≥ 90 %)
         run: |
-          pct=$(go tool cover -func=coverage.out \
+          pct=$(go tool cover -func=coverage-internal.out \
                 | awk '/^total:/ { gsub(/%/,"",$3); print $3 }')
-          echo "Total Go coverage: ${pct}%"
+          echo "internal/ coverage: ${pct}%"
           awk -v p="$pct" 'BEGIN {
             if (p+0 < 90) {
-              print "FAIL: coverage " p "% is below 90% threshold"
+              print "FAIL: internal/ coverage " p "% is below 90% threshold"
               exit 1
             }
-            print "PASS: coverage " p "%"
+            print "PASS: internal/ coverage " p "%"
           }'
 
-      - name: Generate HTML coverage report
-        run: go tool cover -html=coverage.out -o coverage.html
+      - name: go test with coverage (cmd/ — 25% threshold)
+        run: |
+          go test -race -count=1 \
+            -coverprofile=coverage-cmd.out -covermode=atomic \
+            ./cmd/...
 
-      - name: Upload Go coverage report
+      - name: Cmd coverage threshold (≥ 25 %)
+        run: |
+          pct=$(go tool cover -func=coverage-cmd.out \
+                | awk '/^total:/ { gsub(/%/,"",$3); print $3 }')
+          echo "cmd/ coverage: ${pct}%"
+          awk -v p="$pct" 'BEGIN {
+            if (p+0 < 25) {
+              print "FAIL: cmd/ coverage " p "% is below 25% threshold"
+              exit 1
+            }
+            print "PASS: cmd/ coverage " p "%"
+          }'
+
+      - name: Generate HTML coverage reports
+        run: |
+          go tool cover -html=coverage-internal.out -o coverage-internal.html
+          go tool cover -html=coverage-cmd.out      -o coverage-cmd.html
+
+      - name: Upload Go coverage reports
         uses: actions/upload-artifact@v4
         with:
           name: go-coverage
           path: |
-            coverage.out
-            coverage.html
+            coverage-internal.out
+            coverage-internal.html
+            coverage-cmd.out
+            coverage-cmd.html
           retention-days: 14
 
   # ── Rust: clippy + tests ──────────────────────────────────────────────────────

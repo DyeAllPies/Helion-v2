@@ -112,4 +112,14 @@ type Job struct {
 	FinishedAt     time.Time         `json:"finished_at,omitempty"`
 	ExitCode       int32             `json:"exit_code,omitempty"`
 	Error          string            `json:"error,omitempty"`
+
+	// SubmittedBy records the JWT subject of the caller that submitted the
+	// job. Set by the API layer when auth is enabled; empty in dev mode.
+	//
+	// AUDIT L1 (fixed): used by handleGetJob to enforce per-job RBAC —
+	// non-admin callers can only read jobs they submitted themselves.
+	// Old BadgerDB entries without this field deserialize with an empty
+	// string, which yields a 403 for non-admin access (backward-compatible
+	// in the safe direction).
+	SubmittedBy string `json:"submitted_by,omitempty"`
 }

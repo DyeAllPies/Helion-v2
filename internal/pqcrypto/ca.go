@@ -68,7 +68,9 @@ func NewCA() (*CA, error) {
 		},
 		DNSNames:              []string{"helion-ca"},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(envDuration("HELION_CA_CERT_TTL_DAYS", 3650, 24*time.Hour)),
+		// AUDIT L1 (fixed): CA TTL was previously 3650 days (10 years). Reduced
+		// to 730 days (2 years) and made configurable via HELION_CA_CERT_TTL_DAYS.
+		NotAfter:              time.Now().Add(envDuration("HELION_CA_CERT_TTL_DAYS", 730, 24*time.Hour)),
 		IsCA:                  true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
@@ -110,6 +112,9 @@ func (ca *CA) IssueNodeCert(nodeID string) (certPEM, keyPEM []byte, err error) {
 			net.ParseIP("::1"),
 		},
 		NotBefore: time.Now(),
+		// AUDIT L2 (fixed): node cert TTL is configurable via HELION_NODE_CERT_TTL_HOURS
+		// (default 24 h). Short-lived node certs limit the blast radius of a
+		// compromised node key by requiring regular re-issuance.
 		NotAfter:  time.Now().Add(envDuration("HELION_NODE_CERT_TTL_HOURS", 24, time.Hour)),
 		KeyUsage:  x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{

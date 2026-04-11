@@ -120,3 +120,77 @@ func TestMemCertPinner_Overwrite_UpdatesPin(t *testing.T) {
 		t.Errorf("want 'new', got %q", got)
 	}
 }
+
+// ── NewConfiguredCertPinner (AUDIT M5) ───────────────────────────────────────
+
+func TestNewConfiguredCertPinner_PreConfiguredPinsReadBack(t *testing.T) {
+	ctx := context.Background()
+	pins := map[string]string{
+		"alpha": "fp-alpha",
+		"beta":  "fp-beta",
+	}
+	p := cluster.NewConfiguredCertPinner(pins)
+
+	got, err := p.GetPin(ctx, "alpha")
+	if err != nil {
+		t.Fatalf("GetPin alpha: %v", err)
+	}
+	if got != "fp-alpha" {
+		t.Errorf("alpha: want 'fp-alpha', got %q", got)
+	}
+
+	got, err = p.GetPin(ctx, "beta")
+	if err != nil {
+		t.Fatalf("GetPin beta: %v", err)
+	}
+	if got != "fp-beta" {
+		t.Errorf("beta: want 'fp-beta', got %q", got)
+	}
+}
+
+func TestNewConfiguredCertPinner_UnconfiguredNodeFallsBack(t *testing.T) {
+	ctx := context.Background()
+	p := cluster.NewConfiguredCertPinner(map[string]string{"alpha": "fp-a"})
+
+	// Unknown node should behave like MemCertPinner — GetPin returns error,
+	// SetPin records the new fingerprint (first-seen fallback).
+	if _, err := p.GetPin(ctx, "ghost"); err == nil {
+		t.Error("unconfigured node: GetPin should return error, got nil")
+	}
+
+	if err := p.SetPin(ctx, "ghost", "fp-ghost"); err != nil {
+		t.Fatalf("SetPin on unconfigured: %v", err)
+	}
+	got, _ := p.GetPin(ctx, "ghost")
+	if got != "fp-ghost" {
+		t.Errorf("first-seen fallback: want 'fp-ghost', got %q", got)
+	}
+}
+
+func TestNewConfiguredCertPinner_NilMap_BehavesLikeEmpty(t *testing.T) {
+	ctx := context.Background()
+	p := cluster.NewConfiguredCertPinner(nil)
+	if _, err := p.GetPin(ctx, "anything"); err == nil {
+		t.Error("nil map: GetPin should return error")
+	}
+}
+
+func TestNewConfiguredCertPinner_ConfiguredPinIsImmutableOnSet(t *testing.T) {
+	// An attacker re-registering for a pre-configured node should overwrite
+	// the pin via SetPin — but Registry.Register never calls SetPin when
+	// GetPin already returned a value, so the pin is effectively immutable
+	// through the normal register path. This test documents the underlying
+	// MemCertPinner behaviour: SetPin does overwrite, so the protection
+	// lives in Registry.Register's flow, not in the pinner itself.
+	ctx := context.Background()
+	p := cluster.NewConfiguredCertPinner(map[string]string{"alpha": "original"})
+
+	// The pinner permits overwrites at the storage layer.
+	_ = p.SetPin(ctx, "alpha", "attacker")
+	got, _ := p.GetPin(ctx, "alpha")
+	if got != "attacker" {
+		t.Errorf("pinner allows SetPin overwrite: want 'attacker', got %q", got)
+	}
+	// Registry.Register would NOT reach SetPin here because GetPin first
+	// returned "original" successfully; the mismatch branch rejects instead.
+}

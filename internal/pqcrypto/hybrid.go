@@ -221,14 +221,19 @@ func (ca *CA) EnhancedNodeTLSConfig(certPEM, keyPEM []byte, serverName string) (
 	return cfg, nil
 }
 
-// VerifyCertificateWithKEM verifies a certificate's signature using ML-KEM-768.
-// This is placeholder logic for Phase 4 certificate verification.
-// In production, this would verify the Dilithium signature (see mldsa.go).
-func VerifyCertificateWithKEM(cert *x509.Certificate, caPub *KEMPublicKey) error {
-	// TODO(Phase 4): Implement ML-DSA (Dilithium) signature verification.
-	// For now, we rely on standard x509 verification (ECDSA signatures).
-	// ML-DSA signatures would be stored in a certificate extension and
-	// verified here alongside the standard signature.
-	_ = caPub // Placeholder to avoid unused variable error
+// VerifyCertificateWithKEM verifies a certificate's ML-DSA (Dilithium) signature
+// stored in a custom X.509 extension alongside the standard ECDSA signature.
+//
+// NOTE: ML-DSA verification is not yet implemented (tracked as AUDIT.md C1).
+// The function currently returns nil so the rest of the TLS handshake proceeds
+// using standard x509 ECDSA verification only. Do not claim post-quantum
+// certificate authentication until this is implemented.
+func VerifyCertificateWithKEM(_ *x509.Certificate, _ *KEMPublicKey) error {
+	// TODO(Phase 5): Implement ML-DSA (Dilithium-3) signature verification.
+	// Steps:
+	//   1. Extract the ML-DSA signature from cert's ExtraExtensions (OID TBD).
+	//   2. Deserialise caPub into a dilithium.PublicKey.
+	//   3. Call mldsa.Verify(caPub, cert.RawTBSCertificate, sig).
+	//   4. Return an error if verification fails.
 	return nil
 }

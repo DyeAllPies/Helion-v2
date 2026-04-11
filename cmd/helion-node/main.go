@@ -40,18 +40,60 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
+// nodeConfig is the resolved runtime configuration for the node agent,
+// derived from environment variables and the local hostname. Extracting
+// this into a named type lets the config-parsing logic be unit-tested
+// independently of the side-effectful bootstrap flow in main().
+type nodeConfig struct {
+	Port            string
+	CoordinatorAddr string
+	RuntimeBackend  string
+	RuntimeSocket   string
+	NodeID          string
+	NodeAddr        string
+}
+
+// loadNodeConfig resolves the node agent's configuration from environment
+// variables, falling back to sensible defaults and deriving the ID/address
+// from hostname when they are not explicitly set.
+func loadNodeConfig(hostname string) nodeConfig {
+	cfg := nodeConfig{
+		Port:            envOr("PORT", "8080"),
+		CoordinatorAddr: envOr("HELION_COORDINATOR", "coordinator:9090"),
+		RuntimeBackend:  envOr("HELION_RUNTIME", "go"),
+		RuntimeSocket:   envOr("HELION_RUNTIME_SOCKET", "/run/helion/runtime.sock"),
+	}
+	cfg.NodeID = envOr("HELION_NODE_ID", fmt.Sprintf("%s:%s", hostname, cfg.Port))
+	cfg.NodeAddr = envOr("HELION_NODE_ADDR", fmt.Sprintf("%s:%s", hostname, cfg.Port))
+	return cfg
+}
+
+// selectRuntime constructs the Runtime implementation named by backend,
+// defaulting to the Go runtime for any unknown value. Extracted so the
+// backend-selection logic can be unit-tested without wiring a full agent.
+func selectRuntime(backend, socket string, log *slog.Logger) runtime.Runtime {
+	switch backend {
+	case "rust":
+		log.Info("using Rust runtime", slog.String("socket", socket))
+		return runtime.NewRustClient(socket)
+	default:
+		log.Info("using Go runtime")
+		return runtime.NewGoRuntime()
+	}
+}
+
 func main() {
 	log := slog.Default()
 
 	// ── configuration ─────────────────────────────────────────────────────────
-	port := envOr("PORT", "8080")
-	coordinatorAddr := envOr("HELION_COORDINATOR", "coordinator:9090")
-	runtimeBackend := envOr("HELION_RUNTIME", "go")
-	runtimeSocket := envOr("HELION_RUNTIME_SOCKET", "/run/helion/runtime.sock")
-
 	hostname, _ := os.Hostname()
-	nodeID := envOr("HELION_NODE_ID", fmt.Sprintf("%s:%s", hostname, port))
-	nodeAddr := envOr("HELION_NODE_ADDR", fmt.Sprintf("%s:%s", hostname, port))
+	cfg := loadNodeConfig(hostname)
+	port := cfg.Port
+	coordinatorAddr := cfg.CoordinatorAddr
+	runtimeBackend := cfg.RuntimeBackend
+	runtimeSocket := cfg.RuntimeSocket
+	nodeID := cfg.NodeID
+	nodeAddr := cfg.NodeAddr
 
 	log.Info("helion-node starting",
 		slog.String("node_id", nodeID),
@@ -61,15 +103,7 @@ func main() {
 	)
 
 	// ── runtime selection ─────────────────────────────────────────────────────
-	var rt runtime.Runtime
-	switch runtimeBackend {
-	case "rust":
-		log.Info("using Rust runtime", slog.String("socket", runtimeSocket))
-		rt = runtime.NewRustClient(runtimeSocket)
-	default:
-		log.Info("using Go runtime")
-		rt = runtime.NewGoRuntime()
-	}
+	rt := selectRuntime(runtimeBackend, runtimeSocket, log)
 	defer rt.Close()
 
 	// ── TLS certificate bundle (bootstrap) ────────────────────────────────────

@@ -12,6 +12,11 @@
 //   HELION_COORDINATOR   HTTP address of the coordinator API (required).
 //                        Example: http://127.0.0.1:8080
 //   HELION_TOKEN         JWT bearer token (required when coordinator has auth enabled).
+//   HELION_JOB_ID        Stable job ID to use instead of generating a random one.
+//                        Set this to a fixed value when retrying after a network
+//                        failure — the coordinator deduplicates by job ID and will
+//                        return 409 if the job was already accepted, letting the
+//                        caller safely retry without creating a duplicate.
 //
 // Exit codes
 // ──────────
@@ -70,7 +75,15 @@ func run(args []string) error {
 	}
 	coordAddr = strings.TrimRight(coordAddr, "/")
 
-	jobID := generateID()
+	// AUDIT L5 (fixed): HELION_JOB_ID allows callers to supply a stable job ID
+	// for idempotent retries. Without this, a network failure after the server
+	// accepted the job but before the client received the response would produce
+	// a duplicate job on retry. With a stable ID the coordinator returns 409 on
+	// the retry instead of creating a second job.
+	jobID := os.Getenv("HELION_JOB_ID")
+	if jobID == "" {
+		jobID = generateID()
+	}
 	req := submitRequest{
 		ID:      jobID,
 		Command: args[0],
@@ -112,10 +125,16 @@ func run(args []string) error {
 
 // generateID produces a unique job ID of the form job-{unix_sec}-{rand4hex}.
 // The timestamp prefix makes IDs sortable and debuggable.
+// Falls back to a timestamp-only ID if crypto/rand is unavailable (extremely rare).
 func generateID() string {
 	var b [2]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		panic("crypto/rand unavailable: " + err.Error())
+		// AUDIT M5 (fixed): previously this path called panic(), crashing the
+		// process. Now it warns to stderr and falls back to a timestamp-only ID
+		// so the CLI remains operational even on platforms where crypto/rand is
+		// temporarily unavailable. Entropy is reduced but the process continues.
+		fmt.Fprintf(os.Stderr, "helion-run: warning: crypto/rand unavailable, ID entropy reduced: %v\n", err)
+		return fmt.Sprintf("job-%d-0000", time.Now().Unix())
 	}
 	return fmt.Sprintf("job-%d-%04x", time.Now().Unix(), b)
 }
