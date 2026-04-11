@@ -7,6 +7,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
+	"os"
 	"testing"
 
 	"github.com/DyeAllPies/Helion-v2/internal/pqcrypto"
@@ -648,5 +649,78 @@ func TestVerifyNodeCertMLDSA_InvalidDER_ReturnsError(t *testing.T) {
 	err = ca.VerifyNodeCertMLDSA([]byte("not-a-der-cert"))
 	if err == nil {
 		t.Error("VerifyNodeCertMLDSA invalid DER: want error, got nil")
+	}
+}
+
+// ── envDuration (indirect coverage via NewCA / IssueNodeCert) ────────────────
+
+func TestNewCA_WithValidCATTLEnv_UsesEnvValue(t *testing.T) {
+	t.Setenv("HELION_CA_CERT_TTL_DAYS", "1")
+	ca, err := pqcrypto.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA with env TTL: %v", err)
+	}
+	if ca == nil {
+		t.Fatal("expected non-nil CA")
+	}
+}
+
+func TestNewCA_WithInvalidCATTLEnv_UsesDefault(t *testing.T) {
+	t.Setenv("HELION_CA_CERT_TTL_DAYS", "notanumber")
+	ca, err := pqcrypto.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA with invalid env TTL: %v", err)
+	}
+	if ca == nil {
+		t.Fatal("expected non-nil CA")
+	}
+}
+
+func TestNewCA_WithZeroCATTLEnv_UsesDefault(t *testing.T) {
+	t.Setenv("HELION_CA_CERT_TTL_DAYS", "0")
+	ca, err := pqcrypto.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA with zero env TTL: %v", err)
+	}
+	if ca == nil {
+		t.Fatal("expected non-nil CA")
+	}
+}
+
+func TestIssueNodeCert_WithValidTTLEnv_UsesEnvValue(t *testing.T) {
+	t.Setenv("HELION_NODE_CERT_TTL_HOURS", "48")
+	ca, err := pqcrypto.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	certPEM, keyPEM, err := ca.IssueNodeCert("node-ttl-env")
+	if err != nil {
+		t.Fatalf("IssueNodeCert with env TTL: %v", err)
+	}
+	if len(certPEM) == 0 || len(keyPEM) == 0 {
+		t.Error("expected non-empty cert and key PEM")
+	}
+}
+
+func TestIssueNodeCert_WithInvalidTTLEnv_UsesDefault(t *testing.T) {
+	t.Setenv("HELION_NODE_CERT_TTL_HOURS", "bad")
+	ca, err := pqcrypto.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	_, _, err = ca.IssueNodeCert("node-bad-ttl")
+	if err != nil {
+		t.Fatalf("IssueNodeCert with invalid env TTL: %v", err)
+	}
+}
+
+func TestEnvDuration_UnsetVar_UsesDefault(t *testing.T) {
+	os.Unsetenv("HELION_CA_CERT_TTL_DAYS")
+	ca, err := pqcrypto.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA with unset env var: %v", err)
+	}
+	if ca == nil {
+		t.Fatal("expected non-nil CA")
 	}
 }

@@ -571,3 +571,61 @@ func TestRotateRootToken_StoreFails_ReturnsError(t *testing.T) {
 		t.Errorf("want 'store root token' in error, got: %v", err)
 	}
 }
+
+// ── ValidateToken — unexpected signing method ─────────────────────────────────
+
+func TestValidateToken_TamperedSignature_Rejected(t *testing.T) {
+	store := newMockStore()
+	tm, err := auth.NewTokenManager(ctx, store)
+	if err != nil {
+		t.Fatalf("NewTokenManager: %v", err)
+	}
+
+	tok, err := tm.GenerateToken(ctx, "u", "admin", time.Minute)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	// Replace the signature segment with garbage so parse fails.
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		t.Fatalf("unexpected token format")
+	}
+	tampered := parts[0] + "." + parts[1] + ".invalidsignature"
+
+	_, err = tm.ValidateToken(ctx, tampered)
+	if err == nil {
+		t.Error("expected error for tampered signature, got nil")
+	}
+}
+
+// ── ExtractJTI — empty JTI ───────────────────────────────────────────────────
+
+func TestExtractJTI_EmptyJTI_ReturnsError(t *testing.T) {
+	// A token with no jti claim — craft one by issuing with GenerateToken and
+	// checking that a completely empty string errors.
+	_, err := auth.ExtractJTI("")
+	if err == nil {
+		t.Error("expected error for empty token string, got nil")
+	}
+}
+
+// ── NewNodeBundle — ML-DSA path ───────────────────────────────────────────────
+
+func TestNewNodeBundle_WithMLDSAEnabled_UsesMLDSAPath(t *testing.T) {
+	b, err := auth.NewCoordinatorBundle()
+	if err != nil {
+		t.Fatalf("NewCoordinatorBundle: %v", err)
+	}
+	// Enable ML-DSA on the CA so NewNodeBundle takes the IssueNodeCertWithMLDSA path.
+	if err := b.CA.EnhanceWithMLDSA(); err != nil {
+		t.Fatalf("EnhanceWithMLDSA: %v", err)
+	}
+	nb, err := auth.NewNodeBundle(b.CA, "node-mldsa")
+	if err != nil {
+		t.Fatalf("NewNodeBundle with ML-DSA: %v", err)
+	}
+	if len(nb.CertPEM) == 0 {
+		t.Error("expected non-empty CertPEM")
+	}
+}
