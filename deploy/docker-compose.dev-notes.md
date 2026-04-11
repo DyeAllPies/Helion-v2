@@ -31,7 +31,8 @@ docker compose logs -f node1
 - `restart: "no"` prevents containers restarting automatically during dev.
 - `state/` and `logs/` are mounted as volumes so data survives container restarts.
 - `HELION_ALLOW_ISOLATION=false` because namespace isolation requires root or CAP_SYS_ADMIN.
-- The healthcheck on the coordinator uses `/healthz` — this endpoint is wired up in Phase 2.
-  Until then, `service_started` (not `service_healthy`) is used as the depends_on condition.
-- mTLS between coordinator and nodes is fully active from Phase 1.
-  The CA is generated in-memory on coordinator startup and node certs are issued on registration.
+- The healthcheck on the coordinator uses `/healthz`. Node depends_on uses `service_healthy`.
+- mTLS between coordinator and nodes is fully active. The CA is generated in-memory on
+  coordinator startup and node certs are issued on registration.
+- JWT authentication is required on all API endpoints except `/healthz` and `/readyz`.
+  The root token is printed to stdout on first start — save it before the container restarts.
