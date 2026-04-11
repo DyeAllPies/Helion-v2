@@ -30,11 +30,15 @@ authentication, rate limiting, audit logging, and operational procedures.
 | Rogue node connecting to coordinator | mTLS — coordinator verifies node certificate on every connection |
 | Intercepted coordinator↔node traffic (today) | TLS 1.3 with X25519 key exchange |
 | Intercepted traffic decrypted by future quantum computer | Hybrid ML-KEM (Kyber-768) key exchange |
-| Tampered node certificate | ML-DSA (Dilithium-3) signature verified on registration |
+| Tampered node certificate | ML-DSA (Dilithium-3) out-of-band signature verified on every registration |
+| New cert silently replacing an existing node's cert | SHA-256 certificate fingerprint pinned on first registration; mismatch rejected |
+| Revoked node with active heartbeat stream | Active gRPC stream closed immediately on revocation via done channel |
 | Stolen API token used after expiry | JWT 15-minute expiry enforced |
-| Stolen API token used before expiry | JTI-based revocation; effective within 1 s |
-| API abuse / DoS from a single node | Per-node token-bucket rate limiter |
-| Undetected compromise post-incident | Append-only audit log covers all security events |
+| Stolen API token used before expiry | JTI-based revocation via `DELETE /admin/tokens/{jti}`; effective within 1 s |
+| Leaked root token from a prior coordinator run | Root token rotated (old JTI revoked) on every restart |
+| Privilege escalation via token sharing | Scoped tokens issued per-user via `POST /admin/tokens`; admin role required |
+| API abuse / DoS from a single node | Per-node token-bucket rate limiter with `GarbageCollect` to bound memory |
+| Undetected compromise post-incident | Append-only audit log covers all security events including token issuance/revocation |
 | Vulnerable Go dependency | Snyk scans `go.mod` on every push; blocks on high severity |
 | Vulnerable container OS packages | Snyk container scan of coordinator image on every push |
 
@@ -123,23 +127,47 @@ xxd -p node.crt | sed 's/00/FF/1' | xxd -r -p > node_tampered.crt
 | Revocation mechanism | Delete JTI record from BadgerDB |
 | Revocation latency | < 1 second |
 
-### Root token bootstrap
+### Root token rotation
 
-On first start the coordinator generates a root token and prints it once:
+The coordinator **rotates** the root token on **every restart**. On startup it revokes the
+previous token's JTI and issues a fresh one, then prints it:
 
 ```
 ╔════════════════════════════════════════════════════════════════╗
-║         HELION COORDINATOR - FIRST START                       ║
+║         HELION COORDINATOR - ROOT TOKEN ROTATED                ║
 ╠════════════════════════════════════════════════════════════════╣
-║ Root API token generated. Save this token securely!            ║
-║ It will NOT be shown again.                                    ║
+║ A new root API token has been generated. Save it securely!     ║
+║ Previous tokens are now REVOKED.                               ║
 ╠════════════════════════════════════════════════════════════════╣
 ║ Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...                 ║
 ╚════════════════════════════════════════════════════════════════╝
 ```
 
-The token value is stored in BadgerDB keyed by a well-known key. If BadgerDB is wiped, a
-new root token is generated on the next start.
+This eliminates the "10-year never-expiring token" problem: a token leaked from a prior run
+is invalidated automatically the moment the coordinator restarts. The current root token is
+stored in BadgerDB; if BadgerDB is wiped a new token is generated on the next start.
+
+### Issuing scoped tokens
+
+Use the root token to issue short-lived, role-scoped tokens for operators or services:
+
+```bash
+# Issue an admin token valid for 8 hours (default)
+curl -s -X POST https://coordinator:8443/admin/tokens \
+  -H "Authorization: Bearer $ROOT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"alice","role":"admin","ttl_hours":8}' \
+  | jq -r .token
+
+# Issue a node-role token valid for 1 hour
+curl -s -X POST https://coordinator:8443/admin/tokens \
+  -H "Authorization: Bearer $ROOT_TOKEN" \
+  -d '{"subject":"ci-runner","role":"node","ttl_hours":1}' \
+  | jq -r .token
+```
+
+Roles: `admin` (full access) · `node` (job submission and result reporting only, RBAC wiring in progress).
+Maximum TTL: 720 hours (30 days).
 
 ### Token usage
 
@@ -160,7 +188,9 @@ for JTI presence on every call — if the record is absent the token is rejected
 # Extract JTI from token
 JTI=$(echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .jti)
 
-# Revoke via direct BadgerDB deletion (or POST /admin/tokens/revoke if implemented)
+# Revoke immediately via the API (admin role required)
+curl -s -X DELETE https://coordinator:8443/admin/tokens/$JTI \
+  -H "Authorization: Bearer $ROOT_TOKEN"
 ```
 
 **Timing test:**

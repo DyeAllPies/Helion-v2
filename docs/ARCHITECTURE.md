@@ -118,7 +118,16 @@ All transitions are persisted atomically and written to the audit log.
 ML-DSA (Dilithium-3) in hybrid mode with ECDSA. Acts as the cluster's internal CA.
 
 **REST/WebSocket API.** Serves the Angular dashboard and `helion-run` CLI. All endpoints
-except `/healthz` and `/readyz` require a valid JWT.
+except `/healthz`, `/readyz`, and `/metrics` require a valid JWT. Admin-only endpoints
+(`/admin/...`) additionally require `role: admin` in the token claims.
+
+**Certificate pinning.** On first registration the coordinator records the SHA-256
+fingerprint of the node's DER certificate. Subsequent registrations with a different
+certificate are rejected unless the node goes through a full revoke → re-register cycle.
+
+**Stream revocation.** When a node is revoked, its active heartbeat gRPC stream is
+closed immediately via a done channel, eliminating the window between revocation and
+the next heartbeat timeout.
 
 **Crash recovery.** On startup, reads BadgerDB, identifies non-terminal jobs, waits 15 s
 (configurable grace period) for nodes to re-register, then dispatches recovered jobs.
@@ -234,6 +243,28 @@ service NodeService {
   rpc GetMetrics(Empty) returns (NodeMetrics);
 }
 ```
+
+`DispatchRequest` carries `env` (key-value map), `timeout_seconds`, and a `ResourceLimits`
+block (`memory_bytes`, `cpu_quota_us`, `cpu_period_us`) forwarded by the node agent to the
+runtime. Resource limits are enforced only when `HELION_RUNTIME=rust`.
+
+### REST API — coordinator HTTP endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/healthz` | none | Liveness probe |
+| `GET` | `/readyz` | none | Readiness probe (BadgerDB ping + node count) |
+| `POST` | `/jobs` | Bearer | Submit job; body: `{id, command, args, env, timeout_seconds, limits}` |
+| `GET` | `/jobs` | Bearer | List jobs (paginated, filterable by status) |
+| `GET` | `/jobs/{id}` | Bearer | Get single job |
+| `GET` | `/nodes` | Bearer | List registered nodes |
+| `GET` | `/audit` | Bearer | Paginated audit log |
+| `GET` | `/metrics` | none (Prometheus) | Prometheus text metrics |
+| `POST` | `/admin/nodes/{id}/revoke` | Bearer (admin) | Revoke node registration |
+| `POST` | `/admin/tokens` | Bearer (admin) | Issue scoped JWT `{subject, role, ttl_hours}` |
+| `DELETE` | `/admin/tokens/{jti}` | Bearer (admin) | Immediately revoke a token by JTI |
+| `GET` | `/ws/jobs/{id}/logs` | Bearer (query) | WebSocket live log stream |
+| `GET` | `/ws/metrics` | Bearer (query) | WebSocket live cluster metrics |
 
 ---
 

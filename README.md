@@ -57,11 +57,11 @@ The coordinator runs as a Kubernetes `Deployment`. Node agents run as a `DaemonS
 
 All coordinator↔node communication is mutually authenticated via mTLS from the first commit. The coordinator acts as its own internal CA and issues per-node X.509 certificates on first registration.
 
-Key exchange uses a hybrid classical + post-quantum mode (X25519 + ML-KEM/Kyber-768) so sessions are resistant to harvest-now-decrypt-later attacks. Node certificates are signed with ML-DSA (Dilithium) in hybrid mode alongside ECDSA.
+Key exchange uses a hybrid classical + post-quantum mode (X25519 + ML-KEM/Kyber-768) so sessions are resistant to harvest-now-decrypt-later attacks. Node certificates are signed with ML-DSA (Dilithium) in hybrid mode alongside ECDSA. The coordinator verifies the ML-DSA out-of-band signature on every registration, and pins the cert fingerprint (SHA-256) so a newly-issued cert for the same node ID is rejected unless the node goes through the full revoke → re-register cycle.
 
-The Angular dashboard authenticates with short-lived JWTs (15-minute expiry). Tokens are stored in memory only — never in `localStorage` or `sessionStorage`. Every job state transition, node registration, and auth failure is written to an append-only audit log in BadgerDB.
+The REST/WebSocket API uses short-lived JWTs (15-minute expiry). The root token is rotated on every coordinator restart — the previous token is immediately revoked so a leaked token from a prior run is dead on restart. Scoped tokens for individual users or services can be issued and revoked via `POST /admin/tokens` and `DELETE /admin/tokens/{jti}` (admin role required). Tokens are stored in memory only — never in `localStorage` or `sessionStorage`. Every job state transition, node registration, auth failure, and token event is written to an append-only audit log in BadgerDB.
 
-Snyk scans Go dependencies and the coordinator container image on every push, blocking on high-severity CVEs.
+Snyk scans Go dependencies and the coordinator container image on every push, blocking on high-severity CVEs. Internal coverage is gated at ≥ 90% on `./internal/...`.
 
 ---
 
@@ -171,7 +171,9 @@ CI enforces a ≥ 90% coverage threshold on `./internal/...`.
 | `HELION_ALLOW_ISOLATION` | Node agent | `false` | Enable Linux namespace isolation (requires root or `CAP_SYS_ADMIN`) |
 | `HELION_SCHEDULER` | Coordinator | `roundrobin` | Scheduling policy: `roundrobin` or `least` |
 | `HELION_RATE_LIMIT_RPS` | Coordinator | `10` | Per-node job submission rate limit (jobs/second) |
-| `HELION_RUNTIME_SOCKET` | Node agent | _(unset)_ | Unix socket path for Rust runtime; falls back to Go runtime if unset |
+| `HELION_RUNTIME` | Node agent | `go` | Runtime backend: `go` (subprocess) or `rust` (cgroup v2 + seccomp) |
+| `HELION_RUNTIME_SOCKET` | Node agent | _(unset)_ | Unix socket path for Rust runtime |
+| `HELION_TOKEN` | CLI (`helion-run`) | _(unset)_ | Bearer token attached to all API requests |
 | `PORT` | Node agent | `8080` | Node agent listen port |
 
 ---
@@ -214,6 +216,7 @@ The coordinator runs as a single-replica `Deployment`. Node agents run as a `Dae
 - Single coordinator replica in v2. HA requires swapping BadgerDB for etcd — the interface is already designed for it.
 - Node agents require Linux for namespace isolation. Cross-compiled binaries run on other OS targets without isolation, suitable for local development.
 - Namespace isolation requires root or `CAP_SYS_ADMIN`. In Kubernetes this is set in the DaemonSet `SecurityContext`.
+- Resource limits (`memory_bytes`, `cpu_quota_us`) are enforced only by the Rust runtime (`HELION_RUNTIME=rust`). The Go runtime ignores them.
 - No multi-tenancy, no GPU scheduling, no MapReduce demo in v2 scope.
 
 ---
