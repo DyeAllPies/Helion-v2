@@ -11,6 +11,7 @@
 // ───────────
 //   HELION_COORDINATOR   HTTP address of the coordinator API (required).
 //                        Example: http://127.0.0.1:8080
+//   HELION_TOKEN         JWT bearer token (required when coordinator has auth enabled).
 //
 // Exit codes
 // ──────────
@@ -82,7 +83,15 @@ func run(args []string) error {
 	}
 
 	url := coordAddr + "/jobs"
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body)) //nolint:noctx
+	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if token := os.Getenv("HELION_TOKEN"); token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("POST %s: %w", url, err)
 	}
