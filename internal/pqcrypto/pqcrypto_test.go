@@ -561,3 +561,92 @@ func TestEnhancedNodeTLSConfig_InvalidPEM_ReturnsError(t *testing.T) {
 		t.Error("expected error for invalid cert/key PEM, got nil")
 	}
 }
+
+// ── VerifyNodeCertMLDSA ───────────────────────────────────────────────────────
+
+func TestVerifyNodeCertMLDSA_NoMLDSA_ReturnsNil(t *testing.T) {
+	// CA without ML-DSA enabled: VerifyNodeCertMLDSA must return nil (no-op).
+	ca, err := pqcrypto.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+
+	certPEM, _, err := ca.IssueNodeCert("node-noml")
+	if err != nil {
+		t.Fatalf("IssueNodeCert: %v", err)
+	}
+
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		t.Fatal("failed to decode cert PEM")
+	}
+
+	if err := ca.VerifyNodeCertMLDSA(block.Bytes); err != nil {
+		t.Errorf("VerifyNodeCertMLDSA without ML-DSA: want nil, got %v", err)
+	}
+}
+
+func TestVerifyNodeCertMLDSA_WithMLDSA_ValidCert_ReturnsNil(t *testing.T) {
+	ca, err := pqcrypto.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	if err := ca.EnhanceWithMLDSA(); err != nil {
+		t.Fatalf("EnhanceWithMLDSA: %v", err)
+	}
+
+	certPEM, _, err := ca.IssueNodeCertWithMLDSA("node-ml")
+	if err != nil {
+		t.Fatalf("IssueNodeCertWithMLDSA: %v", err)
+	}
+
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		t.Fatal("failed to decode cert PEM")
+	}
+
+	if err := ca.VerifyNodeCertMLDSA(block.Bytes); err != nil {
+		t.Errorf("VerifyNodeCertMLDSA valid cert: want nil, got %v", err)
+	}
+}
+
+func TestVerifyNodeCertMLDSA_UnknownSerial_ReturnsError(t *testing.T) {
+	ca, err := pqcrypto.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	if err := ca.EnhanceWithMLDSA(); err != nil {
+		t.Fatalf("EnhanceWithMLDSA: %v", err)
+	}
+
+	// Issue a regular cert (no ML-DSA sig stored for it).
+	certPEM, _, err := ca.IssueNodeCert("node-nosig")
+	if err != nil {
+		t.Fatalf("IssueNodeCert: %v", err)
+	}
+
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		t.Fatal("failed to decode cert PEM")
+	}
+
+	err = ca.VerifyNodeCertMLDSA(block.Bytes)
+	if err == nil {
+		t.Error("VerifyNodeCertMLDSA unknown serial: want error, got nil")
+	}
+}
+
+func TestVerifyNodeCertMLDSA_InvalidDER_ReturnsError(t *testing.T) {
+	ca, err := pqcrypto.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	if err := ca.EnhanceWithMLDSA(); err != nil {
+		t.Fatalf("EnhanceWithMLDSA: %v", err)
+	}
+
+	err = ca.VerifyNodeCertMLDSA([]byte("not-a-der-cert"))
+	if err == nil {
+		t.Error("VerifyNodeCertMLDSA invalid DER: want error, got nil")
+	}
+}

@@ -953,3 +953,79 @@ func TestRateLimitInterceptor_ReportResult_ExtractsNodeID(t *testing.T) {
 		NodeId: "rl-node",
 	})
 }
+
+// ── CancelStream ──────────────────────────────────────────────────────────────
+
+// TestCancelStream_TerminatesActiveHeartbeat verifies that calling CancelStream
+// on a node with an active heartbeat stream causes the stream to terminate with
+// an Unauthenticated error.
+func TestCancelStream_TerminatesActiveHeartbeat(t *testing.T) {
+	coordBundle, err := auth.NewCoordinatorBundle()
+	if err != nil {
+		t.Fatalf("NewCoordinatorBundle: %v", err)
+	}
+	registry := cluster.NewRegistry(cluster.NopPersister{}, time.Second, nil)
+	srv, err := grpcserver.New(coordBundle, grpcserver.WithRegistry(registry))
+	if err != nil {
+		t.Fatalf("grpcserver.New: %v", err)
+	}
+
+	lis, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := lis.Addr().String()
+	lis.Close()
+
+	go func() { _ = srv.Serve(addr) }()
+	t.Cleanup(srv.Stop)
+	time.Sleep(40 * time.Millisecond)
+
+	nb, _ := auth.NewNodeBundle(coordBundle.CA, "cancel-node")
+	client, err := grpcclient.New(addr, "helion-coordinator", nb)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	regCtx, regCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer regCancel()
+	_, _ = client.Register(regCtx, "cancel-node", "127.0.0.1:8080")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- client.SendHeartbeats(ctx, "cancel-node", 20*time.Millisecond,
+			func() int32 { return 0 }, nil)
+	}()
+
+	// Let the heartbeat stream establish.
+	time.Sleep(80 * time.Millisecond)
+
+	// Cancel the stream server-side.
+	srv.CancelStream("cancel-node")
+
+	select {
+	case streamErr := <-done:
+		// The stream should end with a non-nil error (Unauthenticated or EOF).
+		if streamErr == nil {
+			t.Error("expected SendHeartbeats to return an error after CancelStream, got nil")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("SendHeartbeats did not return after CancelStream")
+	}
+}
+
+// TestCancelStream_NoopOnMissingNode verifies that CancelStream with an
+// unknown nodeID does not panic.
+func TestCancelStream_NoopOnMissingNode(t *testing.T) {
+	coordBundle, err := auth.NewCoordinatorBundle()
+	if err != nil {
+		t.Fatalf("NewCoordinatorBundle: %v", err)
+	}
+	srv, err := grpcserver.New(coordBundle)
+	if err != nil {
+		t.Fatalf("grpcserver.New: %v", err)
+	}
+	// Should not panic.
+	srv.CancelStream("ghost-node")
+}

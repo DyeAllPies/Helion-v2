@@ -26,6 +26,7 @@ package cluster_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -409,5 +410,145 @@ func TestConcurrentRegisterAndHeartbeat(t *testing.T) {
 
 	if r.Len() != 1 {
 		t.Errorf("Len after concurrent register+heartbeat = %d, want 1", r.Len())
+	}
+}
+
+// ── SetCertPinner / SetCertVerifier / SetStreamRevoker ────────────────────────
+
+type stubStreamRevoker struct {
+	cancelled []string
+}
+
+func (s *stubStreamRevoker) CancelStream(nodeID string) {
+	s.cancelled = append(s.cancelled, nodeID)
+}
+
+type stubCertVerifier struct {
+	err error
+}
+
+func (v *stubCertVerifier) VerifyNodeCertMLDSA(derBytes []byte) error {
+	return v.err
+}
+
+func TestSetStreamRevoker_CalledOnRevoke(t *testing.T) {
+	r := newRegistry(t)
+	revoker := &stubStreamRevoker{}
+	r.SetStreamRevoker(revoker)
+
+	registerNode(t, r, "stream-node", "10.0.0.1:8080")
+	if err := r.RevokeNode(context.Background(), "stream-node", "test revocation"); err != nil {
+		t.Fatalf("RevokeNode: %v", err)
+	}
+
+	if len(revoker.cancelled) == 0 || revoker.cancelled[0] != "stream-node" {
+		t.Errorf("CancelStream not called with stream-node; got %v", revoker.cancelled)
+	}
+}
+
+func TestSetCertPinner_StoresFingerprintOnFirstRegister(t *testing.T) {
+	r := newRegistry(t)
+	pinner := cluster.NewMemCertPinner()
+	r.SetCertPinner(pinner)
+
+	ctx := context.Background()
+	derBytes := []byte("fake-der-cert-for-pinning-test")
+
+	_, err := r.Register(ctx, &pb.RegisterRequest{
+		NodeId:      "pinned-node",
+		Address:     "10.0.0.1:8080",
+		Certificate: derBytes,
+	})
+	if err != nil {
+		t.Fatalf("Register with cert: %v", err)
+	}
+
+	// Pin should now be stored.
+	fp, err := pinner.GetPin(ctx, "pinned-node")
+	if err != nil {
+		t.Fatalf("GetPin after Register: %v", err)
+	}
+	expected := cluster.CertFingerprint(derBytes)
+	if fp != expected {
+		t.Errorf("stored pin %q != expected %q", fp, expected)
+	}
+}
+
+func TestSetCertPinner_RejectsMismatchedFingerprint(t *testing.T) {
+	r := newRegistry(t)
+	pinner := cluster.NewMemCertPinner()
+	r.SetCertPinner(pinner)
+
+	ctx := context.Background()
+
+	// First registration pins cert-A.
+	_, err := r.Register(ctx, &pb.RegisterRequest{
+		NodeId:      "cert-node",
+		Address:     "10.0.0.1:8080",
+		Certificate: []byte("cert-a-der"),
+	})
+	if err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+
+	// Second registration with a different cert must fail.
+	_, err = r.Register(ctx, &pb.RegisterRequest{
+		NodeId:      "cert-node",
+		Address:     "10.0.0.1:8080",
+		Certificate: []byte("cert-b-der"),
+	})
+	if err == nil {
+		t.Fatal("expected fingerprint mismatch error, got nil")
+	}
+}
+
+func TestSetCertPinner_SameFingerprintAllowed(t *testing.T) {
+	r := newRegistry(t)
+	pinner := cluster.NewMemCertPinner()
+	r.SetCertPinner(pinner)
+
+	ctx := context.Background()
+	cert := []byte("same-cert-der")
+
+	for i := 0; i < 2; i++ {
+		if _, err := r.Register(ctx, &pb.RegisterRequest{
+			NodeId:      "same-cert-node",
+			Address:     "10.0.0.1:8080",
+			Certificate: cert,
+		}); err != nil {
+			t.Fatalf("Register attempt %d: %v", i+1, err)
+		}
+	}
+}
+
+func TestSetCertVerifier_RejectsOnVerificationFailure(t *testing.T) {
+	r := newRegistry(t)
+	verifier := &stubCertVerifier{err: fmt.Errorf("ML-DSA sig invalid")}
+	r.SetCertVerifier(verifier)
+
+	ctx := context.Background()
+	_, err := r.Register(ctx, &pb.RegisterRequest{
+		NodeId:      "bad-sig-node",
+		Address:     "10.0.0.1:8080",
+		Certificate: []byte("some-der-bytes"),
+	})
+	if err == nil {
+		t.Fatal("expected ML-DSA verification error, got nil")
+	}
+}
+
+func TestSetCertVerifier_AcceptsOnVerificationSuccess(t *testing.T) {
+	r := newRegistry(t)
+	verifier := &stubCertVerifier{err: nil}
+	r.SetCertVerifier(verifier)
+
+	ctx := context.Background()
+	_, err := r.Register(ctx, &pb.RegisterRequest{
+		NodeId:      "good-sig-node",
+		Address:     "10.0.0.1:8080",
+		Certificate: []byte("some-der-bytes"),
+	})
+	if err != nil {
+		t.Fatalf("Register with valid ML-DSA sig: %v", err)
 	}
 }

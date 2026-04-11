@@ -321,3 +321,40 @@ func TestAllowN_WithDeadlineContext_UsesDeadline(t *testing.T) {
 		t.Errorf("AllowN with deadline context: %v", err)
 	}
 }
+func TestGarbageCollect_EvictsStaleEntries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping sleep-based test in -short mode")
+	}
+
+	nl := ratelimit.NewNodeLimiter()
+
+	// Allow some traffic so the entry is created with a recent timestamp.
+	ctx := context.Background()
+	if err := nl.AllowN(ctx, "stale-node", 1); err != nil {
+		t.Fatalf("AllowN: %v", err)
+	}
+
+	// With a very small threshold, the entry should be stale after a tiny sleep.
+	time.Sleep(5 * time.Millisecond)
+
+	// Threshold of 1 ns means "anything older than now" — our entry qualifies.
+	n := nl.GarbageCollect(time.Nanosecond)
+	if n != 1 {
+		t.Errorf("GarbageCollect evicted %d entries, want 1", n)
+	}
+}
+
+func TestGarbageCollect_DoesNotEvictRecentEntry(t *testing.T) {
+	nl := ratelimit.NewNodeLimiter()
+	ctx := context.Background()
+
+	if err := nl.AllowN(ctx, "fresh-node", 1); err != nil {
+		t.Fatalf("AllowN: %v", err)
+	}
+
+	// Threshold of 1 hour — the entry is brand-new, should not be evicted.
+	n := nl.GarbageCollect(time.Hour)
+	if n != 0 {
+		t.Errorf("GarbageCollect evicted %d entries, want 0", n)
+	}
+}

@@ -978,3 +978,61 @@ func TestJobStoreAdapter_List_PageBeyondEnd_ReturnsEmpty(t *testing.T) {
 		t.Errorf("want 0 jobs for out-of-range page, got %d", len(jobs))
 	}
 }
+
+// ── handleListJobs — query parameter validation ───────────────────────────────
+
+func TestListJobs_PageZero_Returns400(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	rr := do(srv, "GET", "/jobs?page=0", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("page=0: want 400, got %d", rr.Code)
+	}
+}
+
+func TestListJobs_NegativePage_Returns400(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	rr := do(srv, "GET", "/jobs?page=-1", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("page=-1: want 400, got %d", rr.Code)
+	}
+}
+
+func TestListJobs_SizeZero_Returns400(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	rr := do(srv, "GET", "/jobs?size=0", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("size=0: want 400, got %d", rr.Code)
+	}
+}
+
+func TestListJobs_SizeOverMax_Returns400(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	rr := do(srv, "GET", "/jobs?size=101", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("size=101: want 400, got %d", rr.Code)
+	}
+}
+
+func TestListJobs_InvalidStatus_Returns400(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	rr := do(srv, "GET", "/jobs?status=BOGUS", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status=BOGUS: want 400, got %d", rr.Code)
+	}
+}
+
+func TestListJobs_NonIntegerPage_Returns400(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	rr := do(srv, "GET", "/jobs?page=abc", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("page=abc: want 400, got %d", rr.Code)
+	}
+}
+
+func TestListJobs_NonIntegerSize_Returns400(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	rr := do(srv, "GET", "/jobs?size=big", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("size=big: want 400, got %d", rr.Code)
+	}
+}
