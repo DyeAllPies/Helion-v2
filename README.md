@@ -2,11 +2,9 @@
 
 [![CI](https://github.com/DyeAllPies/Helion-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/DyeAllPies/Helion-v2/actions/workflows/ci.yml)
 
-A from-scratch distributed job scheduler written in Go — built as a vehicle for studying systems programming, distributed systems theory, and production security practices.
+A from-scratch distributed job scheduler written in Go — built as a vehicle for studying systems programming, distributed systems theory, container orchestration, and production security practices.
 
-v1 (4th semester) demonstrated the core lifecycle: job submission, node registration, heartbeat health checking, crash recovery, and Docker Compose packaging. v2 is a clean-room redesign with a production-grade stack: gRPC, BadgerDB, mTLS, post-quantum cryptography, an Angular dashboard, and Kubernetes deployment.
-
-> Helion mirrors the concerns of production HPC schedulers like SLURM — job queuing, node health, resource accounting, and crash recovery — making it academically coherent alongside LAMMPS-based simulation work, not merely a portfolio piece.
+v1 (4th semester) demonstrated the core lifecycle: job submission, node registration, heartbeat health checking, crash recovery, and Docker Compose packaging. v2 is a clean-room redesign with a production-grade stack: gRPC, BadgerDB, mTLS, post-quantum cryptography, an Angular dashboard, and Kubernetes-ready deployment (Helm chart + manifests included).
 
 ---
 
