@@ -7,7 +7,7 @@
 //   ✓ Register: new node added and immediately healthy
 //   ✓ Register: re-registration updates address without duplicating entry
 //   ✓ HandleHeartbeat: updates LastSeen and RunningJobs atomically
-//   ✓ HandleHeartbeat: implicit registration if node not yet registered
+//   ✓ HandleHeartbeat: heartbeat from unregistered node is rejected
 //   ✓ HealthyNodes: returns only nodes with recent heartbeats
 //   ✓ HealthyNodes: stale node excluded after staleAfter elapses
 //   ✓ PruneStaleNodes: stale node identified; audit entry written
@@ -155,20 +155,18 @@ func TestHeartbeat_UpdatesRunningJobs(t *testing.T) {
 	}
 }
 
-func TestHeartbeat_ImplicitRegistration(t *testing.T) {
+func TestHeartbeat_UnregisteredNodeRejected(t *testing.T) {
 	r := newRegistry(t)
-	// Heartbeat before Register — should create the entry.
-	sendHeartbeat(t, r, "orphan-node", 0)
-
-	if r.Len() != 1 {
-		t.Fatalf("Len = %d, want 1 after implicit registration", r.Len())
+	// Heartbeat before Register must be rejected; no entry should be created.
+	err := r.HandleHeartbeat(context.Background(), &pb.HeartbeatMessage{
+		NodeId:      "orphan-node",
+		RunningJobs: 0,
+	})
+	if err != cluster.ErrNodeNotRegistered {
+		t.Fatalf("HandleHeartbeat unregistered node: got %v, want ErrNodeNotRegistered", err)
 	}
-	n, ok := r.Lookup("orphan-node")
-	if !ok {
-		t.Fatal("Lookup: implicitly registered node not found")
-	}
-	if !n.Healthy {
-		t.Error("implicitly registered node should be healthy")
+	if r.Len() != 0 {
+		t.Errorf("Len = %d, want 0: unregistered heartbeat must not create an entry", r.Len())
 	}
 }
 

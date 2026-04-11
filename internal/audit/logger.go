@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -65,8 +66,9 @@ type Store interface {
 
 // Logger writes audit events to persistent storage.
 type Logger struct {
-	store Store
-	ttl   time.Duration // TTL for audit events (0 = no expiry)
+	store   Store
+	ttl     time.Duration // TTL for audit events (0 = no expiry)
+	seq     atomic.Int64  // monotonic counter; tiebreaker for same-nanosecond keys
 }
 
 // NewLogger creates an audit logger with the given store and TTL.
@@ -94,9 +96,11 @@ func (l *Logger) Log(ctx context.Context, eventType, actor string, details map[s
 		return fmt.Errorf("marshal audit event: %w", err)
 	}
 
-	// Key format: "audit:<timestamp_nanos>:<event_id>"
-	// This ensures time-ordered retrieval and unique keys.
-	key := fmt.Sprintf("audit:%019d:%s", event.Timestamp.UnixNano(), event.ID)
+	// Key format: "audit:<timestamp_nanos>:<seq>:<event_id>"
+	// The monotonic sequence number breaks ties between events with the same
+	// nanosecond timestamp, ensuring keys are unique even under high write rates.
+	seq := l.seq.Add(1)
+	key := fmt.Sprintf("audit:%019d:%016d:%s", event.Timestamp.UnixNano(), seq, event.ID)
 
 	if l.ttl > 0 {
 		return l.store.PutWithTTL(ctx, key, data, l.ttl)

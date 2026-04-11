@@ -43,8 +43,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -223,7 +225,21 @@ func NewServer(
 		promHandler:  promHandler,
 		mux:          http.NewServeMux(),
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
+			// Reject cross-origin WebSocket connections. Browsers always send an
+			// Origin header on WebSocket upgrades; we compare its host component
+			// against the request Host so that only same-origin pages can connect.
+			// curl / native clients that omit Origin are allowed through.
+			CheckOrigin: func(r *http.Request) bool {
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					return true
+				}
+				u, err := url.Parse(origin)
+				if err != nil {
+					return false
+				}
+				return u.Host == r.Host
+			},
 		},
 	}
 	
@@ -309,7 +325,9 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			if s.audit != nil {
-				_ = s.audit.LogAuthFailure(r.Context(), "missing authorization header", r.RemoteAddr)
+				if err := s.audit.LogAuthFailure(r.Context(), "missing authorization header", r.RemoteAddr); err != nil {
+					slog.Warn("audit log failed", slog.Any("err", err))
+				}
 			}
 			writeError(w, http.StatusUnauthorized, "missing or invalid authorization header")
 			return
@@ -318,12 +336,15 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 
 		// Validate token
-		claims, err := s.tokenManager.ValidateToken(token)
+		claims, err := s.tokenManager.ValidateToken(r.Context(), token)
 		if err != nil {
 			if s.audit != nil {
-				_ = s.audit.LogAuthFailure(r.Context(), err.Error(), r.RemoteAddr)
+				if aerr := s.audit.LogAuthFailure(r.Context(), err.Error(), r.RemoteAddr); aerr != nil {
+					slog.Warn("audit log failed", slog.Any("err", aerr))
+				}
 			}
-			writeError(w, http.StatusUnauthorized, "invalid token: "+err.Error())
+			slog.Error("token validation failed", slog.String("remote", r.RemoteAddr), slog.Any("err", err))
+			writeError(w, http.StatusUnauthorized, "authentication failed")
 			return
 		}
 
@@ -354,18 +375,23 @@ func (s *Server) wsAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		if token == "" {
 			if s.audit != nil {
-				_ = s.audit.LogAuthFailure(r.Context(), "missing token", r.RemoteAddr)
+				if err := s.audit.LogAuthFailure(r.Context(), "missing token", r.RemoteAddr); err != nil {
+					slog.Warn("audit log failed", slog.Any("err", err))
+				}
 			}
 			http.Error(w, "unauthorized: missing token", http.StatusUnauthorized)
 			return
 		}
 
-		claims, err := s.tokenManager.ValidateToken(token)
+		claims, err := s.tokenManager.ValidateToken(r.Context(), token)
 		if err != nil {
 			if s.audit != nil {
-				_ = s.audit.LogAuthFailure(r.Context(), err.Error(), r.RemoteAddr)
+				if aerr := s.audit.LogAuthFailure(r.Context(), err.Error(), r.RemoteAddr); aerr != nil {
+					slog.Warn("audit log failed", slog.Any("err", aerr))
+				}
 			}
-			http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
+			slog.Error("ws token validation failed", slog.String("remote", r.RemoteAddr), slog.Any("err", err))
+			http.Error(w, "authentication failed", http.StatusUnauthorized)
 			return
 		}
 
@@ -391,8 +417,9 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.readiness.Ping(); err != nil {
+		slog.Error("readiness ping failed", slog.Any("err", err))
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "db not ready: " + err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "db not ready"})
 		return
 	}
 
@@ -428,8 +455,9 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.jobs.Submit(r.Context(), job); err != nil {
+		slog.Error("job submit failed", slog.String("job_id", job.ID), slog.Any("err", err))
 		// A duplicate ID surfaces as a persist error; treat it as 409.
-		writeError(w, http.StatusInternalServerError, "submit failed: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "job submission failed")
 		return
 	}
 
@@ -441,9 +469,9 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 				actor = claims.Subject
 			}
 		}
-		// Audit logging is important but errors are intentionally ignored
-		// to avoid breaking job submission
-		_ = s.audit.LogJobSubmit(r.Context(), actor, job.ID, job.Command)
+		if err := s.audit.LogJobSubmit(r.Context(), actor, job.ID, job.Command); err != nil {
+			slog.Warn("audit log failed", slog.String("job_id", job.ID), slog.Any("err", err))
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -473,24 +501,48 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(jobToResponse(job))
 }
 
+// validJobStatuses is the set of status strings accepted by the ?status= query
+// parameter. Values are uppercase to match the underlying store convention.
+var validJobStatuses = map[string]bool{
+	"UNKNOWN": true, "PENDING": true, "DISPATCHING": true, "RUNNING": true,
+	"COMPLETED": true, "FAILED": true, "TIMEOUT": true, "LOST": true,
+}
+
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
+	pageStr := r.URL.Query().Get("page")
+	page := 1
+	if pageStr != "" {
+		p, err := strconv.Atoi(pageStr)
+		if err != nil || p < 1 {
+			writeError(w, http.StatusBadRequest, "page must be a positive integer")
+			return
+		}
+		page = p
 	}
-	
-	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
-	if size < 1 || size > 100 {
-		size = 20 // Default page size
+
+	sizeStr := r.URL.Query().Get("size")
+	size := 20
+	if sizeStr != "" {
+		sz, err := strconv.Atoi(sizeStr)
+		if err != nil || sz < 1 || sz > 100 {
+			writeError(w, http.StatusBadRequest, "size must be an integer between 1 and 100")
+			return
+		}
+		size = sz
 	}
-	
-	statusFilter := r.URL.Query().Get("status")
-	
+
+	statusFilter := strings.ToUpper(r.URL.Query().Get("status"))
+	if statusFilter != "" && !validJobStatuses[statusFilter] {
+		writeError(w, http.StatusBadRequest, "invalid status filter")
+		return
+	}
+
 	// Get jobs from store
 	jobs, total, err := s.jobs.List(r.Context(), statusFilter, page, size)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list jobs failed: "+err.Error())
+		slog.Error("list jobs failed", slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	
@@ -519,7 +571,8 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 
 	nodes, err := s.nodes.ListNodes(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list nodes failed: "+err.Error())
+		slog.Error("list nodes failed", slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	
@@ -540,7 +593,8 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 
 	metrics, err := s.metrics.GetClusterMetrics(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get metrics failed: "+err.Error())
+		slog.Error("get cluster metrics failed", slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	
@@ -555,27 +609,40 @@ func (s *Server) handleGetAudit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse query parameters
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
+	pageStr := r.URL.Query().Get("page")
+	page := 1
+	if pageStr != "" {
+		p, err := strconv.Atoi(pageStr)
+		if err != nil || p < 1 {
+			writeError(w, http.StatusBadRequest, "page must be a positive integer")
+			return
+		}
+		page = p
 	}
-	
-	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
-	if size < 1 || size > 100 {
-		size = 50 // Default page size
+
+	sizeStr := r.URL.Query().Get("size")
+	size := 50
+	if sizeStr != "" {
+		sz, err := strconv.Atoi(sizeStr)
+		if err != nil || sz < 1 || sz > 100 {
+			writeError(w, http.StatusBadRequest, "size must be an integer between 1 and 100")
+			return
+		}
+		size = sz
 	}
-	
+
 	typeFilter := r.URL.Query().Get("type")
-	
+
 	// Query audit log
 	query := audit.Query{
 		Type:  typeFilter,
 		Limit: size,
 	}
-	
+
 	events, err := s.audit.QueryEvents(r.Context(), query)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query audit log failed: "+err.Error())
+		slog.Error("query audit log failed", slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	
@@ -635,13 +702,16 @@ func (s *Server) handleRevokeNode(w http.ResponseWriter, r *http.Request) {
 	
 	// Revoke the node
 	if err := s.nodes.RevokeNode(r.Context(), nodeID, req.Reason); err != nil {
-		writeError(w, http.StatusInternalServerError, "revoke node failed: "+err.Error())
+		slog.Error("revoke node failed", slog.String("node_id", nodeID), slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	
 	// Log revocation (if audit is enabled)
 	if s.audit != nil {
-		_ = s.audit.LogNodeRevoke(r.Context(), actor, nodeID, req.Reason)
+		if err := s.audit.LogNodeRevoke(r.Context(), actor, nodeID, req.Reason); err != nil {
+			slog.Warn("audit log failed", slog.String("node_id", nodeID), slog.Any("err", err))
+		}
 	}
 	
 	resp := RevokeNodeResponse{

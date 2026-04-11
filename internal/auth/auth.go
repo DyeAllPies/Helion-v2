@@ -32,8 +32,16 @@ func NewCoordinatorBundle() (*Bundle, error) {
 }
 
 // NewNodeBundle issues a node certificate from an existing CA.
+// If the CA has ML-DSA enabled, IssueNodeCertWithMLDSA is used so that the
+// coordinator can verify the out-of-band ML-DSA signature at Register time.
 func NewNodeBundle(ca *pqcrypto.CA, nodeID string) (*Bundle, error) {
-	certPEM, keyPEM, err := ca.IssueNodeCert(nodeID)
+	var certPEM, keyPEM []byte
+	var err error
+	if ca.GetMLDSAPublicKey() != nil {
+		certPEM, keyPEM, err = ca.IssueNodeCertWithMLDSA(nodeID)
+	} else {
+		certPEM, keyPEM, err = ca.IssueNodeCert(nodeID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("issue node cert for %s: %w", nodeID, err)
 	}

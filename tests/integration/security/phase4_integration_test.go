@@ -55,18 +55,19 @@ func TestPhase4CAEnhancement(t *testing.T) {
 	t.Log("✓ CA successfully enhanced with PQC")
 }
 
-// TestPhase4RootTokenWorkflow verifies root token generation and usage.
+// TestPhase4RootTokenWorkflow verifies root token rotation and usage.
 func TestPhase4RootTokenWorkflow(t *testing.T) {
+	ctx := context.Background()
 	store := newMockTokenStore()
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("create token manager: %v", err)
 	}
 
-	// Generate root token
-	rootToken, err := tm.GenerateRootToken()
+	// Rotate root token (first call — no prior token to revoke)
+	rootToken, err := tm.RotateRootToken(ctx)
 	if err != nil {
-		t.Fatalf("generate root token: %v", err)
+		t.Fatalf("rotate root token: %v", err)
 	}
 
 	if rootToken == "" {
@@ -74,7 +75,7 @@ func TestPhase4RootTokenWorkflow(t *testing.T) {
 	}
 
 	// Validate root token
-	claims, err := tm.ValidateToken(rootToken)
+	claims, err := tm.ValidateToken(ctx, rootToken)
 	if err != nil {
 		t.Fatalf("validate root token: %v", err)
 	}
@@ -87,17 +88,23 @@ func TestPhase4RootTokenWorkflow(t *testing.T) {
 		t.Errorf("expected role 'admin', got %s", claims.Role)
 	}
 
-	// Generate again - should return same token
-	rootToken2, err := tm.GenerateRootToken()
+	// Rotating again must produce a DIFFERENT token and revoke the old one.
+	rootToken2, err := tm.RotateRootToken(ctx)
 	if err != nil {
-		t.Fatalf("second root token generation: %v", err)
+		t.Fatalf("second root token rotation: %v", err)
 	}
 
-	if rootToken2 != rootToken {
-		t.Error("root token changed on second call")
+	if rootToken2 == rootToken {
+		t.Error("expected a new root token after rotation, got the same one")
 	}
 
-	t.Log("✓ Root token workflow complete")
+	// Old token must now be invalid.
+	_, err = tm.ValidateToken(ctx, rootToken)
+	if err == nil {
+		t.Error("old root token should be revoked after rotation")
+	}
+
+	t.Log("✓ Root token rotation workflow complete")
 }
 
 // TestPhase4RateLimitingIntegration verifies rate limiting works as expected.

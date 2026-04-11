@@ -29,6 +29,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
@@ -87,6 +88,12 @@ type Server struct {
 	audit             AuditLoggerIface
 	revocationChecker RevocationChecker // nil means no revocation enforcement
 	log               *slog.Logger
+
+	// Active heartbeat streams: nodeID → done channel.
+	// CancelStream closes the channel; the Heartbeat loop detects it and returns
+	// codes.Unauthenticated so the node's stream is terminated server-side.
+	streamsMu sync.Mutex
+	streams   map[string]chan struct{}
 }
 
 // Option is a functional option for New().
@@ -135,7 +142,8 @@ func New(bundle *auth.Bundle, opts ...Option) (*Server, error) {
 	}
 
 	s := &Server{
-		log: slog.Default(),
+		log:     slog.Default(),
+		streams: make(map[string]chan struct{}),
 	}
 	for _, o := range opts {
 		o(s)
@@ -205,7 +213,9 @@ func (s *Server) rateLimitInterceptor() grpc.UnaryServerInterceptor {
 		}
 		if err := s.rateLimiter.Allow(ctx, nodeID); err != nil {
 			if s.audit != nil {
-				_ = s.audit.LogRateLimitHit(ctx, nodeID, s.rateLimiter.GetRate())
+				if aerr := s.audit.LogRateLimitHit(ctx, nodeID, s.rateLimiter.GetRate()); aerr != nil {
+					slog.Warn("audit log failed", slog.String("node_id", nodeID), slog.Any("err", aerr))
+				}
 			}
 			return nil, err // already a gRPC ResourceExhausted status
 		}
@@ -223,6 +233,41 @@ func extractNodeID(req interface{}) string {
 		return r.NodeId
 	default:
 		return ""
+	}
+}
+
+// CancelStream forcibly closes the active heartbeat stream for nodeID by
+// closing its done channel.  The Heartbeat loop checks the channel on each
+// iteration and returns codes.Unauthenticated when it is closed.
+// Implements cluster.StreamRevoker so the Registry can wire it in at startup.
+func (s *Server) CancelStream(nodeID string) {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if ch, ok := s.streams[nodeID]; ok {
+		close(ch)
+		delete(s.streams, nodeID)
+	}
+}
+
+// registerStream stores a done channel for nodeID's heartbeat stream.
+// If a prior channel exists (e.g. reconnected node), it is closed first.
+func (s *Server) registerStream(nodeID string, ch chan struct{}) {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if old, ok := s.streams[nodeID]; ok {
+		close(old)
+	}
+	s.streams[nodeID] = ch
+}
+
+// unregisterStream removes nodeID's channel if it still matches ch.
+// Guards against a race where CancelStream already deleted and a new stream
+// re-registered under the same nodeID before this deferred cleanup runs.
+func (s *Server) unregisterStream(nodeID string, ch chan struct{}) {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if s.streams[nodeID] == ch {
+		delete(s.streams, nodeID)
 	}
 }
 
@@ -269,6 +314,11 @@ func (s *Server) Heartbeat(
 ) error {
 	ctx := stream.Context()
 
+	// doneCh is registered on the first message that carries a NodeId.
+	// CancelStream closes it; the loop below checks it each iteration.
+	var doneCh chan struct{}
+	var streamNodeID string
+
 	for {
 		msg, err := stream.Recv()
 		if err == io.EOF {
@@ -283,11 +333,31 @@ func (s *Server) Heartbeat(
 			return status.Errorf(codes.Internal, "heartbeat recv: %v", err)
 		}
 
+		// Register the stream's done channel on the first message with a NodeId.
+		if doneCh == nil && msg.NodeId != "" {
+			streamNodeID = msg.NodeId
+			doneCh = make(chan struct{})
+			s.registerStream(streamNodeID, doneCh)
+			defer s.unregisterStream(streamNodeID, doneCh)
+		}
+
+		// Check whether this stream has been revoked via CancelStream.
+		if doneCh != nil {
+			select {
+			case <-doneCh:
+				return status.Errorf(codes.Unauthenticated,
+					"node %s has been revoked — stream terminated", streamNodeID)
+			default:
+			}
+		}
+
 		// Rate-limit per heartbeat message; streaming RPCs bypass unary interceptors.
 		if s.rateLimiter != nil && msg.NodeId != "" {
 			if err := s.rateLimiter.Allow(ctx, msg.NodeId); err != nil {
 				if s.audit != nil {
-					_ = s.audit.LogRateLimitHit(ctx, msg.NodeId, s.rateLimiter.GetRate())
+					if aerr := s.audit.LogRateLimitHit(ctx, msg.NodeId, s.rateLimiter.GetRate()); aerr != nil {
+						slog.Warn("audit log failed", slog.String("node_id", msg.NodeId), slog.Any("err", aerr))
+					}
 				}
 				return err // ResourceExhausted — terminates the heartbeat stream
 			}
@@ -296,11 +366,15 @@ func (s *Server) Heartbeat(
 		// Delegate to registry if available.
 		if s.registry != nil {
 			if err := s.registry.HandleHeartbeat(ctx, msg); err != nil {
+				if err == cluster.ErrNodeNotRegistered {
+					// Terminate the stream: node must call Register first.
+					return status.Errorf(codes.NotFound, "node not registered: call Register before sending heartbeats")
+				}
 				s.log.Error("heartbeat handler error",
 					slog.String("node_id", msg.NodeId),
 					slog.Any("err", err),
 				)
-				// Log and continue — don't kill the stream for a handler error.
+				// For other errors, log and continue — don't kill the stream.
 			}
 		}
 

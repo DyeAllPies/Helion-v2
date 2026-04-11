@@ -10,6 +10,7 @@
 package security
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -29,14 +30,14 @@ func newMockTokenStore() *mockTokenStore {
 	}
 }
 
-func (m *mockTokenStore) Get(key string) ([]byte, error) {
+func (m *mockTokenStore) Get(_ context.Context, key string) ([]byte, error) {
 	// Check if expired
 	if expiry, ok := m.ttls[key]; ok && time.Now().After(expiry) {
 		delete(m.data, key)
 		delete(m.ttls, key)
 		return nil, &mockError{"key not found"}
 	}
-	
+
 	val, ok := m.data[key]
 	if !ok {
 		return nil, &mockError{"key not found"}
@@ -44,7 +45,7 @@ func (m *mockTokenStore) Get(key string) ([]byte, error) {
 	return val, nil
 }
 
-func (m *mockTokenStore) Put(key string, value []byte, ttl time.Duration) error {
+func (m *mockTokenStore) Put(_ context.Context, key string, value []byte, ttl time.Duration) error {
 	m.data[key] = value
 	if ttl > 0 {
 		m.ttls[key] = time.Now().Add(ttl)
@@ -52,7 +53,7 @@ func (m *mockTokenStore) Put(key string, value []byte, ttl time.Duration) error 
 	return nil
 }
 
-func (m *mockTokenStore) Delete(key string) error {
+func (m *mockTokenStore) Delete(_ context.Context, key string) error {
 	delete(m.data, key)
 	delete(m.ttls, key)
 	return nil
@@ -67,13 +68,14 @@ func (e *mockError) Error() string {
 }
 
 func TestJWTGeneration(t *testing.T) {
+	ctx := context.Background()
 	store := newMockTokenStore()
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager failed: %v", err)
 	}
 
-	token, err := tm.GenerateToken("test-user", "admin", 15*time.Minute)
+	token, err := tm.GenerateToken(ctx, "test-user", "admin", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("GenerateToken failed: %v", err)
 	}
@@ -95,19 +97,20 @@ func TestJWTGeneration(t *testing.T) {
 }
 
 func TestJWTValidation(t *testing.T) {
+	ctx := context.Background()
 	store := newMockTokenStore()
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager failed: %v", err)
 	}
 
 	// Test 1: Valid token accepted
-	token, err := tm.GenerateToken("test-user", "admin", 15*time.Minute)
+	token, err := tm.GenerateToken(ctx, "test-user", "admin", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("GenerateToken failed: %v", err)
 	}
 
-	claims, err := tm.ValidateToken(token)
+	claims, err := tm.ValidateToken(ctx, token)
 	if err != nil {
 		t.Errorf("ValidateToken failed for valid token: %v", err)
 	}
@@ -122,20 +125,21 @@ func TestJWTValidation(t *testing.T) {
 }
 
 func TestJWTExpiry(t *testing.T) {
+	ctx := context.Background()
 	store := newMockTokenStore()
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager failed: %v", err)
 	}
 
 	// Generate token with 1 second expiry
-	token, err := tm.GenerateToken("test-user", "admin", 1*time.Second)
+	token, err := tm.GenerateToken(ctx, "test-user", "admin", 1*time.Second)
 	if err != nil {
 		t.Fatalf("GenerateToken failed: %v", err)
 	}
 
 	// Token should be valid immediately
-	_, err = tm.ValidateToken(token)
+	_, err = tm.ValidateToken(ctx, token)
 	if err != nil {
 		t.Errorf("Token should be valid immediately: %v", err)
 	}
@@ -144,21 +148,22 @@ func TestJWTExpiry(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Token should now be expired
-	_, err = tm.ValidateToken(token)
+	_, err = tm.ValidateToken(ctx, token)
 	if err == nil {
 		t.Error("Expected token to be expired, but validation succeeded")
 	}
 }
 
 func TestJWTRevocation(t *testing.T) {
+	ctx := context.Background()
 	store := newMockTokenStore()
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager failed: %v", err)
 	}
 
 	// Generate token
-	token, err := tm.GenerateToken("test-user", "admin", 15*time.Minute)
+	token, err := tm.GenerateToken(ctx, "test-user", "admin", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("GenerateToken failed: %v", err)
 	}
@@ -170,13 +175,13 @@ func TestJWTRevocation(t *testing.T) {
 	}
 
 	// Token should be valid
-	_, err = tm.ValidateToken(token)
+	_, err = tm.ValidateToken(ctx, token)
 	if err != nil {
 		t.Errorf("Token should be valid before revocation: %v", err)
 	}
 
 	// Revoke token
-	if err := tm.RevokeToken(jti); err != nil {
+	if err := tm.RevokeToken(ctx, jti); err != nil {
 		t.Fatalf("RevokeToken failed: %v", err)
 	}
 
@@ -185,7 +190,7 @@ func TestJWTRevocation(t *testing.T) {
 
 	// Token should be rejected immediately (within 1 second per Phase 4 requirement)
 	time.Sleep(100 * time.Millisecond)
-	_, err = tm.ValidateToken(token)
+	_, err = tm.ValidateToken(ctx, token)
 	if err == nil {
 		t.Error("Expected revoked token to be rejected")
 	}
@@ -198,13 +203,14 @@ func TestJWTRevocation(t *testing.T) {
 }
 
 func TestJWTReuseAfterRevocation(t *testing.T) {
+	ctx := context.Background()
 	store := newMockTokenStore()
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager failed: %v", err)
 	}
 
-	token, err := tm.GenerateToken("test-user", "admin", 15*time.Minute)
+	token, err := tm.GenerateToken(ctx, "test-user", "admin", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("GenerateToken failed: %v", err)
 	}
@@ -215,13 +221,13 @@ func TestJWTReuseAfterRevocation(t *testing.T) {
 	}
 
 	// Revoke token
-	if err := tm.RevokeToken(jti); err != nil {
+	if err := tm.RevokeToken(ctx, jti); err != nil {
 		t.Fatalf("RevokeToken failed: %v", err)
 	}
 
 	// Try to use the token multiple times (should all fail)
 	for i := 0; i < 5; i++ {
-		_, err = tm.ValidateToken(token)
+		_, err = tm.ValidateToken(ctx, token)
 		if err == nil {
 			t.Errorf("Attempt %d: Expected revoked token to be rejected", i+1)
 		}
@@ -229,17 +235,18 @@ func TestJWTReuseAfterRevocation(t *testing.T) {
 	}
 }
 
-func TestRootTokenGeneration(t *testing.T) {
+func TestRootTokenRotation(t *testing.T) {
+	ctx := context.Background()
 	store := newMockTokenStore()
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager failed: %v", err)
 	}
 
-	// Generate root token
-	rootToken, err := tm.GenerateRootToken()
+	// Rotate root token (first call — no prior token to revoke)
+	rootToken, err := tm.RotateRootToken(ctx)
 	if err != nil {
-		t.Fatalf("GenerateRootToken failed: %v", err)
+		t.Fatalf("RotateRootToken failed: %v", err)
 	}
 
 	if rootToken == "" {
@@ -247,7 +254,7 @@ func TestRootTokenGeneration(t *testing.T) {
 	}
 
 	// Validate root token
-	claims, err := tm.ValidateToken(rootToken)
+	claims, err := tm.ValidateToken(ctx, rootToken)
 	if err != nil {
 		t.Errorf("Root token validation failed: %v", err)
 	}
@@ -260,46 +267,54 @@ func TestRootTokenGeneration(t *testing.T) {
 		t.Errorf("Expected role 'admin', got '%s'", claims.Role)
 	}
 
-	// Calling GenerateRootToken again should return the same token
-	rootToken2, err := tm.GenerateRootToken()
+	// Rotating again must produce a DIFFERENT token and revoke the old one.
+	rootToken2, err := tm.RotateRootToken(ctx)
 	if err != nil {
-		t.Fatalf("Second GenerateRootToken failed: %v", err)
+		t.Fatalf("Second RotateRootToken failed: %v", err)
 	}
 
-	if rootToken2 != rootToken {
-		t.Error("Expected same root token on subsequent calls")
+	if rootToken2 == rootToken {
+		t.Error("Expected a new root token after rotation, but got the same one")
+	}
+
+	// Old token must now be invalid (revoked).
+	_, err = tm.ValidateToken(ctx, rootToken)
+	if err == nil {
+		t.Error("Old root token should be revoked after rotation")
 	}
 }
 
 func TestInvalidTokenSignature(t *testing.T) {
+	ctx := context.Background()
 	store := newMockTokenStore()
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager failed: %v", err)
 	}
 
 	// Create a token with a different manager (different secret)
 	store2 := newMockTokenStore()
-	tm2, err := auth.NewTokenManager(store2)
+	tm2, err := auth.NewTokenManager(ctx, store2)
 	if err != nil {
 		t.Fatalf("NewTokenManager (2) failed: %v", err)
 	}
 
-	token, err := tm2.GenerateToken("test-user", "admin", 15*time.Minute)
+	token, err := tm2.GenerateToken(ctx, "test-user", "admin", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("GenerateToken failed: %v", err)
 	}
 
 	// Try to validate with the first manager (wrong secret)
-	_, err = tm.ValidateToken(token)
+	_, err = tm.ValidateToken(ctx, token)
 	if err == nil {
 		t.Error("Expected token with wrong signature to be rejected")
 	}
 }
 
 func TestMalformedToken(t *testing.T) {
+	ctx := context.Background()
 	store := newMockTokenStore()
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager failed: %v", err)
 	}
@@ -313,7 +328,7 @@ func TestMalformedToken(t *testing.T) {
 	}
 
 	for _, token := range malformedTokens {
-		_, err := tm.ValidateToken(token)
+		_, err := tm.ValidateToken(ctx, token)
 		if err == nil {
 			t.Errorf("Expected malformed token '%s' to be rejected", token)
 		}

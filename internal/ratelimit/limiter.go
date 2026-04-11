@@ -43,12 +43,20 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// limiterEntry pairs a token-bucket limiter with a last-seen timestamp so
+// GarbageCollect can evict stale entries without holding mu for long.
+type limiterEntry struct {
+	limiter      *rate.Limiter
+	lastSeenNano int64 // Unix nanoseconds; updated atomically on every Allow call
+}
 
 const (
 	// DefaultRateLimit is the default jobs per second per node.
@@ -61,7 +69,7 @@ const (
 // NodeLimiter manages per-node rate limiters.
 type NodeLimiter struct {
 	mu       sync.RWMutex
-	limiters map[string]*rate.Limiter
+	limiters map[string]*limiterEntry
 	rate     float64 // jobs per second
 	burst    int     // burst size (= rate for simplicity)
 }
@@ -78,10 +86,31 @@ func NewNodeLimiter() *NodeLimiter {
 	}
 
 	return &NodeLimiter{
-		limiters: make(map[string]*rate.Limiter),
+		limiters: make(map[string]*limiterEntry),
 		rate:     rateLimit,
 		burst:    int(rateLimit), // Allow bursts up to the rate limit
 	}
+}
+
+// getOrCreate returns the limiterEntry for nodeID, creating one if absent.
+func (nl *NodeLimiter) getOrCreate(nodeID string) *limiterEntry {
+	nl.mu.RLock()
+	entry, exists := nl.limiters[nodeID]
+	nl.mu.RUnlock()
+	if exists {
+		return entry
+	}
+	nl.mu.Lock()
+	defer nl.mu.Unlock()
+	if entry, exists = nl.limiters[nodeID]; exists {
+		return entry
+	}
+	entry = &limiterEntry{
+		limiter:      rate.NewLimiter(rate.Limit(nl.rate), nl.burst),
+		lastSeenNano: time.Now().UnixNano(),
+	}
+	nl.limiters[nodeID] = entry
+	return entry
 }
 
 // Allow checks if a request from nodeID is allowed under the rate limit.
@@ -89,25 +118,11 @@ func NewNodeLimiter() *NodeLimiter {
 //
 // This method is safe for concurrent use and creates limiters lazily.
 func (nl *NodeLimiter) Allow(ctx context.Context, nodeID string) error {
-	// Fast path: read lock to check if limiter exists
-	nl.mu.RLock()
-	limiter, exists := nl.limiters[nodeID]
-	nl.mu.RUnlock()
-
-	// Slow path: create limiter if it doesn't exist
-	if !exists {
-		nl.mu.Lock()
-		// Double-check after acquiring write lock (race condition)
-		limiter, exists = nl.limiters[nodeID]
-		if !exists {
-			limiter = rate.NewLimiter(rate.Limit(nl.rate), nl.burst)
-			nl.limiters[nodeID] = limiter
-		}
-		nl.mu.Unlock()
-	}
+	entry := nl.getOrCreate(nodeID)
+	atomic.StoreInt64(&entry.lastSeenNano, time.Now().UnixNano())
 
 	// Check if request is allowed
-	if !limiter.Allow() {
+	if !entry.limiter.Allow() {
 		return status.Errorf(codes.ResourceExhausted,
 			"rate limit exceeded for node %s (limit: %.1f jobs/s)", nodeID, nl.rate)
 	}
@@ -118,21 +133,10 @@ func (nl *NodeLimiter) Allow(ctx context.Context, nodeID string) error {
 // AllowN checks if N requests from nodeID are allowed.
 // Used for batch operations (future enhancement).
 func (nl *NodeLimiter) AllowN(ctx context.Context, nodeID string, n int) error {
-	nl.mu.RLock()
-	limiter, exists := nl.limiters[nodeID]
-	nl.mu.RUnlock()
+	entry := nl.getOrCreate(nodeID)
+	atomic.StoreInt64(&entry.lastSeenNano, time.Now().UnixNano())
 
-	if !exists {
-		nl.mu.Lock()
-		limiter, exists = nl.limiters[nodeID]
-		if !exists {
-			limiter = rate.NewLimiter(rate.Limit(nl.rate), nl.burst)
-			nl.limiters[nodeID] = limiter
-		}
-		nl.mu.Unlock()
-	}
-
-	if !limiter.AllowN(timeFromContext(ctx), n) {
+	if !entry.limiter.AllowN(timeFromContext(ctx), n) {
 		return status.Errorf(codes.ResourceExhausted,
 			"rate limit exceeded for node %s (requested: %d, limit: %.1f jobs/s)",
 			nodeID, n, nl.rate)
@@ -148,21 +152,10 @@ func (nl *NodeLimiter) AllowN(ctx context.Context, nodeID string, n int) error {
 // rather than being rejected immediately. Not used in Phase 4 (we reject
 // immediately), but available for future enhancements.
 func (nl *NodeLimiter) Wait(ctx context.Context, nodeID string) error {
-	nl.mu.RLock()
-	limiter, exists := nl.limiters[nodeID]
-	nl.mu.RUnlock()
+	entry := nl.getOrCreate(nodeID)
+	atomic.StoreInt64(&entry.lastSeenNano, time.Now().UnixNano())
 
-	if !exists {
-		nl.mu.Lock()
-		limiter, exists = nl.limiters[nodeID]
-		if !exists {
-			limiter = rate.NewLimiter(rate.Limit(nl.rate), nl.burst)
-			nl.limiters[nodeID] = limiter
-		}
-		nl.mu.Unlock()
-	}
-
-	if err := limiter.Wait(ctx); err != nil {
+	if err := entry.limiter.Wait(ctx); err != nil {
 		return fmt.Errorf("rate limit wait canceled: %w", err)
 	}
 
@@ -189,7 +182,7 @@ func (nl *NodeLimiter) GetStats(nodeID string) *Stats {
 	nl.mu.RLock()
 	defer nl.mu.RUnlock()
 
-	limiter, exists := nl.limiters[nodeID]
+	entry, exists := nl.limiters[nodeID]
 	if !exists {
 		return &Stats{
 			NodeID:     nodeID,
@@ -202,7 +195,7 @@ func (nl *NodeLimiter) GetStats(nodeID string) *Stats {
 
 	return &Stats{
 		NodeID:     nodeID,
-		Tokens:     float64(limiter.Tokens()),
+		Tokens:     float64(entry.limiter.Tokens()),
 		Burst:      nl.burst,
 		Rate:       nl.rate,
 		TotalNodes: len(nl.limiters),
@@ -215,10 +208,10 @@ func (nl *NodeLimiter) AllStats() []*Stats {
 	defer nl.mu.RUnlock()
 
 	stats := make([]*Stats, 0, len(nl.limiters))
-	for nodeID, limiter := range nl.limiters {
+	for nodeID, entry := range nl.limiters {
 		stats = append(stats, &Stats{
 			NodeID:     nodeID,
-			Tokens:     float64(limiter.Tokens()),
+			Tokens:     float64(entry.limiter.Tokens()),
 			Burst:      nl.burst,
 			Rate:       nl.rate,
 			TotalNodes: len(nl.limiters),
@@ -243,7 +236,7 @@ func (nl *NodeLimiter) ResetAll() {
 	nl.mu.Lock()
 	defer nl.mu.Unlock()
 
-	nl.limiters = make(map[string]*rate.Limiter)
+	nl.limiters = make(map[string]*limiterEntry)
 }
 
 // timeFromContext extracts a deadline from context for rate.Limiter.
@@ -255,17 +248,39 @@ func timeFromContext(ctx context.Context) time.Time {
 	return time.Now()
 }
 
-// GarbageCollect removes limiters for nodes that haven't been seen in a while.
-// Called periodically by the coordinator to prevent unbounded memory growth.
-//
-// NOTE: For Phase 4, we skip garbage collection because:
-//   1. Small cluster size (<100 nodes) means memory usage is negligible
-//   2. Nodes are long-lived (not ephemeral)
-//   3. Coordination with node health checking is complex
-//
-// A future version could track last-seen timestamps and evict stale limiters.
+// GarbageCollect removes limiters for nodes that have not sent a request
+// within staleThreshold. Returns the number of entries evicted.
+// Call this periodically (e.g. every 2× heartbeat interval) to prevent
+// unbounded memory growth when ephemeral nodes come and go.
 func (nl *NodeLimiter) GarbageCollect(staleThreshold time.Duration) int {
-	// TODO(Phase 5): Implement GC using node health tracker
-	// For now, return 0 (no limiters removed)
-	return 0
+	cutoffNano := time.Now().Add(-staleThreshold).UnixNano()
+
+	// Collect stale keys under read lock to minimise contention.
+	nl.mu.RLock()
+	var stale []string
+	for nodeID, entry := range nl.limiters {
+		if atomic.LoadInt64(&entry.lastSeenNano) < cutoffNano {
+			stale = append(stale, nodeID)
+		}
+	}
+	nl.mu.RUnlock()
+
+	if len(stale) == 0 {
+		return 0
+	}
+
+	nl.mu.Lock()
+	defer nl.mu.Unlock()
+	removed := 0
+	for _, nodeID := range stale {
+		// Re-check under write lock: entry may have been refreshed since the
+		// read pass above.
+		if entry, ok := nl.limiters[nodeID]; ok {
+			if atomic.LoadInt64(&entry.lastSeenNano) < cutoffNano {
+				delete(nl.limiters, nodeID)
+				removed++
+			}
+		}
+	}
+	return removed
 }

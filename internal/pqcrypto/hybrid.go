@@ -39,6 +39,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
+	"os"
+	"strings"
 
 	"github.com/cloudflare/circl/kem"
 	"github.com/cloudflare/circl/kem/mlkem/mlkem768"
@@ -73,6 +76,26 @@ func DefaultHybridConfig() *HybridConfig {
 //   Use Wireshark to inspect the TLS handshake and verify that the
 //   "supported_groups" extension includes 0x6399 (X25519MLKEM768) and
 //   that the ServerHello uses it for key exchange.
+// hybridKEMEnabled reports whether the Go runtime will actually negotiate the
+// hybrid curve. Go 1.23 requires GODEBUG=tlskyber=1; Go 1.24+ enables it by
+// default (GODEBUG=tlskyber=0 disables it).
+func hybridKEMEnabled() bool {
+	godebug := os.Getenv("GODEBUG")
+	for _, kv := range strings.Split(godebug, ",") {
+		kv = strings.TrimSpace(kv)
+		if kv == "tlskyber=0" {
+			return false
+		}
+		if kv == "tlskyber=1" {
+			return true
+		}
+	}
+	// Go 1.24+ enables X25519MLKEM768 by default when the curve ID is listed.
+	// Without a definitive runtime version check we optimistically return true
+	// and let the TLS negotiation confirm it in practice.
+	return true
+}
+
 func ApplyHybridKEM(cfg *tls.Config, hybridCfg *HybridConfig) *tls.Config {
 	if cfg == nil {
 		cfg = &tls.Config{}
@@ -82,12 +105,21 @@ func ApplyHybridKEM(cfg *tls.Config, hybridCfg *HybridConfig) *tls.Config {
 		return cfg
 	}
 
+	if !hybridKEMEnabled() {
+		slog.Warn("hybrid ML-KEM is disabled by GODEBUG=tlskyber=0; " +
+			"connections will use classical X25519 only (not HNDL-resistant)")
+		return cfg
+	}
+
 	// Prefer X25519MLKEM768 (0x6399), fall back to X25519 (0x001d).
 	// If the peer doesn't support 0x6399, TLS will negotiate X25519 only.
 	cfg.CurvePreferences = []tls.CurveID{
 		tls.CurveID(hybridCfg.CurvePreference), // X25519MLKEM768
-		tls.X25519,                              // X25519 fallback
+		tls.X25519,                              // X25519 classical fallback
 	}
+
+	slog.Info("hybrid ML-KEM configured",
+		slog.String("curve_id", fmt.Sprintf("0x%04x", hybridCfg.CurvePreference)))
 
 	return cfg
 }

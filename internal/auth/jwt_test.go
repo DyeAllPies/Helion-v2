@@ -11,6 +11,8 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 )
 
+var ctx = context.Background()
+
 // ── Mock TokenStore ────────────────────────────────────────────────────────────
 
 type mockTokenStore struct {
@@ -23,7 +25,7 @@ func newMockStore() *mockTokenStore {
 	return &mockTokenStore{data: make(map[string][]byte)}
 }
 
-func (s *mockTokenStore) Get(key string) ([]byte, error) {
+func (s *mockTokenStore) Get(_ context.Context, key string) ([]byte, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -36,7 +38,7 @@ func (s *mockTokenStore) Get(key string) ([]byte, error) {
 	return append([]byte{}, v...), nil
 }
 
-func (s *mockTokenStore) Put(key string, value []byte, ttl time.Duration) error {
+func (s *mockTokenStore) Put(_ context.Context, key string, value []byte, ttl time.Duration) error {
 	if s.err != nil {
 		return s.err
 	}
@@ -46,7 +48,7 @@ func (s *mockTokenStore) Put(key string, value []byte, ttl time.Duration) error 
 	return nil
 }
 
-func (s *mockTokenStore) Delete(key string) error {
+func (s *mockTokenStore) Delete(_ context.Context, key string) error {
 	if s.err != nil {
 		return s.err
 	}
@@ -60,14 +62,13 @@ func (s *mockTokenStore) Delete(key string) error {
 
 func TestNewTokenManager_GeneratesSecret_OnFirstStart(t *testing.T) {
 	store := newMockStore()
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if tm == nil {
 		t.Fatal("expected non-nil TokenManager")
 	}
-	// Secret should now be stored in the mock store.
 	if _, ok := store.data[auth.JWTSecretKey]; !ok {
 		t.Error("JWT secret should be persisted to store on first start")
 	}
@@ -76,30 +77,28 @@ func TestNewTokenManager_GeneratesSecret_OnFirstStart(t *testing.T) {
 func TestNewTokenManager_LoadsExistingSecret(t *testing.T) {
 	store := newMockStore()
 
-	// Simulate a pre-existing secret from a previous run.
 	existingSecret := make([]byte, 32)
 	for i := range existingSecret {
 		existingSecret[i] = byte(i + 1)
 	}
 	store.data[auth.JWTSecretKey] = existingSecret
 
-	tm1, err := auth.NewTokenManager(store)
+	tm1, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("first NewTokenManager: %v", err)
 	}
 
-	// Token produced by first manager should validate with second (same secret).
-	tokenStr, err := tm1.GenerateToken("subject", "admin", time.Minute)
+	tokenStr, err := tm1.GenerateToken(ctx, "subject", "admin", time.Minute)
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
 
-	tm2, err := auth.NewTokenManager(store)
+	tm2, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("second NewTokenManager: %v", err)
 	}
 
-	if _, err := tm2.ValidateToken(tokenStr); err != nil {
+	if _, err := tm2.ValidateToken(ctx, tokenStr); err != nil {
 		t.Errorf("token from tm1 should validate with tm2 (same secret): %v", err)
 	}
 }
@@ -107,8 +106,8 @@ func TestNewTokenManager_LoadsExistingSecret(t *testing.T) {
 // ── GenerateToken ─────────────────────────────────────────────────────────────
 
 func TestGenerateToken_ReturnsNonEmptyString(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newMockStore())
-	tok, err := tm.GenerateToken("user-1", "admin", time.Minute)
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
+	tok, err := tm.GenerateToken(ctx, "user-1", "admin", time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,14 +118,13 @@ func TestGenerateToken_ReturnsNonEmptyString(t *testing.T) {
 
 func TestGenerateToken_StoresJTI(t *testing.T) {
 	store := newMockStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(ctx, store)
 
-	_, err := tm.GenerateToken("user-1", "admin", time.Minute)
+	_, err := tm.GenerateToken(ctx, "user-1", "admin", time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// At least one key should have the JTI prefix.
 	found := false
 	for k := range store.data {
 		if strings.HasPrefix(k, auth.JTIPrefix) {
@@ -141,10 +139,10 @@ func TestGenerateToken_StoresJTI(t *testing.T) {
 
 func TestGenerateToken_UniqueJTIs(t *testing.T) {
 	store := newMockStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(ctx, store)
 
-	tok1, _ := tm.GenerateToken("u", "admin", time.Minute)
-	tok2, _ := tm.GenerateToken("u", "admin", time.Minute)
+	tok1, _ := tm.GenerateToken(ctx, "u", "admin", time.Minute)
+	tok2, _ := tm.GenerateToken(ctx, "u", "admin", time.Minute)
 
 	jti1, err := auth.ExtractJTI(tok1)
 	if err != nil {
@@ -162,10 +160,10 @@ func TestGenerateToken_UniqueJTIs(t *testing.T) {
 // ── ValidateToken ─────────────────────────────────────────────────────────────
 
 func TestValidateToken_ValidToken_ReturnsClaims(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newMockStore())
-	tok, _ := tm.GenerateToken("alice", "admin", time.Minute)
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
+	tok, _ := tm.GenerateToken(ctx, "alice", "admin", time.Minute)
 
-	claims, err := tm.ValidateToken(tok)
+	claims, err := tm.ValidateToken(ctx, tok)
 	if err != nil {
 		t.Fatalf("ValidateToken: %v", err)
 	}
@@ -178,28 +176,26 @@ func TestValidateToken_ValidToken_ReturnsClaims(t *testing.T) {
 }
 
 func TestValidateToken_Expired_Rejected(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newMockStore())
-	// Generate token that expires immediately.
-	tok, _ := tm.GenerateToken("user", "node", -time.Second)
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
+	tok, _ := tm.GenerateToken(ctx, "user", "node", -time.Second)
 
-	_, err := tm.ValidateToken(tok)
+	_, err := tm.ValidateToken(ctx, tok)
 	if err == nil {
 		t.Error("expected error for expired token, got nil")
 	}
 }
 
 func TestValidateToken_InvalidSignature_Rejected(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newMockStore())
-	tok, _ := tm.GenerateToken("user", "admin", time.Minute)
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
+	tok, _ := tm.GenerateToken(ctx, "user", "admin", time.Minute)
 
-	// Replace the signature segment (third part) with a bogus value.
 	parts := strings.SplitN(tok, ".", 3)
 	if len(parts) != 3 {
 		t.Fatalf("expected 3-part JWT, got %d parts", len(parts))
 	}
 	tampered := parts[0] + "." + parts[1] + ".invalidsignatureXXXXXXXXXXXX"
 
-	_, err := tm.ValidateToken(tampered)
+	_, err := tm.ValidateToken(ctx, tampered)
 	if err == nil {
 		t.Error("expected error for tampered token")
 	}
@@ -207,24 +203,24 @@ func TestValidateToken_InvalidSignature_Rejected(t *testing.T) {
 
 func TestValidateToken_RevokedJTI_Rejected(t *testing.T) {
 	store := newMockStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(ctx, store)
 
-	tok, _ := tm.GenerateToken("user", "admin", time.Minute)
+	tok, _ := tm.GenerateToken(ctx, "user", "admin", time.Minute)
 	jti, _ := auth.ExtractJTI(tok)
 
-	if err := tm.RevokeToken(jti); err != nil {
+	if err := tm.RevokeToken(ctx, jti); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}
 
-	_, err := tm.ValidateToken(tok)
+	_, err := tm.ValidateToken(ctx, tok)
 	if err == nil {
 		t.Error("expected error for revoked token, got nil")
 	}
 }
 
 func TestValidateToken_GarbageString_Rejected(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newMockStore())
-	_, err := tm.ValidateToken("not.a.jwt")
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
+	_, err := tm.ValidateToken(ctx, "not.a.jwt")
 	if err == nil {
 		t.Error("expected error for garbage token")
 	}
@@ -234,73 +230,85 @@ func TestValidateToken_GarbageString_Rejected(t *testing.T) {
 
 func TestRevokeToken_DeletesJTI_FromStore(t *testing.T) {
 	store := newMockStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(ctx, store)
 
-	tok, _ := tm.GenerateToken("user", "admin", time.Minute)
+	tok, _ := tm.GenerateToken(ctx, "user", "admin", time.Minute)
 	jti, _ := auth.ExtractJTI(tok)
 	jtiKey := auth.JTIPrefix + jti
 
-	// JTI should be present before revocation.
 	if _, ok := store.data[jtiKey]; !ok {
 		t.Fatal("JTI not found in store before revocation")
 	}
 
-	if err := tm.RevokeToken(jti); err != nil {
+	if err := tm.RevokeToken(ctx, jti); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}
 
-	// JTI should be gone after revocation.
 	if _, ok := store.data[jtiKey]; ok {
 		t.Error("JTI should be deleted after revocation")
 	}
 }
 
 func TestRevokeToken_OneToken_DoesNotAffectOthers(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newMockStore())
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
 
-	tok1, _ := tm.GenerateToken("user", "admin", time.Minute)
-	tok2, _ := tm.GenerateToken("user", "admin", time.Minute)
+	tok1, _ := tm.GenerateToken(ctx, "user", "admin", time.Minute)
+	tok2, _ := tm.GenerateToken(ctx, "user", "admin", time.Minute)
 
 	jti1, _ := auth.ExtractJTI(tok1)
-	if err := tm.RevokeToken(jti1); err != nil {
+	if err := tm.RevokeToken(ctx, jti1); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}
 
-	// tok2 should still be valid.
-	if _, err := tm.ValidateToken(tok2); err != nil {
+	if _, err := tm.ValidateToken(ctx, tok2); err != nil {
 		t.Errorf("tok2 should still be valid after revoking tok1: %v", err)
 	}
 }
 
 // ── Root token ────────────────────────────────────────────────────────────────
 
-func TestGenerateRootToken_ProducesToken(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newMockStore())
-	tok, err := tm.GenerateRootToken()
+func TestRotateRootToken_ProducesToken(t *testing.T) {
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
+	tok, err := tm.RotateRootToken(ctx)
 	if err != nil {
-		t.Fatalf("GenerateRootToken: %v", err)
+		t.Fatalf("RotateRootToken: %v", err)
 	}
 	if tok == "" {
 		t.Error("expected non-empty root token")
 	}
 }
 
-func TestGenerateRootToken_IdempotentOnSecondCall(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newMockStore())
-	tok1, _ := tm.GenerateRootToken()
-	tok2, _ := tm.GenerateRootToken()
+func TestRotateRootToken_AlwaysGeneratesNewToken(t *testing.T) {
+	// Each call to RotateRootToken must produce a different token so that a
+	// leaked token from a previous run is invalid after the next startup.
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
+	tok1, _ := tm.RotateRootToken(ctx)
+	tok2, _ := tm.RotateRootToken(ctx)
 
-	if tok1 != tok2 {
-		t.Error("GenerateRootToken should return the same token on second call")
+	if tok1 == tok2 {
+		t.Error("RotateRootToken should produce a different token on each call")
 	}
 }
 
-func TestGenerateRootToken_PersistedToStore(t *testing.T) {
-	store := newMockStore()
-	tm, _ := auth.NewTokenManager(store)
-	tok, _ := tm.GenerateRootToken()
+func TestRotateRootToken_RevokesOldToken(t *testing.T) {
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
+	tok1, _ := tm.RotateRootToken(ctx)
 
-	stored, err := store.Get(auth.RootTokenKey)
+	// Second rotation should invalidate tok1.
+	_, _ = tm.RotateRootToken(ctx)
+
+	_, err := tm.ValidateToken(ctx, tok1)
+	if err == nil {
+		t.Error("old root token should be invalid after rotation")
+	}
+}
+
+func TestRotateRootToken_PersistedToStore(t *testing.T) {
+	store := newMockStore()
+	tm, _ := auth.NewTokenManager(ctx, store)
+	tok, _ := tm.RotateRootToken(ctx)
+
+	stored, err := store.Get(ctx, auth.RootTokenKey)
 	if err != nil {
 		t.Fatalf("root token not in store: %v", err)
 	}
@@ -311,10 +319,10 @@ func TestGenerateRootToken_PersistedToStore(t *testing.T) {
 
 func TestGetRootToken_ReturnsStoredToken(t *testing.T) {
 	store := newMockStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(ctx, store)
 
-	generated, _ := tm.GenerateRootToken()
-	retrieved, err := tm.GetRootToken()
+	generated, _ := tm.RotateRootToken(ctx)
+	retrieved, err := tm.GetRootToken(ctx)
 	if err != nil {
 		t.Fatalf("GetRootToken: %v", err)
 	}
@@ -324,26 +332,25 @@ func TestGetRootToken_ReturnsStoredToken(t *testing.T) {
 }
 
 func TestGetRootToken_NoToken_ReturnsError(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newMockStore())
-	_, err := tm.GetRootToken()
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
+	_, err := tm.GetRootToken(ctx)
 	if err == nil {
 		t.Error("GetRootToken should return error when no root token exists")
 	}
 }
 
-// ── PrintRootTokenInstructions / truncate ────────────────────────────────────
+// ── PrintRootTokenInstructions ───────────────────────────────────────────────
 
 func TestPrintRootTokenInstructions_DoesNotPanic(t *testing.T) {
-	// Smoke-test: just ensure it doesn't panic.
 	auth.PrintRootTokenInstructions("tok-short")
-	auth.PrintRootTokenInstructions(strings.Repeat("x", 200)) // long token
+	auth.PrintRootTokenInstructions(strings.Repeat("x", 200))
 }
 
 // ── ExtractJTI ────────────────────────────────────────────────────────────────
 
 func TestExtractJTI_ReturnsJTI(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newMockStore())
-	tok, _ := tm.GenerateToken("u", "admin", time.Minute)
+	tm, _ := auth.NewTokenManager(ctx, newMockStore())
+	tok, _ := tm.GenerateToken(ctx, "u", "admin", time.Minute)
 
 	jti, err := auth.ExtractJTI(tok)
 	if err != nil {
@@ -361,7 +368,7 @@ func TestExtractJTI_InvalidToken_ReturnsError(t *testing.T) {
 	}
 }
 
-// ── TokenStoreAdapter ─────────────────────────────────────────────────────────
+// ── StoreAdapter ──────────────────────────────────────────────────────────────
 
 type mockPersistenceStore struct {
 	mu   sync.Mutex
@@ -408,15 +415,14 @@ func (m *mockPersistenceStore) Delete(_ context.Context, key string) error {
 	return nil
 }
 
-func TestTokenStoreAdapter_GetPutDelete(t *testing.T) {
+func TestStoreAdapter_GetPutDelete(t *testing.T) {
 	inner := newPersistenceStore()
-	adapter := auth.NewTokenStoreAdapter(inner)
+	adapter := auth.NewStoreAdapter(inner)
 
-	// Put then Get.
-	if err := adapter.Put("k1", []byte("value"), 0); err != nil {
+	if err := adapter.Put(ctx, "k1", []byte("value"), 0); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	got, err := adapter.Get("k1")
+	got, err := adapter.Get(ctx, "k1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -424,25 +430,23 @@ func TestTokenStoreAdapter_GetPutDelete(t *testing.T) {
 		t.Errorf("want 'value', got %q", got)
 	}
 
-	// Delete then Get should fail.
-	if err := adapter.Delete("k1"); err != nil {
+	if err := adapter.Delete(ctx, "k1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := adapter.Get("k1"); err == nil {
+	if _, err := adapter.Get(ctx, "k1"); err == nil {
 		t.Error("Get after Delete should return error")
 	}
 }
 
-func TestTokenStoreAdapter_PutWithTTL_UsesPutWithTTL(t *testing.T) {
+func TestStoreAdapter_PutWithTTL_UsesPutWithTTL(t *testing.T) {
 	inner := newPersistenceStore()
-	adapter := auth.NewTokenStoreAdapter(inner)
+	adapter := auth.NewStoreAdapter(inner)
 
 	ttl := 15 * time.Minute
-	if err := adapter.Put("k-ttl", []byte("v"), ttl); err != nil {
+	if err := adapter.Put(ctx, "k-ttl", []byte("v"), ttl); err != nil {
 		t.Fatalf("Put with TTL: %v", err)
 	}
 
-	// The inner store should have recorded the TTL.
 	if inner.ttls["k-ttl"] != ttl {
 		t.Errorf("want ttl %v, got %v", ttl, inner.ttls["k-ttl"])
 	}
@@ -450,73 +454,78 @@ func TestTokenStoreAdapter_PutWithTTL_UsesPutWithTTL(t *testing.T) {
 
 // ── Error path coverage ───────────────────────────────────────────────────────
 
-// failOnPutStore succeeds Get (returns key-not-found) and fails Put.
 type failOnPutStore struct {
 	putErr error
 }
 
-func (s *failOnPutStore) Get(_ string) ([]byte, error) {
+func (s *failOnPutStore) Get(_ context.Context, _ string) ([]byte, error) {
 	return nil, errors.New("key not found")
 }
-func (s *failOnPutStore) Put(_ string, _ []byte, _ time.Duration) error { return s.putErr }
-func (s *failOnPutStore) Delete(_ string) error                         { return nil }
+func (s *failOnPutStore) Put(_ context.Context, _ string, _ []byte, _ time.Duration) error {
+	return s.putErr
+}
+func (s *failOnPutStore) Delete(_ context.Context, _ string) error { return nil }
 
 func TestNewTokenManager_PutFails_ReturnsError(t *testing.T) {
 	store := &failOnPutStore{putErr: errors.New("disk full")}
-	_, err := auth.NewTokenManager(store)
+	_, err := auth.NewTokenManager(ctx, store)
 	if err == nil {
 		t.Error("expected error when Put fails during secret storage, got nil")
 	}
 }
 
-// failOnJTIPutStore wraps mockTokenStore and fails on the second Put call.
 type failOnJTIPutStore struct {
 	inner    *mockTokenStore
 	putCalls int
 }
 
-func (s *failOnJTIPutStore) Get(key string) ([]byte, error) { return s.inner.Get(key) }
-func (s *failOnJTIPutStore) Delete(key string) error        { return s.inner.Delete(key) }
-func (s *failOnJTIPutStore) Put(key string, value []byte, ttl time.Duration) error {
+func (s *failOnJTIPutStore) Get(c context.Context, key string) ([]byte, error) {
+	return s.inner.Get(c, key)
+}
+func (s *failOnJTIPutStore) Delete(c context.Context, key string) error {
+	return s.inner.Delete(c, key)
+}
+func (s *failOnJTIPutStore) Put(c context.Context, key string, value []byte, ttl time.Duration) error {
 	s.putCalls++
 	if s.putCalls > 1 {
 		return errors.New("JTI store failure")
 	}
-	return s.inner.Put(key, value, ttl)
+	return s.inner.Put(c, key, value, ttl)
 }
 
 func TestGenerateToken_JTIStoreFails_ReturnsError(t *testing.T) {
 	store := &failOnJTIPutStore{inner: newMockStore()}
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager: %v", err)
 	}
-	_, err = tm.GenerateToken("user", "admin", time.Minute)
+	_, err = tm.GenerateToken(ctx, "user", "admin", time.Minute)
 	if err == nil {
 		t.Error("expected error when JTI store fails, got nil")
 	}
 }
 
-// failOnDeleteStore wraps mockTokenStore and fails all Delete calls.
 type failOnDeleteStore struct {
 	inner     *mockTokenStore
 	deleteErr error
 }
 
-func (s *failOnDeleteStore) Get(key string) ([]byte, error) { return s.inner.Get(key) }
-func (s *failOnDeleteStore) Put(key string, value []byte, ttl time.Duration) error {
-	return s.inner.Put(key, value, ttl)
+func (s *failOnDeleteStore) Get(c context.Context, key string) ([]byte, error) {
+	return s.inner.Get(c, key)
 }
-func (s *failOnDeleteStore) Delete(_ string) error { return s.deleteErr }
+func (s *failOnDeleteStore) Put(c context.Context, key string, value []byte, ttl time.Duration) error {
+	return s.inner.Put(c, key, value, ttl)
+}
+func (s *failOnDeleteStore) Delete(_ context.Context, _ string) error { return s.deleteErr }
 
 func TestRevokeToken_DeleteFails_ReturnsError(t *testing.T) {
 	base := newMockStore()
 	store := &failOnDeleteStore{inner: base, deleteErr: errors.New("delete failed")}
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager: %v", err)
 	}
-	if err := tm.RevokeToken("any-jti"); err == nil {
+	if err := tm.RevokeToken(ctx, "any-jti"); err == nil {
 		t.Error("expected error when Delete fails, got nil")
 	}
 }
@@ -525,32 +534,36 @@ func TestRevokeToken_DeleteFails_ReturnsError(t *testing.T) {
 type failOnNthPutStore struct {
 	inner    *mockTokenStore
 	putCalls int
-	failOn   int // fail when putCalls == failOn
+	failOn   int
 }
 
-func (s *failOnNthPutStore) Get(key string) ([]byte, error) { return s.inner.Get(key) }
-func (s *failOnNthPutStore) Delete(key string) error        { return s.inner.Delete(key) }
-func (s *failOnNthPutStore) Put(key string, value []byte, ttl time.Duration) error {
+func (s *failOnNthPutStore) Get(c context.Context, key string) ([]byte, error) {
+	return s.inner.Get(c, key)
+}
+func (s *failOnNthPutStore) Delete(c context.Context, key string) error {
+	return s.inner.Delete(c, key)
+}
+func (s *failOnNthPutStore) Put(c context.Context, key string, value []byte, ttl time.Duration) error {
 	s.putCalls++
 	if s.putCalls == s.failOn {
 		return errors.New("simulated disk full")
 	}
-	return s.inner.Put(key, value, ttl)
+	return s.inner.Put(c, key, value, ttl)
 }
 
-// TestGenerateRootToken_StoreFails_ReturnsError covers the
-// "store root token: …" error path in GenerateRootToken.
-// Call sequence:
-//  1. NewTokenManager → Get(JWTSecretKey) fails → Put(JWTSecretKey) succeeds  [Put #1]
-//  2. GenerateRootToken → Get(RootTokenKey) fails → GenerateToken → Put(JTI) succeeds  [Put #2]
-//  3. GenerateRootToken → Put(RootTokenKey) fails  [Put #3 = failOn]
-func TestGenerateRootToken_StoreFails_ReturnsError(t *testing.T) {
+// TestRotateRootToken_StoreFails_ReturnsError covers the "store root token"
+// error path in RotateRootToken.
+// Call sequence (no pre-existing token):
+//  1. NewTokenManager → Get(JWTSecretKey) fails → Put(JWTSecretKey)  [Put #1]
+//  2. RotateRootToken → Get(RootTokenKey) fails → GenerateToken → Put(JTI)  [Put #2]
+//  3. RotateRootToken → Put(RootTokenKey) fails  [Put #3 = failOn]
+func TestRotateRootToken_StoreFails_ReturnsError(t *testing.T) {
 	store := &failOnNthPutStore{inner: newMockStore(), failOn: 3}
-	tm, err := auth.NewTokenManager(store)
+	tm, err := auth.NewTokenManager(ctx, store)
 	if err != nil {
 		t.Fatalf("NewTokenManager: %v", err)
 	}
-	_, err = tm.GenerateRootToken()
+	_, err = tm.RotateRootToken(ctx)
 	if err == nil {
 		t.Error("expected error when storing root token fails, got nil")
 	}

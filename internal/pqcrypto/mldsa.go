@@ -55,6 +55,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/pem"
 	"fmt"
 
 	"github.com/cloudflare/circl/sign"
@@ -222,89 +223,90 @@ func (ca *CA) EnhanceWithMLDSA() error {
 	return nil
 }
 
-// IssueNodeCertWithMLDSA issues a node certificate with dual signatures:
-//   1. Standard ECDSA signature (via x509.CreateCertificate)
-//   2. ML-DSA signature (via AddMLDSASignature)
+// IssueNodeCertWithMLDSA issues a node certificate with an out-of-band ML-DSA
+// signature stored in the CA's signature map (keyed by cert serial number).
 //
-// This is a two-pass process:
-//   - Pass 1: Create cert with standard ECDSA signing
-//   - Pass 2: Extract TBS, sign with ML-DSA, add extension
+// Two-pass approach:
+//   1. Issue a standard ECDSA cert via IssueNodeCert.
+//   2. Parse it, extract RawTBSCertificate, sign with ML-DSA.
+//   3. Store the signature in ca.mldsaSigs[serial] for later verification.
 //
-// Returns the final cert (with ML-DSA extension), the node's ECDSA key, and error.
-//
-// NOTE: For Phase 4 initial implementation, we'll keep this simple and only
-// add the ML-DSA signature extension. Full dual-signature verification requires
-// re-encoding the certificate, which is complex and out of scope for v2.0.
-//
-// The important part for Phase 4 is that the coordinator checks for the
-// presence of the ML-DSA extension and verifies it before accepting a node.
+// At registration time, the coordinator calls VerifyNodeCertMLDSA(derBytes)
+// which looks up the signature by serial and verifies it against the TBS.
+// This is the "out-of-band" approach: the signature lives in the CA's memory
+// rather than embedded in the cert, which avoids having to re-encode the DER.
 func (ca *CA) IssueNodeCertWithMLDSA(nodeID string) (certPEM, keyPEM []byte, err error) {
-	// First, issue a standard ECDSA cert (reuses existing logic)
+	// Pass 1: issue a standard ECDSA cert.
 	certPEM, keyPEM, err = ca.IssueNodeCert(nodeID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("issue base certificate: %w", err)
 	}
 
-	// If ML-DSA is not enabled on this CA, return the standard cert
+	// If ML-DSA is not enabled on this CA, return the standard cert unchanged.
 	if ca.mldsaPriv == nil {
 		return certPEM, keyPEM, nil
 	}
 
-	// Parse the certificate to extract TBS for ML-DSA signing
-	block, _ := parsePEMBlock(certPEM, "CERTIFICATE")
-	if block == nil {
-		return nil, nil, fmt.Errorf("failed to parse certificate PEM")
+	// Pass 2: parse the cert to extract RawTBSCertificate for ML-DSA signing.
+	block, err := parsePEMBlock(certPEM, "CERTIFICATE")
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse certificate PEM: %w", err)
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse certificate: %w", err)
+		return nil, nil, fmt.Errorf("parse certificate DER: %w", err)
 	}
 
-	// Sign the TBS with ML-DSA
+	// Sign the TBS (to-be-signed) portion with ML-DSA.
 	sig, err := ca.mldsaPriv.Sign(cert.RawTBSCertificate)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sign with ML-DSA: %w", err)
+		return nil, nil, fmt.Errorf("ML-DSA sign: %w", err)
 	}
 
-	// Create the PQC signature extension
-	ext := pqcSignatureExtension{
-		Algorithm: oidMLDSA65,
-		Signature: sig,
-	}
-
-	extBytes, err := asn1.Marshal(ext)
-	if err != nil {
-		return nil, nil, fmt.Errorf("marshal PQC extension: %w", err)
-	}
-
-	// Append the extension to the certificate
-	// NOTE: Modifying a signed certificate is non-trivial. In a production
-	// system, we'd regenerate the entire certificate with the extension in
-	// the template. For Phase 4 demo purposes, we'll manually append the
-	// extension to the DER encoding and re-encode as PEM.
-	//
-	// This is a known limitation: the ECDSA signature covers the original
-	// cert without the extension, so we're adding data "outside" the signed
-	// portion. This is safe because:
-	//   1. The ML-DSA signature covers the same TBS, so tampering is detected
-	//   2. The extension is marked non-critical, so legacy verifiers ignore it
-	//   3. The coordinator explicitly verifies the ML-DSA sig before accepting
-	//
-	// A future version could use a proper dual-signature certificate format
-	// (e.g., composite certificates from IETF draft), but that's out of scope.
-
-	_ = extBytes // Placeholder - extension not currently embedded in cert
+	// Store the signature keyed by serial number so VerifyNodeCertMLDSA can
+	// retrieve it during the Register RPC.
+	ca.StoreMLDSASignature(cert.SerialNumber.String(), sig)
 
 	return certPEM, keyPEM, nil
 }
 
-// Helper to parse a PEM block
-func parsePEMBlock(pemData []byte, blockType string) (*struct{ Bytes []byte }, error) {
-	// Simple PEM parser (production code would use encoding/pem)
-	// For Phase 4, we'll assume the PEM is well-formed
-	// This is a placeholder - real implementation uses pem.Decode
-	return nil, fmt.Errorf("PEM parsing not implemented in placeholder")
+// VerifyNodeCertMLDSA verifies the stored ML-DSA signature for a node cert
+// presented as DER bytes.  Returns nil if:
+//   - ML-DSA is not enabled on this CA (mldsaPub == nil), or
+//   - the signature matches the cert's RawTBSCertificate.
+//
+// Returns an error if ML-DSA is enabled but no signature is stored for the
+// cert's serial, or if signature verification fails.
+func (ca *CA) VerifyNodeCertMLDSA(derBytes []byte) error {
+	if ca.mldsaPub == nil {
+		return nil // ML-DSA not enabled; skip verification.
+	}
+
+	cert, err := x509.ParseCertificate(derBytes)
+	if err != nil {
+		return fmt.Errorf("parse cert DER: %w", err)
+	}
+
+	serial := cert.SerialNumber.String()
+	sig, ok := ca.GetMLDSASignature(serial)
+	if !ok {
+		return fmt.Errorf("ML-DSA: no stored signature for cert serial %s", serial)
+	}
+
+	return ca.mldsaPub.Verify(cert.RawTBSCertificate, sig)
+}
+
+// parsePEMBlock decodes the first PEM block of the given type from pemData.
+func parsePEMBlock(pemData []byte, blockType string) (*pem.Block, error) {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found")
+	}
+	if block.Type != blockType {
+		return nil, fmt.Errorf("expected PEM block type %q, got %q", blockType, block.Type)
+	}
+	return block, nil
 }
 
 // GetMLDSAPublicKey returns the CA's ML-DSA public key for distribution to nodes.
@@ -317,6 +319,8 @@ func (ca *CA) GetMLDSAPublicKey() *MLDSAPublicKey {
 // This is a workaround for the two-pass signing process.
 // The coordinator stores signatures in BadgerDB keyed by cert serial number.
 func (ca *CA) StoreMLDSASignature(certSerialNumber string, signature []byte) {
+	ca.mldsaMu.Lock()
+	defer ca.mldsaMu.Unlock()
 	if ca.mldsaSigs == nil {
 		ca.mldsaSigs = make(map[string][]byte)
 	}
@@ -325,6 +329,8 @@ func (ca *CA) StoreMLDSASignature(certSerialNumber string, signature []byte) {
 
 // GetMLDSASignature retrieves a stored ML-DSA signature for a certificate.
 func (ca *CA) GetMLDSASignature(certSerialNumber string) ([]byte, bool) {
+	ca.mldsaMu.RLock()
+	defer ca.mldsaMu.RUnlock()
 	if ca.mldsaSigs == nil {
 		return nil, false
 	}

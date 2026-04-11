@@ -67,13 +67,14 @@ func (f *fakePersister) Delete(_ context.Context, key string) error {
 // ── StoreAdapter tests ────────────────────────────────────────────────────────
 
 func TestStoreAdapter_Put_Get_Roundtrip(t *testing.T) {
+	ctx := context.Background()
 	adapter := auth.NewStoreAdapter(newFakePersister())
 
-	if err := adapter.Put("mykey", []byte("myvalue"), 0); err != nil {
+	if err := adapter.Put(ctx, "mykey", []byte("myvalue"), 0); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	got, err := adapter.Get("mykey")
+	got, err := adapter.Get(ctx, "mykey")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -83,18 +84,20 @@ func TestStoreAdapter_Put_Get_Roundtrip(t *testing.T) {
 }
 
 func TestStoreAdapter_Get_MissingKey_ReturnsError(t *testing.T) {
+	ctx := context.Background()
 	adapter := auth.NewStoreAdapter(newFakePersister())
-	_, err := adapter.Get("nonexistent")
+	_, err := adapter.Get(ctx, "nonexistent")
 	if err == nil {
 		t.Error("expected error for missing key, got nil")
 	}
 }
 
 func TestStoreAdapter_Put_ZeroTTL_UsesPut(t *testing.T) {
+	ctx := context.Background()
 	fp := newFakePersister()
 	adapter := auth.NewStoreAdapter(fp)
 
-	_ = adapter.Put("zerokey", []byte("v"), 0)
+	_ = adapter.Put(ctx, "zerokey", []byte("v"), 0)
 
 	// No TTL should be recorded.
 	if _, hasTTL := fp.ttls["zerokey"]; hasTTL {
@@ -106,11 +109,12 @@ func TestStoreAdapter_Put_ZeroTTL_UsesPut(t *testing.T) {
 }
 
 func TestStoreAdapter_Put_WithTTL_UsesPutWithTTL(t *testing.T) {
+	ctx := context.Background()
 	fp := newFakePersister()
 	adapter := auth.NewStoreAdapter(fp)
 
 	ttl := 5 * time.Minute
-	_ = adapter.Put("ttlkey", []byte("v"), ttl)
+	_ = adapter.Put(ctx, "ttlkey", []byte("v"), ttl)
 
 	if fp.ttls["ttlkey"] != ttl {
 		t.Errorf("want ttl %v, got %v", ttl, fp.ttls["ttlkey"])
@@ -118,75 +122,82 @@ func TestStoreAdapter_Put_WithTTL_UsesPutWithTTL(t *testing.T) {
 }
 
 func TestStoreAdapter_Delete_RemovesKey(t *testing.T) {
+	ctx := context.Background()
 	fp := newFakePersister()
 	adapter := auth.NewStoreAdapter(fp)
 
-	_ = adapter.Put("delkey", []byte("v"), 0)
-	if err := adapter.Delete("delkey"); err != nil {
+	_ = adapter.Put(ctx, "delkey", []byte("v"), 0)
+	if err := adapter.Delete(ctx, "delkey"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	if _, err := adapter.Get("delkey"); err == nil {
+	if _, err := adapter.Get(ctx, "delkey"); err == nil {
 		t.Error("Get after Delete should return error")
 	}
 }
 
 func TestStoreAdapter_Delete_NonexistentKey_NoError(t *testing.T) {
+	ctx := context.Background()
 	adapter := auth.NewStoreAdapter(newFakePersister())
-	if err := adapter.Delete("ghost"); err != nil {
+	if err := adapter.Delete(ctx, "ghost"); err != nil {
 		t.Errorf("Delete non-existent: %v", err)
 	}
 }
 
 func TestStoreAdapter_Get_PersisterError_Propagates(t *testing.T) {
+	ctx := context.Background()
 	fp := newFakePersister()
 	fp.err = errors.New("db failure")
 	adapter := auth.NewStoreAdapter(fp)
 
-	_, err := adapter.Get("key")
+	_, err := adapter.Get(ctx, "key")
 	if err == nil {
 		t.Error("expected error from persister, got nil")
 	}
 }
 
 func TestStoreAdapter_Put_PersisterError_Propagates(t *testing.T) {
+	ctx := context.Background()
 	fp := newFakePersister()
 	fp.err = errors.New("db failure")
 	adapter := auth.NewStoreAdapter(fp)
 
-	if err := adapter.Put("key", []byte("v"), 0); err == nil {
+	if err := adapter.Put(ctx, "key", []byte("v"), 0); err == nil {
 		t.Error("expected error from persister, got nil")
 	}
 }
 
 func TestStoreAdapter_PutWithTTL_PersisterError_Propagates(t *testing.T) {
+	ctx := context.Background()
 	fp := newFakePersister()
 	fp.err = errors.New("db failure")
 	adapter := auth.NewStoreAdapter(fp)
 
-	if err := adapter.Put("key", []byte("v"), time.Minute); err == nil {
+	if err := adapter.Put(ctx, "key", []byte("v"), time.Minute); err == nil {
 		t.Error("expected error from persister PutWithTTL, got nil")
 	}
 }
 
 func TestStoreAdapter_Delete_PersisterError_Propagates(t *testing.T) {
+	ctx := context.Background()
 	fp := newFakePersister()
 	fp.err = errors.New("db failure")
 	adapter := auth.NewStoreAdapter(fp)
 
-	if err := adapter.Delete("key"); err == nil {
+	if err := adapter.Delete(ctx, "key"); err == nil {
 		t.Error("expected error from persister Delete, got nil")
 	}
 }
 
 func TestStoreAdapter_MultipleKeysIndependent(t *testing.T) {
+	ctx := context.Background()
 	adapter := auth.NewStoreAdapter(newFakePersister())
 
-	_ = adapter.Put("a", []byte("1"), 0)
-	_ = adapter.Put("b", []byte("2"), 0)
+	_ = adapter.Put(ctx, "a", []byte("1"), 0)
+	_ = adapter.Put(ctx, "b", []byte("2"), 0)
 
-	va, _ := adapter.Get("a")
-	vb, _ := adapter.Get("b")
+	va, _ := adapter.Get(ctx, "a")
+	vb, _ := adapter.Get(ctx, "b")
 
 	if string(va) != "1" {
 		t.Errorf("key a: want '1', got %q", va)

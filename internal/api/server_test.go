@@ -492,7 +492,7 @@ func newTokenStore() *inMemoryTokenStore {
 	return &inMemoryTokenStore{data: make(map[string][]byte)}
 }
 
-func (s *inMemoryTokenStore) Get(key string) ([]byte, error) {
+func (s *inMemoryTokenStore) Get(_ context.Context, key string) ([]byte, error) {
 	v, ok := s.data[key]
 	if !ok {
 		return nil, errors.New("not found")
@@ -500,18 +500,18 @@ func (s *inMemoryTokenStore) Get(key string) ([]byte, error) {
 	return append([]byte{}, v...), nil
 }
 
-func (s *inMemoryTokenStore) Put(key string, value []byte, _ time.Duration) error {
+func (s *inMemoryTokenStore) Put(_ context.Context, key string, value []byte, _ time.Duration) error {
 	s.data[key] = append([]byte{}, value...)
 	return nil
 }
 
-func (s *inMemoryTokenStore) Delete(key string) error {
+func (s *inMemoryTokenStore) Delete(_ context.Context, key string) error {
 	delete(s.data, key)
 	return nil
 }
 
 func TestAuthMiddleware_MissingBearer_Returns401(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newTokenStore())
+	tm, _ := auth.NewTokenManager(context.Background(), newTokenStore())
 	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/jobs", nil)
@@ -524,7 +524,7 @@ func TestAuthMiddleware_MissingBearer_Returns401(t *testing.T) {
 }
 
 func TestAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
-	tm, _ := auth.NewTokenManager(newTokenStore())
+	tm, _ := auth.NewTokenManager(context.Background(), newTokenStore())
 	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/jobs", nil)
@@ -538,12 +538,12 @@ func TestAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 
 func TestAuthMiddleware_ValidToken_Passes(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	js := newMockJobStore()
 	js.jobs["j1"] = &cpb.Job{ID: "j1", Command: "ls"}
 	srv := api.NewServer(js, nil, nil, nil, tm, nil, nil, nil)
 
-	tok, err := tm.GenerateToken("user-1", "admin", time.Minute)
+	tok, err := tm.GenerateToken(context.Background(), "user-1", "admin", time.Minute)
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -644,7 +644,7 @@ func TestWsAuthMiddleware_NilTokenManager_PassesThrough(t *testing.T) {
 
 func TestWsAuthMiddleware_MissingToken_Returns401(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/ws/jobs/j1/logs", nil)
@@ -658,7 +658,7 @@ func TestWsAuthMiddleware_MissingToken_Returns401(t *testing.T) {
 
 func TestWsAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/ws/jobs/j1/logs?token=not.a.valid.jwt", nil)
@@ -671,10 +671,10 @@ func TestWsAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 
 func TestWsAuthMiddleware_ValidTokenInQueryParam_PassesThrough(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
 
-	tok, _ := tm.GenerateToken("user", "admin", time.Minute)
+	tok, _ := tm.GenerateToken(context.Background(), "user", "admin", time.Minute)
 	req := httptest.NewRequest("GET", "/ws/jobs/j1/logs?token="+tok, nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
@@ -687,10 +687,10 @@ func TestWsAuthMiddleware_ValidTokenInQueryParam_PassesThrough(t *testing.T) {
 
 func TestWsAuthMiddleware_ValidTokenInHeader_PassesThrough(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
 
-	tok, _ := tm.GenerateToken("user", "admin", time.Minute)
+	tok, _ := tm.GenerateToken(context.Background(), "user", "admin", time.Minute)
 	req := httptest.NewRequest("GET", "/ws/metrics", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rr := httptest.NewRecorder()
@@ -800,11 +800,11 @@ func TestNewServer_WithPromHandler_RegistersPrometheusRoute(t *testing.T) {
 
 func TestRevokeNode_WithValidToken_ActorFromClaims(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	nr := &mockNodeRegistry{}
 	srv := api.NewServer(newMockJobStore(), nr, nil, nil, tm, nil, nil, nil)
 
-	tok, _ := tm.GenerateToken("alice", "admin", time.Minute)
+	tok, _ := tm.GenerateToken(context.Background(), "alice", "admin", time.Minute)
 	req := httptest.NewRequest("POST", "/admin/nodes/node-xyz/revoke",
 		strings.NewReader(`{"reason":"suspect"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -822,12 +822,12 @@ func TestRevokeNode_WithValidToken_ActorFromClaims(t *testing.T) {
 // the audit path when both tokenManager and audit are configured.
 func TestSubmitJob_WithTokenAndAudit_ActorFromClaims(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	auditLog := audit.NewLogger(newAuditStore(), 0)
 	js := newMockJobStore()
 	srv := api.NewServer(js, nil, nil, auditLog, tm, nil, nil, nil)
 
-	tok, _ := tm.GenerateToken("submit-user", "admin", time.Minute)
+	tok, _ := tm.GenerateToken(context.Background(), "submit-user", "admin", time.Minute)
 	body := `{"id":"sa-job","command":"echo"}`
 	req := httptest.NewRequest("POST", "/jobs", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -867,7 +867,7 @@ func TestGetAudit_ScanError_Returns500(t *testing.T) {
 
 func TestAuthMiddleware_MissingBearer_WithAuditLog_LogsFailure(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	auditLog := audit.NewLogger(newAuditStore(), 0)
 	srv := api.NewServer(newMockJobStore(), nil, nil, auditLog, tm, nil, nil, nil)
 
@@ -882,7 +882,7 @@ func TestAuthMiddleware_MissingBearer_WithAuditLog_LogsFailure(t *testing.T) {
 
 func TestAuthMiddleware_InvalidToken_WithAuditLog_LogsFailure(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	auditLog := audit.NewLogger(newAuditStore(), 0)
 	srv := api.NewServer(newMockJobStore(), nil, nil, auditLog, tm, nil, nil, nil)
 
@@ -899,7 +899,7 @@ func TestAuthMiddleware_InvalidToken_WithAuditLog_LogsFailure(t *testing.T) {
 
 func TestWsAuthMiddleware_MissingToken_WithAuditLog_LogsFailure(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	auditLog := audit.NewLogger(newAuditStore(), 0)
 	srv := api.NewServer(newMockJobStore(), nil, nil, auditLog, tm, nil, nil, nil)
 
@@ -914,7 +914,7 @@ func TestWsAuthMiddleware_MissingToken_WithAuditLog_LogsFailure(t *testing.T) {
 
 func TestWsAuthMiddleware_InvalidToken_WithAuditLog_LogsFailure(t *testing.T) {
 	store := newTokenStore()
-	tm, _ := auth.NewTokenManager(store)
+	tm, _ := auth.NewTokenManager(context.Background(), store)
 	auditLog := audit.NewLogger(newAuditStore(), 0)
 	srv := api.NewServer(newMockJobStore(), nil, nil, auditLog, tm, nil, nil, nil)
 

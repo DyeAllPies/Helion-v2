@@ -39,6 +39,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -48,6 +49,17 @@ import (
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	pb  "github.com/DyeAllPies/Helion-v2/proto"
 )
+
+// ErrNodeNotRegistered is returned by HandleHeartbeat when the sender has not
+// completed the Register RPC. The gRPC server maps this to codes.NotFound.
+var ErrNodeNotRegistered = errors.New("registry: node not registered")
+
+// StreamRevoker can forcibly close an active gRPC bidi-stream for a given node.
+// Implemented by *grpcserver.Server; injected via Registry.SetStreamRevoker so
+// the cluster package stays free of a grpcserver import.
+type StreamRevoker interface {
+	CancelStream(nodeID string)
+}
 
 // ── Persister ─────────────────────────────────────────────────────────────────
 
@@ -138,6 +150,15 @@ type Registry struct {
 	revokedMu sync.RWMutex
 	revoked   map[string]struct{} // nodeIDs that have been revoked
 
+	streamRevokerMu sync.RWMutex
+	streamRevoker   StreamRevoker // optional; closes active heartbeat streams on revocation
+
+	certPinnerMu sync.RWMutex
+	certPinner   CertPinner // optional; enforces cert fingerprint pinning at Register time
+
+	certVerifierMu sync.RWMutex
+	certVerifier   CertVerifier // optional; verifies ML-DSA out-of-band signature at Register time
+
 	persister         Persister
 	heartbeatInterval time.Duration
 	staleAfter        time.Duration // 2 × heartbeatInterval
@@ -159,6 +180,32 @@ func NewRegistry(p Persister, heartbeatInterval time.Duration, log *slog.Logger)
 	}
 }
 
+// SetCertPinner injects a CertPinner so that Register enforces certificate
+// fingerprint pinning: the first registration stores the pin, subsequent
+// ones must present the same cert or be rejected.
+func (r *Registry) SetCertPinner(cp CertPinner) {
+	r.certPinnerMu.Lock()
+	r.certPinner = cp
+	r.certPinnerMu.Unlock()
+}
+
+// SetCertVerifier injects a CertVerifier so that Register validates the ML-DSA
+// out-of-band signature on node certificates when ML-DSA is enabled on the CA.
+func (r *Registry) SetCertVerifier(cv CertVerifier) {
+	r.certVerifierMu.Lock()
+	r.certVerifier = cv
+	r.certVerifierMu.Unlock()
+}
+
+// SetStreamRevoker injects a StreamRevoker so that RevokeNode can immediately
+// close the target node's active heartbeat stream.  Must be called before any
+// RPCs arrive; safe to call concurrently but intended for startup wiring only.
+func (r *Registry) SetStreamRevoker(sr StreamRevoker) {
+	r.streamRevokerMu.Lock()
+	r.streamRevoker = sr
+	r.streamRevokerMu.Unlock()
+}
+
 // ── Registration ──────────────────────────────────────────────────────────────
 
 // Register handles the gRPC Register RPC.
@@ -173,6 +220,49 @@ func (r *Registry) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.R
 		r.log.Warn("registry: revoked node attempted re-registration",
 			slog.String("node_id", req.NodeId))
 		return nil, fmt.Errorf("node %s is revoked: re-register with a new certificate", req.NodeId)
+	}
+
+	// Phase 4: certificate checks (pinning + ML-DSA) when the request carries
+	// DER cert bytes.
+	if len(req.Certificate) > 0 {
+		// ML-DSA out-of-band signature verification: ensures the cert was
+		// issued by this coordinator's CA (not a rogue CA with a stolen ECDSA key).
+		r.certVerifierMu.RLock()
+		cv := r.certVerifier
+		r.certVerifierMu.RUnlock()
+
+		if cv != nil {
+			if err := cv.VerifyNodeCertMLDSA(req.Certificate); err != nil {
+				r.log.Warn("registry: ML-DSA verification failed — rejecting registration",
+					slog.String("node_id", req.NodeId), slog.Any("err", err))
+				return nil, fmt.Errorf("node %s: ML-DSA signature verification failed", req.NodeId)
+			}
+		}
+
+		// Certificate pinning: enforce fingerprint consistency across
+		// re-registrations so a newly-issued cert can't silently replace the old one.
+		r.certPinnerMu.RLock()
+		cp := r.certPinner
+		r.certPinnerMu.RUnlock()
+
+		if cp != nil {
+			fp := CertFingerprint(req.Certificate)
+			stored, err := cp.GetPin(ctx, req.NodeId)
+			if err != nil {
+				// No pin stored yet — record it for future registrations.
+				if perr := cp.SetPin(ctx, req.NodeId, fp); perr != nil {
+					r.log.Error("registry: store cert pin failed",
+						slog.String("node_id", req.NodeId), slog.Any("err", perr))
+				} else {
+					r.log.Info("registry: cert pin stored",
+						slog.String("node_id", req.NodeId))
+				}
+			} else if stored != fp {
+				r.log.Warn("registry: cert fingerprint mismatch — rejecting registration",
+					slog.String("node_id", req.NodeId))
+				return nil, ErrCertFingerprintMismatch
+			}
+		}
 	}
 
 	now := time.Now()
@@ -231,35 +321,21 @@ func (r *Registry) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.R
 //
 // This method is lock-free for existing nodes.
 func (r *Registry) HandleHeartbeat(ctx context.Context, msg *pb.HeartbeatMessage) error {
-	// Use the node's reported timestamp; fall back to wall clock if zero.
-	var seen time.Time
-	if msg.Timestamp != 0 {
-		seen = time.Unix(0, msg.Timestamp)
-	} else {
-		seen = time.Now()
-	}
+	// Always use the coordinator's wall clock for last-seen. Trusting the
+	// node-reported Timestamp allows a node to spoof its health status.
+	seen := time.Now()
 
 	// Fast path: existing node — look up under RLock, then release immediately.
 	r.mu.RLock()
 	entry := r.nodes[msg.NodeId]
 	r.mu.RUnlock()
 
-	// Slow path: heartbeat arrived before Register RPC (implicit registration).
+	// Reject heartbeats from nodes that have not completed Register. Implicit
+	// registration would let a node bypass the credential exchange in Register().
 	if entry == nil {
-		r.mu.Lock()
-		// Double-check after acquiring write lock.
-		entry = r.nodes[msg.NodeId]
-		if entry == nil {
-			entry = &nodeEntry{
-				nodeID:       msg.NodeId,
-				registeredAt: seen,
-			}
-			entry.storeAddress("") // unknown until Register arrives
-			r.nodes[msg.NodeId] = entry
-			r.log.Info("registry: implicit registration via heartbeat",
-				slog.String("node_id", msg.NodeId))
-		}
-		r.mu.Unlock()
+		r.log.Warn("registry: heartbeat from unregistered node, rejecting",
+			slog.String("node_id", msg.NodeId))
+		return ErrNodeNotRegistered
 	}
 
 	// Atomic updates — no lock held from here.
@@ -389,10 +465,9 @@ func (r *Registry) CountHealthy(_ context.Context) (int, error) {
 
 // ── Revocation ────────────────────────────────────────────────────────────────
 
-// RevokeNode marks a node as revoked.  Its current gRPC stream is not
-// forcibly terminated here — the gRPC interceptor (grpcserver.RevocationCheck)
-// will return codes.Unauthenticated on the next incoming RPC from that node.
-// The node must re-register with a new node ID to reconnect.
+// RevokeNode marks a node as revoked and forcibly closes its active heartbeat
+// stream (if a StreamRevoker is wired in).  The node must re-register with a
+// new node ID to reconnect.
 func (r *Registry) RevokeNode(ctx context.Context, nodeID, reason string) error {
 	r.revokedMu.Lock()
 	r.revoked[nodeID] = struct{}{}
@@ -402,6 +477,26 @@ func (r *Registry) RevokeNode(ctx context.Context, nodeID, reason string) error 
 	r.mu.Lock()
 	delete(r.nodes, nodeID)
 	r.mu.Unlock()
+
+	// Forcibly close the node's active heartbeat stream so it receives
+	// codes.Unauthenticated without waiting for the next heartbeat interval.
+	r.streamRevokerMu.RLock()
+	sr := r.streamRevoker
+	r.streamRevokerMu.RUnlock()
+	if sr != nil {
+		sr.CancelStream(nodeID)
+	}
+
+	// Clear the cert pin so a new cert can be pinned on fresh registration.
+	r.certPinnerMu.RLock()
+	cp := r.certPinner
+	r.certPinnerMu.RUnlock()
+	if cp != nil {
+		if err := cp.DeletePin(ctx, nodeID); err != nil {
+			r.log.Warn("registry: delete cert pin failed",
+				slog.String("node_id", nodeID), slog.Any("err", err))
+		}
+	}
 
 	r.log.Warn("registry: node revoked",
 		slog.String("node_id", nodeID),

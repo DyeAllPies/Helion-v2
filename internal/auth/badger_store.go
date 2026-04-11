@@ -2,8 +2,9 @@
 //
 // BadgerDB adapter for JWT token storage.
 //
-// This file provides StoreAdapter which bridges the persistence layer
-// (which uses context.Context) to the auth.Store interface (which doesn't).
+// StoreAdapter bridges the persistence layer (context-aware) to the
+// auth.TokenStore interface, passing the caller's context through so
+// that request cancellation and deadlines are respected.
 
 package auth
 
@@ -12,8 +13,7 @@ import (
 	"time"
 )
 
-// StoreAdapter wraps persistence.Store to match auth.TokenStore interface.
-// This bridges the gap between the persistence layer and auth layer.
+// StoreAdapter wraps a persistence.Store to implement auth.TokenStore.
 type StoreAdapter struct {
 	persister interface {
 		Get(ctx context.Context, key string) ([]byte, error)
@@ -33,17 +33,17 @@ func NewStoreAdapter(persister interface {
 	return &StoreAdapter{persister: persister}
 }
 
-func (s *StoreAdapter) Get(key string) ([]byte, error) {
-	return s.persister.Get(context.Background(), key)
+func (s *StoreAdapter) Get(ctx context.Context, key string) ([]byte, error) {
+	return s.persister.Get(ctx, key)
 }
 
-func (s *StoreAdapter) Put(key string, value []byte, ttl time.Duration) error {
+func (s *StoreAdapter) Put(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	if ttl > 0 {
-		return s.persister.PutWithTTL(context.Background(), key, value, ttl)
+		return s.persister.PutWithTTL(ctx, key, value, ttl)
 	}
-	return s.persister.Put(context.Background(), key, value)
+	return s.persister.Put(ctx, key, value)
 }
 
-func (s *StoreAdapter) Delete(key string) error {
-	return s.persister.Delete(context.Background(), key)
+func (s *StoreAdapter) Delete(ctx context.Context, key string) error {
+	return s.persister.Delete(ctx, key)
 }

@@ -27,9 +27,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"os"
 	"strings"
@@ -113,6 +113,9 @@ func run(args []string) error {
 // generateID produces a unique job ID of the form job-{unix_sec}-{rand4hex}.
 // The timestamp prefix makes IDs sortable and debuggable.
 func generateID() string {
-	suffix := fmt.Sprintf("%04x", rand.Intn(0xffff)) //nolint:gosec
-	return fmt.Sprintf("job-%d-%s", time.Now().Unix(), suffix)
+	var b [2]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
+	return fmt.Sprintf("job-%d-%04x", time.Now().Unix(), b)
 }

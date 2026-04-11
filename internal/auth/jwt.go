@@ -19,18 +19,11 @@
 //
 // Root token:
 // ──────────
-// On first startup, the coordinator generates a long-lived root token with:
-//   - sub: "root"
-//   - exp: 10 years from now (effectively never expires)
-//   - role: "admin"
-//
-// The root token is:
-//   1. Printed to stdout on first start (operator must save it)
-//   2. Stored in BadgerDB at key "auth:root_token"
-//   3. Used to bootstrap all other authentication
-//
-// On subsequent starts, the coordinator loads the root token from BadgerDB
-// and does NOT generate a new one (prevents token churn).
+// On each startup the coordinator rotates the root token: the old JTI is
+// revoked, a new token is generated, and the new value is printed to stdout
+// (and optionally written to HELION_ROOT_TOKEN_FILE).  This eliminates the
+// "10-year never-expiring token" problem and ensures that a leaked token from
+// a previous run is invalidated automatically.
 //
 // Revocation:
 // ──────────
@@ -93,26 +86,26 @@ type TokenManager struct {
 }
 
 // TokenStore is the interface for BadgerDB storage operations.
+// All methods accept a context so that request cancellation and deadlines
+// propagate through to the underlying BadgerDB calls.
 type TokenStore interface {
-	Get(key string) ([]byte, error)
-	Put(key string, value []byte, ttl time.Duration) error
-	Delete(key string) error
+	Get(ctx context.Context, key string) ([]byte, error)
+	Put(ctx context.Context, key string, value []byte, ttl time.Duration) error
+	Delete(ctx context.Context, key string) error
 }
 
 // NewTokenManager creates a TokenManager with the given secret and store.
-// If the secret is nil, a new random secret is generated and stored in BadgerDB.
-func NewTokenManager(store TokenStore) (*TokenManager, error) {
-	// Try to load existing secret from BadgerDB
-	secret, err := store.Get(JWTSecretKey)
+// If no secret is found in the store, a new random secret is generated and
+// persisted for future starts.
+func NewTokenManager(ctx context.Context, store TokenStore) (*TokenManager, error) {
+	secret, err := store.Get(ctx, JWTSecretKey)
 	if err != nil {
-		// No secret exists; generate a new one
+		// No secret exists; generate a new one.
 		secret = make([]byte, 32) // 256 bits
 		if _, err := rand.Read(secret); err != nil {
 			return nil, fmt.Errorf("generate JWT secret: %w", err)
 		}
-
-		// Store the secret for future starts
-		if err := store.Put(JWTSecretKey, secret, 0); err != nil {
+		if err := store.Put(ctx, JWTSecretKey, secret, 0); err != nil {
 			return nil, fmt.Errorf("store JWT secret: %w", err)
 		}
 	}
@@ -121,9 +114,9 @@ func NewTokenManager(store TokenStore) (*TokenManager, error) {
 }
 
 // GenerateToken creates a new JWT with the given subject and role.
-// The token is valid for TokenExpiry (15 minutes) and has a unique JTI.
+// The token is valid for the given expiry and has a unique JTI.
 // The JTI is stored in BadgerDB with a TTL matching the token expiry.
-func (tm *TokenManager) GenerateToken(subject, role string, expiry time.Duration) (string, error) {
+func (tm *TokenManager) GenerateToken(ctx context.Context, subject, role string, expiry time.Duration) (string, error) {
 	now := time.Now()
 	jti := uuid.New().String()
 
@@ -143,9 +136,8 @@ func (tm *TokenManager) GenerateToken(subject, role string, expiry time.Duration
 		return "", fmt.Errorf("sign token: %w", err)
 	}
 
-	// Store JTI in BadgerDB with TTL = token expiry
 	jtiKey := JTIPrefix + jti
-	if err := tm.store.Put(jtiKey, []byte(subject), expiry); err != nil {
+	if err := tm.store.Put(ctx, jtiKey, []byte(subject), expiry); err != nil {
 		return "", fmt.Errorf("store JTI: %w", err)
 	}
 
@@ -157,16 +149,13 @@ func (tm *TokenManager) GenerateToken(subject, role string, expiry time.Duration
 //   - Signature is invalid
 //   - Token is expired
 //   - JTI does not exist in BadgerDB (token was revoked)
-func (tm *TokenManager) ValidateToken(tokenString string) (*Claims, error) {
-	// Parse and validate signature
+func (tm *TokenManager) ValidateToken(ctx context.Context, tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		// Ensure the signing method is HS256
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return tm.secret, nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("parse token: %w", err)
 	}
@@ -176,14 +165,12 @@ func (tm *TokenManager) ValidateToken(tokenString string) (*Claims, error) {
 		return nil, fmt.Errorf("invalid token claims")
 	}
 
-	// Check expiry (jwt library already does this, but double-check)
 	if time.Now().After(claims.ExpiresAt.Time) {
 		return nil, fmt.Errorf("token expired")
 	}
 
-	// Check if JTI exists in BadgerDB (not revoked)
 	jtiKey := JTIPrefix + claims.ID
-	if _, err := tm.store.Get(jtiKey); err != nil {
+	if _, err := tm.store.Get(ctx, jtiKey); err != nil {
 		return nil, fmt.Errorf("token revoked or invalid JTI")
 	}
 
@@ -192,43 +179,45 @@ func (tm *TokenManager) ValidateToken(tokenString string) (*Claims, error) {
 
 // RevokeToken revokes a token by deleting its JTI from BadgerDB.
 // After this call, ValidateToken will reject the token immediately.
-func (tm *TokenManager) RevokeToken(jti string) error {
+func (tm *TokenManager) RevokeToken(ctx context.Context, jti string) error {
 	jtiKey := JTIPrefix + jti
-	if err := tm.store.Delete(jtiKey); err != nil {
+	if err := tm.store.Delete(ctx, jtiKey); err != nil {
 		return fmt.Errorf("delete JTI: %w", err)
 	}
 	return nil
 }
 
-// GenerateRootToken creates the initial root token on first start.
-// This token has a 10-year expiry and "admin" role.
-// Returns the token string (to print to stdout) and stores it in BadgerDB.
-func (tm *TokenManager) GenerateRootToken() (string, error) {
-	// Check if root token already exists
-	existingToken, err := tm.store.Get(RootTokenKey)
-	if err == nil {
-		// Root token exists; return it without generating a new one
-		return string(existingToken), nil
+// RotateRootToken revokes the existing root token (if any) and issues a new
+// one.  It is called on every coordinator start so that a token leaked from a
+// prior run is invalidated automatically.
+// Returns the new token string so the caller can display or persist it.
+func (tm *TokenManager) RotateRootToken(ctx context.Context) (string, error) {
+	// Revoke the old token's JTI so it is immediately rejected.
+	existing, err := tm.store.Get(ctx, RootTokenKey)
+	if err == nil && len(existing) > 0 {
+		if oldJTI, err := ExtractJTI(string(existing)); err == nil {
+			// Best-effort revocation; ignore errors (token may already be expired).
+			_ = tm.RevokeToken(ctx, oldJTI)
+		}
+		_ = tm.store.Delete(ctx, RootTokenKey)
 	}
 
-	// Generate new root token
-	token, err := tm.GenerateToken("root", "admin", RootTokenExpiry)
+	token, err := tm.GenerateToken(ctx, "root", "admin", RootTokenExpiry)
 	if err != nil {
 		return "", fmt.Errorf("generate root token: %w", err)
 	}
 
-	// Store root token in BadgerDB (no TTL, persists forever)
-	if err := tm.store.Put(RootTokenKey, []byte(token), 0); err != nil {
+	if err := tm.store.Put(ctx, RootTokenKey, []byte(token), 0); err != nil {
 		return "", fmt.Errorf("store root token: %w", err)
 	}
 
 	return token, nil
 }
 
-// GetRootToken retrieves the root token from BadgerDB.
-// Returns empty string if no root token exists (should call GenerateRootToken first).
-func (tm *TokenManager) GetRootToken() (string, error) {
-	token, err := tm.store.Get(RootTokenKey)
+// GetRootToken retrieves the current root token from BadgerDB.
+// Returns an error if no root token exists.
+func (tm *TokenManager) GetRootToken(ctx context.Context) (string, error) {
+	token, err := tm.store.Get(ctx, RootTokenKey)
 	if err != nil {
 		return "", fmt.Errorf("get root token: %w", err)
 	}
@@ -251,67 +240,19 @@ func ExtractJTI(tokenString string) (string, error) {
 	return claims.ID, nil
 }
 
-// TokenStoreAdapter adapts the persistence.Store to TokenStore interface.
-// This allows us to use the existing BadgerDB store without circular deps.
-type TokenStoreAdapter struct {
-	store interface {
-		Get(ctx context.Context, key string) ([]byte, error)
-		Put(ctx context.Context, key string, value []byte) error
-		PutWithTTL(ctx context.Context, key string, value []byte, ttl time.Duration) error
-		Delete(ctx context.Context, key string) error
-	}
-}
-
-// NewTokenStoreAdapter wraps a persistence.Store for use with TokenManager.
-func NewTokenStoreAdapter(store interface {
-	Get(ctx context.Context, key string) ([]byte, error)
-	Put(ctx context.Context, key string, value []byte) error
-	PutWithTTL(ctx context.Context, key string, value []byte, ttl time.Duration) error
-	Delete(ctx context.Context, key string) error
-}) *TokenStoreAdapter {
-	return &TokenStoreAdapter{store: store}
-}
-
-// Get implements TokenStore.Get using context.Background().
-func (a *TokenStoreAdapter) Get(key string) ([]byte, error) {
-	return a.store.Get(context.Background(), key)
-}
-
-// Put implements TokenStore.Put. If ttl > 0, uses PutWithTTL.
-func (a *TokenStoreAdapter) Put(key string, value []byte, ttl time.Duration) error {
-	ctx := context.Background()
-	if ttl > 0 {
-		return a.store.PutWithTTL(ctx, key, value, ttl)
-	}
-	return a.store.Put(ctx, key, value)
-}
-
-// Delete implements TokenStore.Delete.
-func (a *TokenStoreAdapter) Delete(key string) error {
-	return a.store.Delete(context.Background(), key)
-}
-
 // PrintRootTokenInstructions prints the root token to stdout with instructions.
-// Called on coordinator first start.
+// Called on every coordinator start after RotateRootToken.
 func PrintRootTokenInstructions(token string) {
 	fmt.Println("╔════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║         HELION COORDINATOR - FIRST START                       ║")
+	fmt.Println("║         HELION COORDINATOR - ROOT TOKEN ROTATED                ║")
 	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
-	fmt.Println("║ Root API token generated. Save this token securely!            ║")
-	fmt.Println("║ It will NOT be shown again. Use it to authenticate API calls.  ║")
+	fmt.Println("║ A new root API token has been generated. Save it securely!     ║")
+	fmt.Println("║ Previous tokens are now REVOKED.                               ║")
 	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
-	fmt.Printf("║ Token: %-56s ║\n", truncate(token, 56))
+	fmt.Printf( "║ Token: %-56s ║\n", token)
 	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
 	fmt.Println("║ Usage:                                                         ║")
 	fmt.Println("║   curl -H 'Authorization: Bearer <token>' \\                    ║")
 	fmt.Println("║        https://coordinator:8443/jobs                           ║")
 	fmt.Println("╚════════════════════════════════════════════════════════════════╝")
-}
-
-// truncate truncates a string to maxLen, appending "..." if truncated.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
 }

@@ -116,22 +116,19 @@ func main() {
 	tokenStore := auth.NewStoreAdapter(persister)
 
 	// Initialize token manager
-	tokenManager, err := auth.NewTokenManager(tokenStore)
+	tokenManager, err := auth.NewTokenManager(ctx, tokenStore)
 	if err != nil {
 		log.Error("create token manager", slog.Any("err", err))
 		os.Exit(1)
 	}
 
-	// Generate root token on first start
-	rootToken, err := tokenManager.GenerateRootToken()
+	// Rotate root token on every start: revokes the previous token and issues
+	// a fresh one, so a token leaked from a prior run is immediately invalid.
+	rootToken, err := tokenManager.RotateRootToken(ctx)
 	if err != nil {
-		log.Error("generate root token", slog.Any("err", err))
+		log.Error("rotate root token", slog.Any("err", err))
 		os.Exit(1)
 	}
-
-	// Check if this is first start (token was just created vs retrieved)
-	// We check token length as a heuristic - newly generated tokens are fresh
-	// In production, you'd check a "first_start" flag in BadgerDB
 	auth.PrintRootTokenInstructions(rootToken)
 
 	// Initialize audit logger (90-day retention)
@@ -160,6 +157,18 @@ func main() {
 		log.Error("create gRPC server", slog.Any("err", err))
 		os.Exit(1)
 	}
+
+	// Wire stream revocation: when RevokeNode is called the gRPC server
+	// immediately closes the target node's active heartbeat stream.
+	registry.SetStreamRevoker(grpcSrv)
+
+	// Wire certificate pinning: first Register call stores the cert fingerprint;
+	// subsequent calls with a different cert are rejected.
+	registry.SetCertPinner(cluster.NewMemCertPinner())
+
+	// Wire ML-DSA verifier: at Register time the coordinator checks that the
+	// node cert carries a valid out-of-band ML-DSA signature from this CA.
+	registry.SetCertVerifier(bundle.CA)
 
 	go func() {
 		log.Info("gRPC server listening", slog.String("addr", grpcAddr))
@@ -230,9 +239,13 @@ func envOr(key, def string) string {
 
 func envInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			slog.Warn("invalid integer env var, using default",
+				slog.String("key", key), slog.String("value", v), slog.Int("default", def))
+			return def
 		}
+		return n
 	}
 	return def
 }
