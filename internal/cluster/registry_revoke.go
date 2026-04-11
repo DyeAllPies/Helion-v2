@@ -48,11 +48,8 @@ func (r *Registry) RevokeNode(ctx context.Context, nodeID, reason string) error 
 		slog.String("node_id", nodeID),
 		slog.String("reason", reason))
 
-	go func() {
-		_ = r.persister.AppendAudit(context.Background(),
-			"node.revoked", "coordinator", nodeID,
-			fmt.Sprintf("reason=%s", reason))
-	}()
+	r.appendAuditAsync("node.revoked", "coordinator", nodeID,
+		fmt.Sprintf("reason=%s", reason))
 	return nil
 }
 

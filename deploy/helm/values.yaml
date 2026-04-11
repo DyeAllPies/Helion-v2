@@ -41,15 +41,47 @@ coordinator:
       cpu: 500m
       memory: 512Mi
 
+  # Pod-level securityContext. fsGroup is needed so the PVC for BadgerDB
+  # is writable by the non-root user; seccompProfile applies to all
+  # containers in the pod unless overridden.
   securityContext:
     runAsNonRoot: true
     runAsUser: 1000
     fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container-level securityContext. readOnlyRootFilesystem is safe
+  # because the coordinator only writes to its PVC mount; an emptyDir
+  # is mounted at /tmp so anything the Go stdlib writes there still works.
+  # See AUDIT 2026-04-11/M3.
+  containerSecurityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
 
   serviceAccount:
     create: true
     name: ""
     annotations: {}
+
+  # NetworkPolicy restricting ingress to the coordinator.
+  # When enabled, only pods in the listed namespace (by label selector)
+  # can reach /metrics, and only matching pods can reach the HTTP/gRPC
+  # API. Disabled by default — trust the CNI or add your own policy.
+  # See AUDIT 2026-04-11/L1.
+  networkPolicy:
+    enabled: false
+    # Namespace selector for scrape sources (typically Prometheus).
+    metricsFrom:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: monitoring
+    # Namespace selector for API clients. Empty list = no API ingress
+    # from the cluster (external ingress still works via Ingress object).
+    apiFrom: []
 
 serviceMonitor:
   enabled: false
@@ -78,9 +110,28 @@ node:
       cpu: 500m
       memory: 256Mi
 
+  # Pod-level securityContext. See AUDIT 2026-04-11/M3.
   securityContext:
     runAsNonRoot: true
     runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container-level securityContext. The node agent is stateless per
+  # invocation; read-only root is fine with an emptyDir at /tmp.
+  containerSecurityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+  # Init image used to wait for the coordinator before the node starts.
+  # Parameterised so operators can pin a digest (see AUDIT 2026-04-11/M5).
+  initImage:
+    repository: busybox
+    tag: "1.36"
+    pullPolicy: IfNotPresent
 
   serviceAccount:
     create: true

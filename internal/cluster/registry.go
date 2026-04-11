@@ -98,6 +98,10 @@ type Registry struct {
 	heartbeatInterval time.Duration
 	staleAfter        time.Duration // 2 × heartbeatInterval
 	log               *slog.Logger
+
+	// auditWG tracks fire-and-forget background goroutines so Close can
+	// wait for them during graceful shutdown. See AUDIT 2026-04-11/M1.
+	auditWG sync.WaitGroup
 }
 
 // NewRegistry creates a Registry.
@@ -139,4 +143,52 @@ func (r *Registry) SetStreamRevoker(sr StreamRevoker) {
 	r.streamRevokerMu.Lock()
 	r.streamRevoker = sr
 	r.streamRevokerMu.Unlock()
+}
+
+// appendAuditAsync runs AppendAudit in a detached goroutine with a bounded
+// timeout and logs at warn on failure. Tracked by auditWG so Close can join.
+// See AUDIT 2026-04-11/M1.
+func (r *Registry) appendAuditAsync(eventType, actor, target, detail string) {
+	r.auditWG.Add(1)
+	go func() {
+		defer r.auditWG.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), auditWriteTimeout)
+		defer cancel()
+		if err := r.persister.AppendAudit(ctx, eventType, actor, target, detail); err != nil {
+			r.log.Warn("audit write failed",
+				slog.String("event", eventType),
+				slog.String("target", target),
+				slog.Any("err", err))
+		}
+	}()
+}
+
+// persistNodeAsync runs SaveNode in a detached goroutine with a bounded
+// timeout and logs on failure. Tracked by auditWG so Close drains it.
+func (r *Registry) persistNodeAsync(snap *cpb.Node) {
+	r.auditWG.Add(1)
+	go func() {
+		defer r.auditWG.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), auditWriteTimeout)
+		defer cancel()
+		if err := r.persister.SaveNode(ctx, snap); err != nil {
+			r.log.Error("registry: persist node async",
+				slog.String("node_id", snap.NodeID), slog.Any("err", err))
+		}
+	}()
+}
+
+// Close waits for in-flight audit and persist goroutines to drain, bounded
+// by timeout. Safe to call once during shutdown.
+func (r *Registry) Close(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		r.auditWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		r.log.Warn("Registry.Close: background drain timed out", slog.Duration("timeout", timeout))
+	}
 }

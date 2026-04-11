@@ -70,7 +70,7 @@ func (s *Server) handleRevokeNode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, "handleRevokeNode", resp)
 }
 
 // handleIssueToken handles POST /admin/tokens.
@@ -135,7 +135,7 @@ func (s *Server) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(IssueTokenResponse{
+	writeJSON(w, "handleIssueToken", IssueTokenResponse{
 		Token:    token,
 		Subject:  req.Subject,
 		Role:     req.Role,
@@ -180,5 +180,5 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(RevokeTokenResponse{Revoked: true, JTI: jti})
+	writeJSON(w, "handleRevokeToken", RevokeTokenResponse{Revoked: true, JTI: jti})
 }

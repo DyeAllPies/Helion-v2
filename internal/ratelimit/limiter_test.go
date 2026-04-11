@@ -358,3 +358,66 @@ func TestGarbageCollect_DoesNotEvictRecentEntry(t *testing.T) {
 		t.Errorf("GarbageCollect evicted %d entries, want 0", n)
 	}
 }
+
+// ── AUDIT 2026-04-11/M2: cap + eviction ──────────────────────────────────────
+
+// TestNodeLimiter_CapOnOverflow verifies the limiter map never exceeds
+// MaxLimiters even when more distinct node IDs are inserted, and that the
+// oldest entry is evicted on overflow. See AUDIT 2026-04-11/M2.
+func TestNodeLimiter_CapOnOverflow(t *testing.T) {
+	nl := ratelimit.NewNodeLimiter()
+
+	// Fill exactly to the cap.
+	for i := 0; i < ratelimit.MaxLimiters; i++ {
+		if err := nl.Allow(context.Background(), fmtNodeID(i)); err != nil {
+			// Rate-limit errors are irrelevant — we only care about map size.
+			_ = err
+		}
+	}
+	if got := nl.GetStats("").TotalNodes; got != ratelimit.MaxLimiters {
+		t.Fatalf("after fill, TotalNodes=%d, want %d", got, ratelimit.MaxLimiters)
+	}
+	if ev := nl.CapEvictions(); ev != 0 {
+		t.Fatalf("no evictions expected yet, got %d", ev)
+	}
+
+	// First-inserted entry should still be present.
+	firstID := fmtNodeID(0)
+	if s := nl.GetStats(firstID); s.NodeID != firstID {
+		t.Fatalf("expected first entry %q present, got %+v", firstID, s)
+	}
+
+	// One more insert must evict the oldest entry, keeping the map at cap.
+	_ = nl.Allow(context.Background(), fmtNodeID(ratelimit.MaxLimiters))
+
+	if got := nl.GetStats("").TotalNodes; got != ratelimit.MaxLimiters {
+		t.Fatalf("after overflow, TotalNodes=%d, want %d", got, ratelimit.MaxLimiters)
+	}
+	if ev := nl.CapEvictions(); ev != 1 {
+		t.Fatalf("expected 1 cap eviction, got %d", ev)
+	}
+}
+
+func fmtNodeID(i int) string {
+	// Fixed-width to make lexical comparisons deterministic, though the
+	// limiter eviction uses lastSeenNano, not keys.
+	const digits = "0123456789"
+	buf := make([]byte, 0, 8)
+	buf = append(buf, 'n')
+	if i == 0 {
+		buf = append(buf, '0')
+	} else {
+		var tmp [16]byte
+		n := 0
+		for i > 0 {
+			tmp[n] = digits[i%10]
+			i /= 10
+			n++
+		}
+		for n > 0 {
+			n--
+			buf = append(buf, tmp[n])
+		}
+	}
+	return string(buf)
+}

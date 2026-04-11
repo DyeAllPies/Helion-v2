@@ -27,6 +27,8 @@ spec:
         - name: coordinator
           image: "{{ .Values.coordinator.image.repository }}:{{ .Values.coordinator.image.tag }}"
           imagePullPolicy: {{ .Values.coordinator.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.coordinator.containerSecurityContext | nindent 12 }}
           ports:
             - name: grpc
               containerPort: {{ .Values.coordinator.service.grpcPort }}
@@ -53,14 +55,20 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.coordinator.resources | nindent 12 }}
-          {{- if .Values.coordinator.persistence.enabled }}
           volumeMounts:
+            # Writable scratch for the Go stdlib's temp files so that
+            # readOnlyRootFilesystem can be enforced. See AUDIT 2026-04-11/M3.
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.coordinator.persistence.enabled }}
             - name: db
               mountPath: {{ .Values.coordinator.env.dbPath }}
-          {{- end }}
-      {{- if .Values.coordinator.persistence.enabled }}
+            {{- end }}
       volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.coordinator.persistence.enabled }}
         - name: db
           persistentVolumeClaim:
             claimName: {{ include "helion.fullname" . }}-coordinator-db
-      {{- end }}
+        {{- end }}

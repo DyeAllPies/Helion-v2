@@ -76,17 +76,14 @@ func (s *JobStore) Transition(ctx context.Context, jobID string, to cpb.JobStatu
 		slog.String("to", to.String()),
 	)
 
-	go func() {
-		detail := fmt.Sprintf("from=%s to=%s", from, to)
-		if opts.NodeID != "" {
-			detail += " node=" + opts.NodeID
-		}
-		if snap.Error != "" {
-			detail += " error=" + snap.Error
-		}
-		_ = s.persister.AppendAudit(context.Background(),
-			"job.transition", "coordinator", jobID, detail)
-	}()
+	detail := fmt.Sprintf("from=%s to=%s", from, to)
+	if opts.NodeID != "" {
+		detail += " node=" + opts.NodeID
+	}
+	if snap.Error != "" {
+		detail += " error=" + snap.Error
+	}
+	s.appendAuditAsync("job.transition", "coordinator", jobID, detail)
 
 	return nil
 }
@@ -127,11 +124,8 @@ func (s *JobStore) MarkLost(ctx context.Context, jobID string, reason string) er
 		slog.String("reason", reason),
 	)
 
-	go func() {
-		_ = s.persister.AppendAudit(context.Background(),
-			"job.lost", "coordinator", jobID,
-			fmt.Sprintf("prev=%s reason=%s", prev, reason))
-	}()
+	s.appendAuditAsync("job.lost", "coordinator", jobID,
+		fmt.Sprintf("prev=%s reason=%s", prev, reason))
 
 	return nil
 }

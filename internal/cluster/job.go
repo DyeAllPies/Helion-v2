@@ -54,6 +54,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
@@ -129,7 +130,17 @@ type JobStore struct {
 	jobs      map[string]*cpb.Job // keyed by job ID
 	persister JobPersister
 	log       *slog.Logger
+
+	// auditWG tracks fire-and-forget background goroutines so Close can
+	// wait for them during graceful shutdown. See AUDIT 2026-04-11/M1
+	// (writes ran under context.Background() with no timeout and no
+	// shutdown join).
+	auditWG sync.WaitGroup
 }
+
+// auditWriteTimeout caps each fire-and-forget audit write so a stalled
+// persister cannot leak goroutines or hold up shutdown.
+const auditWriteTimeout = 5 * time.Second
 
 // NewJobStore creates a JobStore backed by the given persister.
 func NewJobStore(p JobPersister, log *slog.Logger) *JobStore {
@@ -140,5 +151,37 @@ func NewJobStore(p JobPersister, log *slog.Logger) *JobStore {
 		jobs:      make(map[string]*cpb.Job),
 		persister: p,
 		log:       log,
+	}
+}
+
+// appendAuditAsync runs AppendAudit in a detached goroutine with a bounded
+// timeout and logs at warn on failure. Tracked by auditWG so Close can join.
+func (s *JobStore) appendAuditAsync(eventType, actor, target, detail string) {
+	s.auditWG.Add(1)
+	go func() {
+		defer s.auditWG.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), auditWriteTimeout)
+		defer cancel()
+		if err := s.persister.AppendAudit(ctx, eventType, actor, target, detail); err != nil {
+			s.log.Warn("audit write failed",
+				slog.String("event", eventType),
+				slog.String("target", target),
+				slog.Any("err", err))
+		}
+	}()
+}
+
+// Close waits for in-flight audit writes to drain, bounded by timeout.
+// Safe to call once; subsequent calls are no-ops.
+func (s *JobStore) Close(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		s.auditWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		s.log.Warn("JobStore.Close: audit drain timed out", slog.Duration("timeout", timeout))
 	}
 }

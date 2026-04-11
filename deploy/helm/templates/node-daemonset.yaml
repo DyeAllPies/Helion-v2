@@ -21,10 +21,14 @@ spec:
       serviceAccountName: {{ include "helion.node.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.node.securityContext | nindent 8 }}
-      # Wait for coordinator to be reachable before starting
+      # Wait for coordinator to be reachable before starting.
+      # Init image is parameterised so operators can pin a digest. See AUDIT 2026-04-11/M5.
       initContainers:
         - name: wait-for-coordinator
-          image: busybox:1.36
+          image: "{{ .Values.node.initImage.repository }}:{{ .Values.node.initImage.tag }}"
+          imagePullPolicy: {{ .Values.node.initImage.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.node.containerSecurityContext | nindent 12 }}
           command:
             - sh
             - -c
@@ -36,6 +40,8 @@ spec:
         - name: node
           image: "{{ .Values.node.image.repository }}:{{ .Values.node.image.tag }}"
           imagePullPolicy: {{ .Values.node.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.node.containerSecurityContext | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.node.env.port | int }}
@@ -60,6 +66,14 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.node.resources | nindent 12 }}
+          volumeMounts:
+            # Writable scratch for the Go stdlib's temp files so that
+            # readOnlyRootFilesystem can be enforced. See AUDIT 2026-04-11/M3.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
       {{- with .Values.node.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}

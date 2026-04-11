@@ -188,7 +188,7 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(jobToResponse(job))
+	writeJSON(w, "handleSubmitJob", jobToResponse(job))
 }
 
 func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +227,7 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(jobToResponse(job))
+	writeJSON(w, "handleGetJob", jobToResponse(job))
 }
 
 // validJobStatuses is the set of status strings accepted by the ?status= query
@@ -297,5 +297,5 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, "handleListJobs", resp)
 }

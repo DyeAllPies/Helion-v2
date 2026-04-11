@@ -40,6 +40,7 @@ package ratelimit
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"sync"
@@ -64,14 +65,28 @@ const (
 
 	// EnvRateLimitRPS is the environment variable for rate limit config.
 	EnvRateLimitRPS = "HELION_RATE_LIMIT_RPS"
+
+	// MaxLimiters bounds the size of the per-node limiter map so an
+	// attacker cannot exhaust memory by spoofing unique node IDs faster
+	// than the background GC can evict them. See AUDIT 2026-04-11/M2.
+	//
+	// The limiter is consulted before authentication completes (rate
+	// limiting must run pre-auth to protect the auth path itself), so the
+	// map is reachable from unauthenticated peers. Background GC runs on
+	// a 5-minute ticker, which is plenty of time to insert millions of
+	// entries without a hard cap. On overflow we evict the single entry
+	// with the oldest lastSeenNano — stale, genuine nodes take priority
+	// over new arrivals from the attacker.
+	MaxLimiters = 10_000
 )
 
 // NodeLimiter manages per-node rate limiters.
 type NodeLimiter struct {
-	mu       sync.RWMutex
-	limiters map[string]*limiterEntry
-	rate     float64 // jobs per second
-	burst    int     // burst size (= rate for simplicity)
+	mu              sync.RWMutex
+	limiters        map[string]*limiterEntry
+	rate            float64 // jobs per second
+	burst           int     // burst size (= rate for simplicity)
+	capEvictions    atomic.Int64
 }
 
 // NewNodeLimiter creates a NodeLimiter with the configured rate.
@@ -93,6 +108,10 @@ func NewNodeLimiter() *NodeLimiter {
 }
 
 // getOrCreate returns the limiterEntry for nodeID, creating one if absent.
+//
+// If the map is at MaxLimiters capacity on insertion, the entry with the
+// oldest lastSeenNano is evicted to make room. This bounds memory use at
+// O(MaxLimiters) independent of attacker behaviour. See AUDIT 2026-04-11/M2.
 func (nl *NodeLimiter) getOrCreate(nodeID string) *limiterEntry {
 	nl.mu.RLock()
 	entry, exists := nl.limiters[nodeID]
@@ -105,12 +124,39 @@ func (nl *NodeLimiter) getOrCreate(nodeID string) *limiterEntry {
 	if entry, exists = nl.limiters[nodeID]; exists {
 		return entry
 	}
+	if len(nl.limiters) >= MaxLimiters {
+		nl.evictOldestLocked()
+	}
 	entry = &limiterEntry{
 		limiter:      rate.NewLimiter(rate.Limit(nl.rate), nl.burst),
 		lastSeenNano: time.Now().UnixNano(),
 	}
 	nl.limiters[nodeID] = entry
 	return entry
+}
+
+// evictOldestLocked removes the limiter with the oldest lastSeenNano.
+// Caller must hold nl.mu for writing.
+func (nl *NodeLimiter) evictOldestLocked() {
+	var oldestKey string
+	var oldestNano int64 = math.MaxInt64
+	for k, v := range nl.limiters {
+		n := atomic.LoadInt64(&v.lastSeenNano)
+		if n < oldestNano {
+			oldestNano = n
+			oldestKey = k
+		}
+	}
+	if oldestKey != "" {
+		delete(nl.limiters, oldestKey)
+		nl.capEvictions.Add(1)
+	}
+}
+
+// CapEvictions returns the total number of entries evicted by the cap
+// check in getOrCreate. Exposed for metrics and tests.
+func (nl *NodeLimiter) CapEvictions() int64 {
+	return nl.capEvictions.Load()
 }
 
 // Allow checks if a request from nodeID is allowed under the rate limit.

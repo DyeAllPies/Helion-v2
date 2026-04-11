@@ -1,0 +1,39 @@
+{{- if .Values.coordinator.networkPolicy.enabled }}
+# NetworkPolicy restricting ingress to the coordinator.
+# /metrics on the HTTP port is open only to the metrics scrape sources;
+# the API ports are open only to configured client sources.
+# See AUDIT 2026-04-11/L1.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "helion.fullname" . }}-coordinator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "helion.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "helion.coordinator.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Metrics scrape ingress.
+    {{- with .Values.coordinator.networkPolicy.metricsFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.coordinator.service.httpPort }}
+    {{- end }}
+    # API ingress (HTTP + gRPC) from explicitly allowed clients.
+    {{- with .Values.coordinator.networkPolicy.apiFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.coordinator.service.httpPort }}
+        - protocol: TCP
+          port: {{ $.Values.coordinator.service.grpcPort }}
+    {{- end }}
+{{- end }}

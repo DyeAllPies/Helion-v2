@@ -1,7 +1,36 @@
-# helion-v2 Security & Code Quality Audit
+# helion-v2 Security & Code Quality Audit — Template
 
-**Date:** YYYY-MM-DD  
-**Auditor:** _name or tool_  
+**This file is a template, not an audit record.** When starting a new
+audit, copy this file to `docs/audits/<YYYY-MM-DD>.md` (use today's
+calendar date as the audit ID) and work in the copy. Prior audits live
+under `docs/audits/` as a historical archive — never overwrite them.
+
+> **Instructions to an AI assistant running an audit:**
+>
+> 1. Pick today's date in `YYYY-MM-DD` form. This is the **audit ID**.
+> 2. Create a new file at `docs/audits/<audit-id>.md` with this template.
+>    If that filename already exists (two audits in one day), append
+>    `-a`, `-b`, … to disambiguate: e.g. `2026-04-11-b.md`.
+> 3. Fill in the Date, Auditor, and Overall Risk Level fields at the top
+>    of the new file.
+> 4. When referencing a finding from code comments, commit messages,
+>    tests, or other audit docs, **always include the audit ID**. Use
+>    the format `AUDIT <audit-id>/<severity-letter><n>`. Examples:
+>      - `AUDIT 2026-04-11/M1`
+>      - `AUDIT 2026-05-02-b/H3`
+>      - `AUDIT 2026-06-01/L4 (fixed)`
+>    This disambiguates findings across audits — `M1` alone collides
+>    with every previous audit's first Medium.
+> 5. Do not delete or rename files under `docs/audits/`. Closed audits
+>    are a historical record of both problems and fixes.
+> 6. Leave this template (`docs/AUDIT.md`) untouched — it stays empty
+>    so the next auditor has a clean starting point.
+
+---
+
+**Audit ID:** _YYYY-MM-DD (matches the filename under `docs/audits/`)_
+**Date:** _YYYY-MM-DD_
+**Auditor:** _name or tool_
 **Overall Risk Level:** _CRITICAL | HIGH | MEDIUM | LOW_
 
 _One-paragraph executive summary: the shape of the system, the headline
@@ -30,21 +59,28 @@ immediately below the table._
 
 1. **One finding per subsection.** Use the ID conventions `C1..Cn`, `H1..Hn`,
    `M1..Mn`, `L1..Ln` for Critical / High / Medium / Low. Test gaps use
-   `T1..Tn`. IDs are stable for the life of the audit — never reuse a
-   retired ID.
-2. **Mark fixed findings with a ✅.** Prepend `✅ ` to the heading and append
-   `*(fixed YYYY-MM-DD)*`. Leave the full text in place so the audit is a
-   historical record of both the problem and the fix.
-3. **Every finding has a File line.** Point at a specific path + symbol, not
-   a whole package. Reviewers should be able to jump straight to the code.
-4. **Every fix cites its tests.** A finding is not closed until at least one
-   test exercises the fixed branch. List the test names in the fix block.
-5. **Deployment / configuration notes** at the bottom are a separate bucket:
-   items that are known gaps but are explicitly future work, not audit
-   findings. Don't mix them with the severity-tracked findings above.
-6. **Remediation Plan** is for pre-implementation design. Once a finding
-   lands, remove its spec from that section and rely on the ✅-marked
-   finding block as the source of truth.
+   `T1..Tn`. IDs are stable for the life of this audit — never reuse a
+   retired ID within the same audit file.
+2. **External references use the audit ID.** When you mention a finding
+   outside this file (code comment, commit message, another audit doc),
+   always prefix with the audit ID: `AUDIT 2026-04-11/M1`, not bare `M1`.
+   This prevents collision with the same severity letter in other audits.
+3. **Mark fixed findings with a ✅.** Prepend `✅ ` to the heading and
+   append `*(fixed YYYY-MM-DD)*`. Leave the full text in place so the
+   audit is a historical record of both the problem and the fix.
+4. **Every finding has a File line.** Point at a specific path + symbol,
+   not a whole package. Reviewers should be able to jump straight to
+   the code.
+5. **Every fix cites its tests.** A finding is not closed until at
+   least one test exercises the fixed branch. List the test names in
+   the fix block.
+6. **Deployment / configuration notes** at the bottom are a separate
+   bucket: items that are known gaps but are explicitly future work,
+   not audit findings. Don't mix them with the severity-tracked
+   findings above.
+7. **Remediation Plan** is for pre-implementation design. Once a
+   finding lands, remove its spec from that section and rely on the
+   ✅-marked finding block as the source of truth.
 
 ---
 

@@ -103,16 +103,12 @@ func (r *Registry) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.R
 	)
 
 	// Persist and audit asynchronously — RPC response does not wait for disk.
-	go func() {
-		snap := entry.snapshot(r.staleAfter)
-		if err := r.persister.SaveNode(context.Background(), snap); err != nil {
-			r.log.Error("registry: persist on register",
-				slog.String("node_id", req.NodeId), slog.Any("err", err))
-		}
-		_ = r.persister.AppendAudit(context.Background(),
-			"node.registered", req.NodeId, req.NodeId,
-			fmt.Sprintf("address=%s new=%v", req.Address, !exists))
-	}()
+	// Both writes run under a bounded timeout and are tracked by auditWG so
+	// Close can drain them during shutdown (AUDIT 2026-04-11/M1).
+	snap := entry.snapshot(r.staleAfter)
+	r.persistNodeAsync(snap)
+	r.appendAuditAsync("node.registered", req.NodeId, req.NodeId,
+		fmt.Sprintf("address=%s new=%v", req.Address, !exists))
 
 	// SignedCertificate is populated by the auth layer (Phase 4).
 	return &pb.RegisterResponse{NodeId: req.NodeId}, nil

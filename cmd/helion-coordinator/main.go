@@ -134,8 +134,25 @@ func main() {
 	// Rotation revokes the previous token so a leaked token from a prior run is
 	// immediately invalid. Disable rotation only when a stable token is required
 	// (e.g. in automation that cannot capture stdout on every restart).
+	//
+	// AUDIT 2026-04-11/L4 (fixed): parse the env var strictly with
+	// strconv.ParseBool so that HELION_ROTATE_TOKEN=0 / no / False also
+	// disable rotation as the operator expects. Unknown values are a
+	// fatal startup error rather than the previous
+	// "anything-not-literal-false rotates" behaviour, so a typo surfaces
+	// immediately.
+	rotateToken := true
+	if v := os.Getenv("HELION_ROTATE_TOKEN"); v != "" {
+		parsed, perr := strconv.ParseBool(v)
+		if perr != nil {
+			log.Error("invalid HELION_ROTATE_TOKEN value",
+				slog.String("value", v), slog.Any("err", perr))
+			os.Exit(1)
+		}
+		rotateToken = parsed
+	}
 	var rootToken string
-	if envOr("HELION_ROTATE_TOKEN", "true") != "false" {
+	if rotateToken {
 		rootToken, err = tokenManager.RotateRootToken(ctx)
 		if err != nil {
 			log.Error("rotate root token", slog.Any("err", err))
@@ -282,6 +299,12 @@ func main() {
 	if err := apiSrv.Shutdown(shutdownCtx); err != nil {
 		log.Error("HTTP server shutdown", slog.Any("err", err))
 	}
+
+	// AUDIT 2026-04-11/M1 (fixed): drain in-flight audit writes and async
+	// node persists before returning so the last-second events are not
+	// lost on SIGTERM.
+	jobs.Close(5 * time.Second)
+	registry.Close(5 * time.Second)
 
 	log.Info("helion-coordinator stopped")
 }

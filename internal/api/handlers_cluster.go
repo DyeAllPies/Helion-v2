@@ -10,7 +10,6 @@
 package api
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -35,13 +34,13 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	if err := s.readiness.Ping(); err != nil {
 		slog.Error("readiness ping failed", slog.Any("err", err))
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "db not ready"})
+		writeJSON(w, "handleReadyz", map[string]string{"error": "db not ready"})
 		return
 	}
 
 	if s.readiness.RegistryLen() == 0 {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no nodes registered"})
+		writeJSON(w, "handleReadyz", map[string]string{"error": "no nodes registered"})
 		return
 	}
 
@@ -68,7 +67,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, "handleListNodes", resp)
 }
 
 func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +84,7 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(metrics)
+	writeJSON(w, "handleGetMetrics", metrics)
 }
 
 func (s *Server) handleGetAudit(w http.ResponseWriter, r *http.Request) {
@@ -152,5 +151,5 @@ func (s *Server) handleGetAudit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, "handleGetAudit", resp)
 }

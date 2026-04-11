@@ -16,4 +16,9 @@ COPY --from=builder /helion-coordinator /usr/local/bin/helion-coordinator
 
 USER helion
 EXPOSE 9090
+# Container-level liveness for non-k8s deployers (Compose, Swarm, Nomad).
+# Kubernetes uses its own probes in the Helm chart and ignores this.
+# See AUDIT 2026-04-11/M4.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -qO- http://localhost:8080/healthz || exit 1
 ENTRYPOINT ["/usr/local/bin/helion-coordinator"]

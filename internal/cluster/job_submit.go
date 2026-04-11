@@ -42,11 +42,8 @@ func (s *JobStore) Submit(ctx context.Context, j *cpb.Job) error {
 		slog.String("command", j.Command),
 	)
 
-	go func() {
-		_ = s.persister.AppendAudit(context.Background(),
-			"job.submitted", "coordinator", j.ID,
-			fmt.Sprintf("command=%q", j.Command))
-	}()
+	s.appendAuditAsync("job.submitted", "coordinator", j.ID,
+		fmt.Sprintf("command=%q", j.Command))
 
 	return nil
 }

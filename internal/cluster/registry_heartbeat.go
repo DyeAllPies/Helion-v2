@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"time"
 
-	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
 )
 
@@ -51,14 +50,9 @@ func (r *Registry) HandleHeartbeat(ctx context.Context, msg *pb.HeartbeatMessage
 	entry.storeLastSeen(seen)
 	entry.storeRunning(msg.RunningJobs)
 
-	// Persist asynchronously.
-	go func() {
-		snap := entry.snapshot(r.staleAfter)
-		if err := r.persister.SaveNode(context.Background(), snap); err != nil {
-			r.log.Error("registry: persist on heartbeat",
-				slog.String("node_id", msg.NodeId), slog.Any("err", err))
-		}
-	}()
+	// Persist asynchronously. See AUDIT 2026-04-11/M1 — timeout-bounded
+	// and drained by Close.
+	r.persistNodeAsync(entry.snapshot(r.staleAfter))
 
 	return nil
 }
@@ -91,15 +85,9 @@ func (r *Registry) PruneStaleNodes(ctx context.Context) []string {
 					now.Sub(ls).Round(time.Second)),
 			)
 
-			go func(n *cpb.Node) {
-				if err := r.persister.SaveNode(ctx, n); err != nil {
-					r.log.Error("registry: persist stale node",
-						slog.String("node_id", n.NodeID), slog.Any("err", err))
-				}
-				_ = r.persister.AppendAudit(ctx,
-					"node.stale", "coordinator", n.NodeID,
-					fmt.Sprintf("no heartbeat for >%v", r.staleAfter))
-			}(snap)
+			r.persistNodeAsync(snap)
+			r.appendAuditAsync("node.stale", "coordinator", snap.NodeID,
+				fmt.Sprintf("no heartbeat for >%v", r.staleAfter))
 		}
 	}
 	return stale
