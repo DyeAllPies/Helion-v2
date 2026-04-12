@@ -22,6 +22,7 @@ services:
       - HELION_ROTATE_TOKEN=false
       - HELION_TOKEN_FILE=/app/state/root-token
       - HELION_DB_PATH=/app/state/db
+      - HELION_EXTRA_SANS=coordinator
     volumes:
       - ./state:/app/state
       - ./logs:/app/logs

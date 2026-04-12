@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -94,6 +95,7 @@ func NewCA() (*CA, error) {
 // IssueNodeCert signs a new ECDSA P-256 certificate for a node.
 // The nodeID is used as both the CommonName and a DNS SAN.
 // 127.0.0.1 and ::1 are added as IP SANs for local development.
+// Additional DNS SANs can be injected via HELION_EXTRA_SANS (comma-separated).
 func (ca *CA) IssueNodeCert(nodeID string) (certPEM, keyPEM []byte, err error) {
 	nodeKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -106,7 +108,7 @@ func (ca *CA) IssueNodeCert(nodeID string) (certPEM, keyPEM []byte, err error) {
 			Organization: []string{"Helion Cluster"},
 			CommonName:   nodeID,
 		},
-		DNSNames: []string{nodeID, "localhost"},
+		DNSNames: appendExtraSANs([]string{nodeID, "localhost"}),
 		IPAddresses: []net.IP{
 			net.ParseIP("127.0.0.1"),
 			net.ParseIP("::1"),
@@ -175,4 +177,22 @@ func (ca *CA) NodeTLSConfig(certPEM, keyPEM []byte, serverName string) (*tls.Con
 		ServerName:   serverName,
 		MinVersion:   tls.VersionTLS13,
 	}, nil
+}
+
+// appendExtraSANs appends any DNS names from the HELION_EXTRA_SANS env var
+// (comma-separated) to the base list.  This allows Docker Compose service
+// names like "coordinator" to be included in the certificate without
+// hardcoding them.
+func appendExtraSANs(base []string) []string {
+	v := os.Getenv("HELION_EXTRA_SANS")
+	if v == "" {
+		return base
+	}
+	for _, s := range strings.Split(v, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			base = append(base, s)
+		}
+	}
+	return base
 }
