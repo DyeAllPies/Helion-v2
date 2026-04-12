@@ -107,13 +107,35 @@ func main() {
 	defer rt.Close()
 
 	// ── TLS certificate bundle (bootstrap) ────────────────────────────────────
-	// The node creates a self-signed bundle for the initial coordinator
-	// connection. The coordinator CA-signs the node cert on registration;
-	// certificate rotation (Phase 5) will handle the full bootstrap flow.
-	bundle, err := auth.NewCoordinatorBundle()
-	if err != nil {
-		log.Error("create TLS bundle", slog.Any("err", err))
-		os.Exit(1)
+	// If HELION_CA_CERT points to the coordinator's exported CA cert, the node
+	// trusts that CA for TLS verification.  Otherwise it creates a fully
+	// self-signed bundle (single-process / test mode).
+	var (
+		bundle *auth.Bundle
+		err    error
+	)
+	if caPath := os.Getenv("HELION_CA_CERT"); caPath != "" {
+		// Wait for the coordinator to write the CA file (may not exist yet
+		// if the coordinator is still starting up).
+		for i := 0; i < 30; i++ {
+			bundle, err = auth.NewNodeBundleFromCAFile(caPath)
+			if err == nil {
+				break
+			}
+			log.Info("waiting for CA cert file", slog.String("path", caPath), slog.Int("attempt", i+1))
+			time.Sleep(2 * time.Second)
+		}
+		if err != nil {
+			log.Error("load CA cert", slog.String("path", caPath), slog.Any("err", err))
+			os.Exit(1)
+		}
+		log.Info("using coordinator CA cert", slog.String("path", caPath))
+	} else {
+		bundle, err = auth.NewCoordinatorBundle()
+		if err != nil {
+			log.Error("create TLS bundle", slog.Any("err", err))
+			os.Exit(1)
+		}
 	}
 
 	// ── coordinator registration ───────────────────────────────────────────────

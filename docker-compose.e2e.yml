@@ -23,6 +23,7 @@ services:
       - HELION_TOKEN_FILE=/app/state/root-token
       - HELION_DB_PATH=/app/state/db
       - HELION_EXTRA_SANS=coordinator
+      - HELION_CA_FILE=/app/state/ca.pem
     volumes:
       - ./state:/app/state
       - ./logs:/app/logs
@@ -32,9 +33,15 @@ services:
       - PORT=8080
       - HELION_COORDINATOR=coordinator:9090
       - HELION_ALLOW_ISOLATION=false
+      - HELION_CA_CERT=/app/state/ca.pem
+    volumes:
+      - ./state:/app/state
 
   node2:
     environment:
       - PORT=8081
       - HELION_COORDINATOR=coordinator:9090
       - HELION_ALLOW_ISOLATION=false
+      - HELION_CA_CERT=/app/state/ca.pem
+    volumes:
+      - ./state:/app/state

@@ -114,6 +114,15 @@ func main() {
 		slog.String("kem", "X25519+ML-KEM-768"),
 		slog.String("signature", "ECDSA+ML-DSA-65"))
 
+	// ── Export CA cert for node agents in separate containers ─────────────
+	if caFile := os.Getenv("HELION_CA_FILE"); caFile != "" {
+		if err := auth.WriteCAFile(bundle.CA.CertPEM, caFile); err != nil {
+			log.Error("write CA file", slog.Any("err", err))
+			os.Exit(1)
+		}
+		log.Info("CA cert exported", slog.String("path", caFile))
+	}
+
 	// ── Phase 4: Initialize Authentication & Audit ───────────────────────
 	log.Info("initializing Phase 4 security components")
 

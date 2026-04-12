@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"net"
@@ -90,6 +91,22 @@ func NewCA() (*CA, error) {
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 
 	return &CA{Cert: cert, CertPEM: certPEM, key: key}, nil
+}
+
+// NewCAFromPEM reconstructs a read-only CA from a PEM-encoded certificate.
+// The returned CA has no private key and cannot sign new certificates, but it
+// can be used as a trust anchor (RootCAs) for TLS verification. This is how
+// node agents running in separate containers verify the coordinator's cert.
+func NewCAFromPEM(certPEM []byte) (*CA, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("failed to decode CA PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse CA cert: %w", err)
+	}
+	return &CA{Cert: cert, CertPEM: certPEM}, nil
 }
 
 // IssueNodeCert signs a new ECDSA P-256 certificate for a node.
