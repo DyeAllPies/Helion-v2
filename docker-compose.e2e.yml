@@ -27,12 +27,17 @@ services:
       - ./logs:/app/logs
 
   node1:
+    # Override: remove host port binding (base has 8080:8080 which conflicts
+    # with coordinator HTTP on host:8080).  Nodes only need to be reachable
+    # within the Docker network, not from the host.
+    ports: []
     environment:
       - PORT=8080
       - HELION_COORDINATOR=coordinator:9090
       - HELION_ALLOW_ISOLATION=false
 
   node2:
+    ports: []
     environment:
       - PORT=8081
       - HELION_COORDINATOR=coordinator:9090
