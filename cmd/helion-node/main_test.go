@@ -125,6 +125,52 @@ func TestLoadNodeConfig_IDDerivedFromHostnameAndPort(t *testing.T) {
 	}
 }
 
+// ── splitCertKeyPEM ──────────────────────────────────────────────────────────
+
+func TestSplitCertKeyPEM_ValidPayload(t *testing.T) {
+	certBlock := "-----BEGIN CERTIFICATE-----\nMIIBxjCCAW2g\n-----END CERTIFICATE-----\n"
+	keyBlock := "-----BEGIN EC PRIVATE KEY-----\nMHQCAQEE\n-----END EC PRIVATE KEY-----\n"
+	payload := []byte(certBlock + keyBlock)
+
+	cert, key := splitCertKeyPEM(payload)
+	if len(cert) == 0 {
+		t.Error("expected non-empty cert PEM")
+	}
+	if len(key) == 0 {
+		t.Error("expected non-empty key PEM")
+	}
+}
+
+func TestSplitCertKeyPEM_EmptyPayload(t *testing.T) {
+	cert, key := splitCertKeyPEM(nil)
+	if len(cert) != 0 || len(key) != 0 {
+		t.Errorf("empty payload should return empty cert/key, got cert=%d key=%d", len(cert), len(key))
+	}
+}
+
+func TestSplitCertKeyPEM_CertOnly(t *testing.T) {
+	certBlock := "-----BEGIN CERTIFICATE-----\nMIIBxjCCAW2g\n-----END CERTIFICATE-----\n"
+	cert, key := splitCertKeyPEM([]byte(certBlock))
+	if len(cert) == 0 {
+		t.Error("expected cert PEM")
+	}
+	if len(key) != 0 {
+		t.Error("expected empty key PEM for cert-only payload")
+	}
+}
+
+func TestSplitCertKeyPEM_PrivateKeyType(t *testing.T) {
+	// PRIVATE KEY (PKCS#8) should also be recognized.
+	keyBlock := "-----BEGIN PRIVATE KEY-----\nMIGH\n-----END PRIVATE KEY-----\n"
+	cert, key := splitCertKeyPEM([]byte(keyBlock))
+	if len(cert) != 0 {
+		t.Error("expected empty cert for key-only payload")
+	}
+	if len(key) == 0 {
+		t.Error("expected PRIVATE KEY to be recognized")
+	}
+}
+
 // ── selectRuntime ─────────────────────────────────────────────────────────────
 
 func TestSelectRuntime_DefaultReturnsGoRuntime(t *testing.T) {

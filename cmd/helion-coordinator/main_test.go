@@ -120,6 +120,37 @@ func TestParseNodePins_SkipsEmptyEntries(t *testing.T) {
 	}
 }
 
+// ── coordinatorReadiness ─────────────────────────────────────────────────────
+
+type stubDB struct{ err error }
+
+func (s *stubDB) Ping() error { return s.err }
+
+type stubReg struct{ n int }
+
+func (s *stubReg) Len() int { return s.n }
+
+func TestCoordinatorReadiness_Ping_DelegatesError(t *testing.T) {
+	r := &coordinatorReadiness{db: &stubDB{err: os.ErrClosed}, reg: &stubReg{n: 0}}
+	if err := r.Ping(); err != os.ErrClosed {
+		t.Errorf("want os.ErrClosed, got %v", err)
+	}
+}
+
+func TestCoordinatorReadiness_Ping_NilOnSuccess(t *testing.T) {
+	r := &coordinatorReadiness{db: &stubDB{}, reg: &stubReg{n: 0}}
+	if err := r.Ping(); err != nil {
+		t.Errorf("want nil, got %v", err)
+	}
+}
+
+func TestCoordinatorReadiness_RegistryLen(t *testing.T) {
+	r := &coordinatorReadiness{db: &stubDB{}, reg: &stubReg{n: 5}}
+	if got := r.RegistryLen(); got != 5 {
+		t.Errorf("want 5, got %d", got)
+	}
+}
+
 // ── isLowerHex ────────────────────────────────────────────────────────────────
 
 func TestIsLowerHex(t *testing.T) {
