@@ -4,7 +4,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 
 import { ApiService } from './api.service';
-import { Job, JobsPage, Node, ClusterMetrics, AuditPage } from '../../shared/models';
+import { Job, JobsPage, ClusterMetrics, AuditPage } from '../../shared/models';
 
 // API response format (what the coordinator actually returns)
 const mockApiNode = {
@@ -12,14 +12,6 @@ const mockApiNode = {
   health: 'healthy', last_seen: new Date().toISOString(),
   running_jobs: 1, cpu_percent: 20, mem_percent: 40,
   registered_at: new Date().toISOString(),
-};
-
-// Dashboard model format (what the components expect after mapping)
-const mockNode: Node = {
-  node_id: 'n1', address: '10.0.0.1:9090',
-  healthy: true, last_seen: mockApiNode.last_seen,
-  running_jobs: 1, cpu_percent: 20, mem_percent: 40,
-  registered_at: mockApiNode.registered_at,
 };
 
 const mockJob: Job = {
