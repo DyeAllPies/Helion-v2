@@ -68,7 +68,12 @@ log "Waiting for healthy nodes..."
 for i in $(seq 1 20); do
   HEALTHY=$(curl -sf -H "Authorization: Bearer $TOKEN" \
     http://127.0.0.1:8080/nodes 2>/dev/null \
-    | python3 -c "import sys,json; d=json.load(sys.stdin); print(sum(1 for n in d.get('nodes',d) if n.get('healthy')))" 2>/dev/null || echo 0)
+    | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+nodes=d.get('nodes',d) if isinstance(d,dict) else d
+print(sum(1 for n in nodes if n.get('healthy') or n.get('health')=='healthy'))
+" 2>/dev/null || echo 0)
   if [ "$HEALTHY" -ge 1 ]; then
     log "$HEALTHY healthy node(s) registered."
     break

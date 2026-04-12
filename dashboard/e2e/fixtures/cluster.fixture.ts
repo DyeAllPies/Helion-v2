@@ -83,8 +83,9 @@ export async function waitForNodes(
       if (res.ok) {
         const body = await res.json();
         // GET /nodes returns { nodes: [...], total: N }
-        const nodes = (body.nodes ?? body) as Array<{ healthy: boolean }>;
-        const healthy = nodes.filter(n => n.healthy).length;
+        // Node health field is "health":"healthy" (string), not "healthy":true (boolean)
+        const nodes = (body.nodes ?? body) as Array<{ healthy?: boolean; health?: string }>;
+        const healthy = nodes.filter(n => n.healthy || n.health === 'healthy').length;
         if (healthy >= count) return;
       }
     } catch {
