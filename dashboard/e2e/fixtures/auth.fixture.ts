@@ -34,10 +34,11 @@ export async function authenticate(page: Page): Promise<void> {
 
 /** Map of route paths to sidebar link text for Angular router navigation. */
 const NAV_LINKS: Record<string, string> = {
-  '/nodes':   'Nodes',
-  '/jobs':    'Jobs',
-  '/metrics': 'Metrics',
-  '/audit':   'Audit',
+  '/nodes':     'Nodes',
+  '/jobs':      'Jobs',
+  '/workflows': 'Workflows',
+  '/metrics':   'Metrics',
+  '/audit':     'Audit',
 };
 
 /**

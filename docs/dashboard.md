@@ -44,7 +44,7 @@ dashboard/
 │   ├── fixtures/
 │   │   ├── cluster.fixture.ts   # Token reader, health/node waiters, job submitter
 │   │   └── auth.fixture.ts      # Login-via-textarea Playwright fixture
-│   └── specs/                   # 78 Playwright E2E test specs (6 files)
+│   └── specs/                   # 95 Playwright E2E test specs (6 files)
 ├── playwright.config.ts         # Playwright config (Chromium, auto-starts ng serve)
 ├── Dockerfile                   # Two-stage: Node builder → Nginx runtime
 ├── nginx.conf                   # SPA serving + /api and /ws reverse proxy to coordinator

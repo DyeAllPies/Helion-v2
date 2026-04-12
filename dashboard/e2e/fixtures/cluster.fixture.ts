@@ -116,3 +116,49 @@ export async function submitJob(
   }
   return res.json();
 }
+
+/** Workflow job definition for submitWorkflow. */
+interface WorkflowJobDef {
+  name: string;
+  command: string;
+  args?: string[];
+  depends_on?: string[];
+  condition?: string;
+}
+
+/**
+ * Submit a workflow via the coordinator REST API and return the created Workflow.
+ */
+export async function submitWorkflow(
+  token: string,
+  payload: { id: string; name: string; jobs: WorkflowJobDef[] },
+): Promise<{ id: string; status: string; jobs: Array<{ name: string; job_id: string; job_status: string }> }> {
+  const res = await fetch(`${API_URL}/workflows`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`POST /workflows failed ${res.status}: ${await res.text()}`);
+  }
+  return res.json();
+}
+
+/**
+ * Cancel a workflow via the coordinator REST API.
+ */
+export async function cancelWorkflow(
+  token: string,
+  workflowId: string,
+): Promise<void> {
+  const res = await fetch(`${API_URL}/workflows/${workflowId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`DELETE /workflows/${workflowId} failed ${res.status}: ${await res.text()}`);
+  }
+}
