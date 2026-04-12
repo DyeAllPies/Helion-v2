@@ -7,10 +7,27 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import {
   Job, JobsPage, Node, ClusterMetrics, AuditPage, SubmitJobRequest
 } from '../../shared/models';
+
+// Raw API response shapes (may differ from dashboard models)
+interface ApiNodeInfo {
+  id: string;
+  health: string;        // "healthy" | "unhealthy"
+  last_seen: string;
+  running_jobs: number;
+  address: string;
+  registered_at?: string;
+  cpu_percent?: number;
+  mem_percent?: number;
+}
+interface ApiNodeListResponse {
+  nodes: ApiNodeInfo[];
+  total: number;
+}
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -19,10 +36,21 @@ export class ApiService {
 
   constructor(private http: HttpClient) {}
 
-  // ── Nodes ────────────────────────────────────────────────────────────────────
+  // ── Nodes ─────────────────────────────���──────────────────────────────────────
 
   getNodes(): Observable<Node[]> {
-    return this.http.get<Node[]>(`${this.base}/nodes`);
+    return this.http.get<ApiNodeListResponse>(`${this.base}/nodes`).pipe(
+      map(resp => resp.nodes.map(n => ({
+        node_id:       n.id,
+        address:       n.address,
+        healthy:       n.health === 'healthy',
+        last_seen:     n.last_seen,
+        running_jobs:  n.running_jobs,
+        cpu_percent:   n.cpu_percent ?? 0,
+        mem_percent:   n.mem_percent ?? 0,
+        registered_at: n.registered_at ?? n.last_seen,
+      })))
+    );
   }
 
   // ── Jobs ─────────────────────────────────────────────────────────────────────
