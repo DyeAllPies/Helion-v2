@@ -81,7 +81,9 @@ export async function waitForNodes(
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        const nodes = (await res.json()) as Array<{ healthy: boolean }>;
+        const body = await res.json();
+        // GET /nodes returns { nodes: [...], total: N }
+        const nodes = (body.nodes ?? body) as Array<{ healthy: boolean }>;
         const healthy = nodes.filter(n => n.healthy).length;
         if (healthy >= count) return;
       }
