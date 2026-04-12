@@ -28,8 +28,6 @@ services:
       context: .
       dockerfile: Dockerfile.node
     container_name: helion-node-1
-    ports:
-      - "127.0.0.1:8080:8080"
     networks:
       - helion-net
     volumes:
@@ -49,8 +47,6 @@ services:
       context: .
       dockerfile: Dockerfile.node
     container_name: helion-node-2
-    ports:
-      - "127.0.0.1:8081:8081"
     networks:
       - helion-net
     volumes:

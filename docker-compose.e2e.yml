@@ -27,19 +27,12 @@ services:
       - ./logs:/app/logs
 
   node1:
-    # Base maps 8080:8080 which conflicts with coordinator HTTP on host:8080.
-    # Remap to a different host port.  Nodes only talk to coordinator within
-    # the Docker network so the host port doesn't matter for E2E.
-    ports:
-      - "127.0.0.1:18080:8080"
     environment:
       - PORT=8080
       - HELION_COORDINATOR=coordinator:9090
       - HELION_ALLOW_ISOLATION=false
 
   node2:
-    ports:
-      - "127.0.0.1:18081:8081"
     environment:
       - PORT=8081
       - HELION_COORDINATOR=coordinator:9090
