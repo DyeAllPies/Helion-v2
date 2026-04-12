@@ -98,7 +98,11 @@ func TestDispatchTLS_VerifiesNodeCert(t *testing.T) {
 
 	gs := grpc.NewServer(grpc.Creds(credentials.NewTLS(rogueTLS)))
 	pb.RegisterNodeServiceServer(gs, &fakeNodeService{})
-	go gs.Serve(lis)
+	go func() {
+		if err := gs.Serve(lis); err != nil {
+			t.Logf("rogue gRPC server stopped: %v", err)
+		}
+	}()
 	defer gs.Stop()
 
 	addr := lis.Addr().(*net.TCPAddr)
@@ -156,7 +160,11 @@ func TestDispatchTLS_AcceptsValidNodeCert(t *testing.T) {
 
 	gs := grpc.NewServer(grpc.Creds(credentials.NewTLS(nodeTLS)))
 	pb.RegisterNodeServiceServer(gs, &fakeNodeService{})
-	go gs.Serve(lis)
+	go func() {
+		if err := gs.Serve(lis); err != nil {
+			t.Logf("valid gRPC server stopped: %v", err)
+		}
+	}()
 	defer gs.Stop()
 
 	addr := lis.Addr().(*net.TCPAddr)

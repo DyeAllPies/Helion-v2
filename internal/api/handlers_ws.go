@@ -14,6 +14,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -31,8 +32,9 @@ type wsAuthMsg struct {
 
 // wsAuthenticateConn reads the first frame from conn, validates the JWT,
 // and sends back {"type":"auth_ok"} or closes with 4001.
+// ctx is the HTTP request context — used for token validation and audit logging.
 // Returns nil on success, non-nil on auth failure (connection already closed).
-func (s *Server) wsAuthenticateConn(conn *websocket.Conn) error {
+func (s *Server) wsAuthenticateConn(ctx context.Context, conn *websocket.Conn) error {
 	if s.disableAuth {
 		return nil
 	}
@@ -55,7 +57,7 @@ func (s *Server) wsAuthenticateConn(conn *websocket.Conn) error {
 	var msg wsAuthMsg
 	if err := json.Unmarshal(raw, &msg); err != nil || msg.Type != "auth" || msg.Token == "" {
 		if s.audit != nil {
-			_ = s.audit.LogAuthFailure(nil, "invalid ws auth frame", "")
+			_ = s.audit.LogAuthFailure(ctx, "invalid ws auth frame", "")
 		}
 		_ = conn.WriteJSON(map[string]string{"type": "auth_error", "message": "invalid auth frame"})
 		_ = conn.WriteMessage(websocket.CloseMessage,
@@ -63,9 +65,9 @@ func (s *Server) wsAuthenticateConn(conn *websocket.Conn) error {
 		return http.ErrAbortHandler
 	}
 
-	if _, err := s.tokenManager.ValidateToken(nil, msg.Token); err != nil {
+	if _, err := s.tokenManager.ValidateToken(ctx, msg.Token); err != nil {
 		if s.audit != nil {
-			_ = s.audit.LogAuthFailure(nil, err.Error(), "")
+			_ = s.audit.LogAuthFailure(ctx, err.Error(), "")
 		}
 		slog.Error("ws token validation failed", slog.Any("err", err))
 		_ = conn.WriteJSON(map[string]string{"type": "auth_error", "message": "authentication failed"})
@@ -98,7 +100,7 @@ func (s *Server) handleJobLogStream(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	// First-message auth.
-	if err := s.wsAuthenticateConn(conn); err != nil {
+	if err := s.wsAuthenticateConn(r.Context(), conn); err != nil {
 		return
 	}
 
@@ -136,7 +138,7 @@ func (s *Server) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	// First-message auth.
-	if err := s.wsAuthenticateConn(conn); err != nil {
+	if err := s.wsAuthenticateConn(ctx, conn); err != nil {
 		return
 	}
 
