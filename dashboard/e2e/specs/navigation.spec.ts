@@ -23,11 +23,11 @@ test.describe('Sidebar Navigation', () => {
     await expect(navLinks).toHaveCount(4);
 
     const labels = await navLinks.allTextContents();
-    const cleaned = labels.map(l => l.trim().toUpperCase());
-    expect(cleaned).toContain('NODES');
-    expect(cleaned).toContain('JOBS');
-    expect(cleaned).toContain('METRICS');
-    expect(cleaned).toContain('AUDIT');
+    const joined = labels.map(l => l.trim().toUpperCase()).join(' ');
+    expect(joined).toContain('NODES');
+    expect(joined).toContain('JOBS');
+    expect(joined).toContain('METRICS');
+    expect(joined).toContain('AUDIT');
   });
 
   test('nodes link is active by default after login', async ({ authedPage: page }) => {

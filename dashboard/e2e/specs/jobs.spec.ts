@@ -140,7 +140,7 @@ test.describe('Jobs List', () => {
   });
 
   test('error banner appears when API fails', async ({ authedPage: page }) => {
-    await page.route('**/jobs?*', route => {
+    await page.route('**/api/jobs?*', route => {
       route.fulfill({ status: 500, body: 'Internal Server Error' });
     });
 
@@ -151,7 +151,7 @@ test.describe('Jobs List', () => {
 
   test('empty state when no jobs match filter', async ({ authedPage: page }) => {
     // Intercept with an empty page
-    await page.route('**/jobs?*', route => {
+    await page.route('**/api/jobs?*', route => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',

@@ -142,8 +142,8 @@ test.describe('Nodes Page', () => {
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
       .toBeVisible({ timeout: 15_000 });
 
-    // Intercept subsequent /nodes requests with a 500 error
-    await page.route('**/nodes', route => {
+    // Intercept subsequent /api/nodes requests with a 500 error
+    await page.route('**/api/nodes', route => {
       route.fulfill({ status: 500, body: 'Internal Server Error' });
     });
 
@@ -153,12 +153,12 @@ test.describe('Nodes Page', () => {
   });
 
   test('empty state shows when no nodes are registered', async ({ authedPage: page }) => {
-    // Intercept /nodes to return empty array
-    await page.route('**/nodes', route => {
+    // Intercept API calls to return empty node list
+    await page.route('**/api/nodes', route => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify([]),
+        body: JSON.stringify({ nodes: [], total: 0 }),
       });
     });
 

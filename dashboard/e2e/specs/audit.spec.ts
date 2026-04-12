@@ -195,7 +195,7 @@ test.describe('Audit Log Page', () => {
   });
 
   test('error banner appears when API returns error', async ({ authedPage: page }) => {
-    await page.route('**/audit?*', route => {
+    await page.route('**/api/audit?*', route => {
       route.fulfill({ status: 500, body: 'Internal Server Error' });
     });
 
@@ -205,7 +205,7 @@ test.describe('Audit Log Page', () => {
   });
 
   test('empty state displays when no events match filter', async ({ authedPage: page }) => {
-    await page.route('**/audit?*', route => {
+    await page.route('**/api/audit?*', route => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',

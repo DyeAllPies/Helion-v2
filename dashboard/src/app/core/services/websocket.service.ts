@@ -12,8 +12,10 @@
 
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import { AuthService } from './auth.service';
+import { mapMetrics } from './api.service';
 import { LogChunk, MetricsFrame } from '../../shared/models';
 
 @Injectable({ providedIn: 'root' })
@@ -30,7 +32,7 @@ export class WebSocketService {
 
   metrics(): Observable<MetricsFrame> {
     const url = `${environment.wsUrl}/ws/metrics`;
-    return this._connect<MetricsFrame>(url);
+    return this._connect<any>(url).pipe(map(m => mapMetrics(m)));
   }
 
   // ── Private factory ───────────────────────────────────────────────────────────

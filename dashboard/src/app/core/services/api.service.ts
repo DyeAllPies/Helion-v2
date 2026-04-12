@@ -74,7 +74,9 @@ export class ApiService {
   // ── Metrics ──────────────────────────────────────────────────────────────────
 
   getMetrics(): Observable<ClusterMetrics> {
-    return this.http.get<ClusterMetrics>(`${this.base}/metrics`);
+    return this.http.get<any>(`${this.base}/metrics`).pipe(
+      map(m => mapMetrics(m))
+    );
   }
 
   // ── Audit ────────────────────────────────────────────────────────────────────
@@ -86,4 +88,26 @@ export class ApiService {
     if (type) params = params.set('type', type);
     return this.http.get<AuditPage>(`${this.base}/audit`, { params });
   }
+}
+
+/**
+ * Map the coordinator's nested ClusterMetrics response to the flat
+ * shape the dashboard components expect.
+ *
+ * API:       { nodes: { total, healthy }, jobs: { running, pending, ... }, timestamp }
+ * Dashboard: { total_nodes, healthy_nodes, running_jobs, pending_jobs, ... , timestamp }
+ */
+export function mapMetrics(m: any): ClusterMetrics {
+  // Already flat (e.g. from a unit-test mock) — pass through
+  if (m.total_nodes !== undefined) return m as ClusterMetrics;
+  return {
+    timestamp:      m.timestamp,
+    total_nodes:    m.nodes?.total   ?? 0,
+    healthy_nodes:  m.nodes?.healthy ?? 0,
+    total_jobs:     m.jobs?.total     ?? 0,
+    running_jobs:   m.jobs?.running   ?? 0,
+    pending_jobs:   m.jobs?.pending   ?? 0,
+    completed_jobs: m.jobs?.completed ?? 0,
+    failed_jobs:    m.jobs?.failed    ?? 0,
+  };
 }

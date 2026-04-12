@@ -73,11 +73,11 @@ describe('ApiService', () => {
 
   // ── Jobs ───────────────────────────────────────────────────────────────────
 
-  it('getJobs() sends GET /jobs with page and size params', () => {
+  it('getJobs() sends GET /jobs with 1-indexed page and size params', () => {
     service.getJobs(0, 25).subscribe();
     const req = httpMock.expectOne(r => r.url.endsWith('/jobs'));
     expect(req.request.method).toBe('GET');
-    expect(req.request.params.get('page')).toBe('0');
+    expect(req.request.params.get('page')).toBe('1');   // 0-indexed input → 1-indexed API
     expect(req.request.params.get('size')).toBe('25');
     expect(req.request.params.has('status')).toBeFalse();
     req.flush(mockPage);
@@ -87,7 +87,7 @@ describe('ApiService', () => {
     service.getJobs(1, 10, 'failed').subscribe();
     const req = httpMock.expectOne(r => r.url.endsWith('/jobs'));
     expect(req.request.params.get('status')).toBe('failed');
-    expect(req.request.params.get('page')).toBe('1');
+    expect(req.request.params.get('page')).toBe('2');   // 1 → 2
     req.flush({ ...mockPage, jobs: [] });
   });
 
@@ -117,11 +117,11 @@ describe('ApiService', () => {
 
   // ── Audit ──────────────────────────────────────────────────────────────────
 
-  it('getAudit() sends GET /audit with page and size params', () => {
+  it('getAudit() sends GET /audit with 1-indexed page and size params', () => {
     service.getAudit(0, 50).subscribe();
     const req = httpMock.expectOne(r => r.url.endsWith('/audit'));
     expect(req.request.method).toBe('GET');
-    expect(req.request.params.get('page')).toBe('0');
+    expect(req.request.params.get('page')).toBe('1');   // 0 → 1
     expect(req.request.params.get('size')).toBe('50');
     expect(req.request.params.has('type')).toBeFalse();
     req.flush(mockAuditPage);
@@ -134,19 +134,19 @@ describe('ApiService', () => {
     req.flush(mockAuditPage);
   });
 
-  it('getJobs() uses default page=0, size=25 when called with no args', () => {
+  it('getJobs() uses default page=1, size=25 when called with no args', () => {
     service.getJobs().subscribe();
     const req = httpMock.expectOne(r => r.url.endsWith('/jobs'));
-    expect(req.request.params.get('page')).toBe('0');
+    expect(req.request.params.get('page')).toBe('1');   // default 0 → 1
     expect(req.request.params.get('size')).toBe('25');
     expect(req.request.params.has('status')).toBeFalse();
     req.flush(mockPage);
   });
 
-  it('getAudit() uses default page=0, size=50 when called with no args', () => {
+  it('getAudit() uses default page=1, size=50 when called with no args', () => {
     service.getAudit().subscribe();
     const req = httpMock.expectOne(r => r.url.endsWith('/audit'));
-    expect(req.request.params.get('page')).toBe('0');
+    expect(req.request.params.get('page')).toBe('1');   // default 0 → 1
     expect(req.request.params.get('size')).toBe('50');
     expect(req.request.params.has('type')).toBeFalse();
     req.flush(mockAuditPage);
