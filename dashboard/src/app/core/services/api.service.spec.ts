@@ -6,11 +6,20 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { ApiService } from './api.service';
 import { Job, JobsPage, Node, ClusterMetrics, AuditPage } from '../../shared/models';
 
-const mockNode: Node = {
-  node_id: 'n1', address: '10.0.0.1:9090',
-  healthy: true, last_seen: new Date().toISOString(),
+// API response format (what the coordinator actually returns)
+const mockApiNode = {
+  id: 'n1', address: '10.0.0.1:9090',
+  health: 'healthy', last_seen: new Date().toISOString(),
   running_jobs: 1, cpu_percent: 20, mem_percent: 40,
   registered_at: new Date().toISOString(),
+};
+
+// Dashboard model format (what the components expect after mapping)
+const mockNode: Node = {
+  node_id: 'n1', address: '10.0.0.1:9090',
+  healthy: true, last_seen: mockApiNode.last_seen,
+  running_jobs: 1, cpu_percent: 20, mem_percent: 40,
+  registered_at: mockApiNode.registered_at,
 };
 
 const mockJob: Job = {
@@ -57,11 +66,17 @@ describe('ApiService', () => {
 
   // ── Nodes ──────────────────────────────────────────────────────────────────
 
-  it('getNodes() sends GET /nodes', () => {
-    service.getNodes().subscribe(nodes => expect(nodes).toEqual([mockNode]));
+  it('getNodes() sends GET /nodes and maps API response to Node[]', () => {
+    service.getNodes().subscribe(nodes => {
+      expect(nodes.length).toBe(1);
+      expect(nodes[0].node_id).toBe('n1');
+      expect(nodes[0].healthy).toBeTrue();
+      expect(nodes[0].address).toBe('10.0.0.1:9090');
+    });
     const req = httpMock.expectOne(r => r.url.endsWith('/nodes'));
     expect(req.request.method).toBe('GET');
-    req.flush([mockNode]);
+    // Flush the real API format: {nodes: [...], total: N}
+    req.flush({ nodes: [mockApiNode], total: 1 });
   });
 
   // ── Jobs ───────────────────────────────────────────────────────────────────

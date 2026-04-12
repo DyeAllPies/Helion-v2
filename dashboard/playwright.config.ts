@@ -13,10 +13,11 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e/specs',
-  fullyParallel: true,
+  fullyParallel: false,
   forbidOnly: !!process.env['CI'],
-  retries: process.env['CI'] ? 1 : 0,
-  workers: process.env['CI'] ? 1 : 4,
+  retries: 0,
+  workers: 1,
+  maxFailures: 1,
   reporter: process.env['CI']
     ? [['list'], ['html', { open: 'never' }], ['github']]
     : [['list'], ['html', { open: 'on-failure' }]],
