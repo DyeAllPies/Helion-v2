@@ -97,7 +97,7 @@ export class ApiService {
     return this.http.post<Workflow>(`${this.base}/workflows`, req);
   }
 
-  cancelWorkflow(id: string): Observable<any> {
+  cancelWorkflow(id: string): Observable<Record<string, unknown>> {
     return this.http.delete(`${this.base}/workflows/${id}`);
   }
 

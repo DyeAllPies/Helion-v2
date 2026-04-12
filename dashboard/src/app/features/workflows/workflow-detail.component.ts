@@ -6,7 +6,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatTooltipModule } from '@angular/material/tooltip';
 
 import { ApiService } from '../../core/services/api.service';
-import { Workflow, WorkflowJob } from '../../shared/models';
+import { Workflow } from '../../shared/models';
 
 @Component({
   selector: 'app-workflow-detail',

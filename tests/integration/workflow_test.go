@@ -97,8 +97,10 @@ func TestWorkflow_SubmitAndGet(t *testing.T) {
 
 	if resp.StatusCode != http.StatusCreated {
 		var errResp api.ErrorResponse
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		t.Fatalf("POST /workflows returned HTTP %d: %s", resp.StatusCode, errResp.Error)
+		if decErr := json.NewDecoder(resp.Body).Decode(&errResp); decErr == nil {
+			t.Fatalf("POST /workflows returned HTTP %d: %s", resp.StatusCode, errResp.Error)
+		}
+		t.Fatalf("POST /workflows returned HTTP %d", resp.StatusCode)
 	}
 
 	var wfResp api.WorkflowResponse
@@ -138,7 +140,9 @@ func TestWorkflow_SubmitAndGet(t *testing.T) {
 	}
 
 	var getWf api.WorkflowResponse
-	json.NewDecoder(getResp.Body).Decode(&getWf)
+	if err := json.NewDecoder(getResp.Body).Decode(&getWf); err != nil {
+		t.Fatalf("decode GET response: %v", err)
+	}
 	if getWf.Status != "running" {
 		t.Errorf("GET status = %q, want running", getWf.Status)
 	}
@@ -187,7 +191,9 @@ func TestWorkflow_ListWorkflows(t *testing.T) {
 	defer resp.Body.Close()
 
 	var listResp api.WorkflowListResponse
-	json.NewDecoder(resp.Body).Decode(&listResp)
+	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
 	if listResp.Total != 2 {
 		t.Errorf("total = %d, want 2", listResp.Total)
 	}
@@ -241,7 +247,9 @@ func TestWorkflow_CancelWorkflow(t *testing.T) {
 	defer getResp.Body.Close()
 
 	var wf api.WorkflowResponse
-	json.NewDecoder(getResp.Body).Decode(&wf)
+	if err := json.NewDecoder(getResp.Body).Decode(&wf); err != nil {
+		t.Fatalf("decode GET response: %v", err)
+	}
 	if wf.Status != "cancelled" {
 		t.Errorf("status = %q, want cancelled", wf.Status)
 	}
@@ -310,7 +318,7 @@ func TestWorkflow_InvalidDAG(t *testing.T) {
 			defer resp.Body.Close()
 			if resp.StatusCode != tc.code {
 				var errResp api.ErrorResponse
-				json.NewDecoder(resp.Body).Decode(&errResp)
+				_ = json.NewDecoder(resp.Body).Decode(&errResp)
 				t.Errorf("status = %d, want %d (error: %s)", resp.StatusCode, tc.code, errResp.Error)
 			}
 		})
@@ -375,12 +383,14 @@ func TestWorkflow_DependencyConditions(t *testing.T) {
 
 	if resp.StatusCode != http.StatusCreated {
 		var errResp api.ErrorResponse
-		json.NewDecoder(resp.Body).Decode(&errResp)
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
 		t.Fatalf("POST returned %d: %s", resp.StatusCode, errResp.Error)
 	}
 
 	var wfResp api.WorkflowResponse
-	json.NewDecoder(resp.Body).Decode(&wfResp)
+	if err := json.NewDecoder(resp.Body).Decode(&wfResp); err != nil {
+		t.Fatalf("decode workflow response: %v", err)
+	}
 
 	// Verify conditions were stored correctly.
 	for _, j := range wfResp.Jobs {
