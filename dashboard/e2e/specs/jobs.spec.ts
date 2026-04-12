@@ -7,7 +7,7 @@
 // error handling, and metadata completeness.
 
 import { test, expect, navigateTo } from '../fixtures/auth.fixture';
-import { getRootToken, submitJob, API_URL } from '../fixtures/cluster.fixture';
+import { getRootToken, submitJob, submitJobWithRetry, API_URL } from '../fixtures/cluster.fixture';
 
 test.describe('Jobs List', () => {
 
@@ -98,7 +98,7 @@ test.describe('Jobs List', () => {
     const options = page.locator('select.status-select option');
     const optionTexts = (await options.allTextContents()).map(t => t.trim().toLowerCase());
 
-    // ALL + 7 statuses
+    // ALL + 8 statuses
     expect(optionTexts).toContain('all');
     expect(optionTexts).toContain('pending');
     expect(optionTexts).toContain('dispatching');
@@ -107,6 +107,7 @@ test.describe('Jobs List', () => {
     expect(optionTexts).toContain('failed');
     expect(optionTexts).toContain('timeout');
     expect(optionTexts).toContain('lost');
+    expect(optionTexts).toContain('retrying');
   });
 
   test('switching filter to ALL shows all jobs again', async ({ authedPage: page }) => {
@@ -378,5 +379,39 @@ test.describe('Rust Runtime (node2)', () => {
     const badge = page.locator('.meta-card .badge');
     const badgeText = await badge.textContent();
     expect(badgeText).toMatch(/COMPLETED|FAILED|TIMEOUT/);
+  });
+});
+
+test.describe('Jobs Retry Policy', () => {
+
+  test('job submitted with retry policy appears in list', async ({ authedPage: page }) => {
+    const token = getRootToken();
+    const jobId = `e2e-retry-${Date.now()}`;
+
+    await submitJobWithRetry(token, {
+      id: jobId,
+      command: 'echo',
+      args: ['retry-test'],
+      retry_policy: {
+        max_attempts: 3,
+        backoff: 'exponential',
+        initial_delay_ms: 1000,
+        max_delay_ms: 10000,
+        jitter: true,
+      },
+    });
+
+    await navigateTo(page, '/jobs');
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
+  });
+
+  test('retrying filter option is present in dropdown', async ({ authedPage: page }) => {
+    await navigateTo(page, '/jobs');
+    const options = page.locator('select.status-select option');
+    const texts = (await options.allTextContents()).map(t => t.trim().toLowerCase());
+    expect(texts).toContain('retrying');
   });
 });

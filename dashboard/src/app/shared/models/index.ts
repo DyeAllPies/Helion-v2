@@ -12,7 +12,8 @@ export type JobStatus =
   | 'completed'
   | 'failed'
   | 'timeout'
-  | 'lost';
+  | 'lost'
+  | 'retrying';
 
 export interface Job {
   id:            string;

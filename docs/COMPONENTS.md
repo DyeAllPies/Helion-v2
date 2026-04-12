@@ -22,16 +22,34 @@ an interface:
 
 ```
 pending → dispatching → running → completed
-                                → failed
+                                → failed → retrying → pending (with backoff)
+                                → timeout → retrying → pending (with backoff)
                                 → lost
 ```
 
 All transitions are persisted atomically and written to the audit log.
 
+**Retry policies.** Jobs can declare a per-job `RetryPolicy` with:
+- `max_attempts` — total attempts (1 = no retry, default)
+- `backoff` — `none` (fixed), `linear`, or `exponential` (default)
+- `initial_delay_ms` / `max_delay_ms` — delay bounds
+- `jitter` — 0-25% random noise to prevent thundering herd
+
+When a job fails or times out, `RetryIfEligible` checks the policy. If attempts
+remain, the job transitions `failed → retrying → pending` with a `RetryAfter`
+timestamp. The dispatch loop skips jobs in backoff window (`now < RetryAfter`).
+
+File layout:
+```
+retry.go      — ShouldRetry, NextRetryDelay, DefaultRetryPolicy (pure functions)
+job_retry.go  — JobStore.RetryIfEligible (state transitions)
+```
+
 **Dispatch loop.** Periodically polls the job store for pending jobs and dispatches them
 to healthy nodes. Uses the scheduler to pick a target node, transitions the job to
 `dispatching`, then sends it via gRPC to the node agent. On dispatch failure the job is
 marked `failed`; on success the node takes ownership and reports back via `ReportResult`.
+Jobs in backoff window (retry delay not yet expired) are skipped until eligible.
 
 **Certificate Authority.** Issues per-node X.509 certificates on first registration using
 ML-DSA (Dilithium-3) in hybrid mode with ECDSA. Acts as the cluster's internal CA. The

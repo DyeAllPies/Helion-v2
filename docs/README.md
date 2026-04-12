@@ -150,7 +150,7 @@ go tool cover -func=coverage.out | grep total:
 # Dashboard unit tests
 cd dashboard && ng test --watch=false --browsers=ChromeHeadless
 
-# Full-stack E2E tests (boots cluster, runs 95 Playwright tests, tears down)
+# Full-stack E2E tests (boots cluster, runs 97 Playwright tests, tears down)
 make test-e2e
 
 # E2E with visible browser

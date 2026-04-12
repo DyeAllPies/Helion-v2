@@ -117,6 +117,36 @@ export async function submitJob(
   return res.json();
 }
 
+/** Retry policy for submitJobWithRetry. */
+interface RetryPolicyDef {
+  max_attempts: number;
+  backoff?: string;
+  initial_delay_ms?: number;
+  max_delay_ms?: number;
+  jitter?: boolean;
+}
+
+/**
+ * Submit a job with a retry policy via the coordinator REST API.
+ */
+export async function submitJobWithRetry(
+  token: string,
+  payload: { id: string; command: string; args?: string[]; retry_policy: RetryPolicyDef },
+): Promise<{ id: string; status: string; attempt: number }> {
+  const res = await fetch(`${API_URL}/jobs`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`POST /jobs (retry) failed ${res.status}: ${await res.text()}`);
+  }
+  return res.json();
+}
+
 /** Workflow job definition for submitWorkflow. */
 interface WorkflowJobDef {
   name: string;
