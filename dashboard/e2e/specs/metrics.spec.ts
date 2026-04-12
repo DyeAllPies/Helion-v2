@@ -145,21 +145,7 @@ test.describe('Metrics Page', () => {
   });
 
   test.skip('WS error shows error banner', async ({ authedPage: page }) => {
-    // TODO: route intercept doesn't persist across Angular router navigations
-    await navigateTo(page, '/metrics');
-
-    // Wait for initial WS connection to establish
-    await expect(page.locator('.kpi-grid')).toBeVisible({ timeout: 15_000 });
-
-    // Now block subsequent WS connections
-    await page.route('**/ws/metrics**', route => route.abort());
-
-    // Navigate away and back to force a new WS connection (which will fail)
-    await navigateTo(page, '/nodes');
-    await navigateTo(page, '/metrics');
-
-    // Error banner should appear since WS can't connect
-    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('.error-banner')).toContainText('WebSocket error');
+    // Playwright page.route() cannot intercept WebSocket upgrade requests.
+    // WS error handling is covered by Angular unit tests.
   });
 });

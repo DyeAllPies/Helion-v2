@@ -6,7 +6,7 @@
 // in the job detail page.  Covers pagination, filtering, empty state,
 // error handling, and metadata completeness.
 
-import { test, expect, navigateTo, authenticate } from '../fixtures/auth.fixture';
+import { test, expect, navigateTo } from '../fixtures/auth.fixture';
 import { getRootToken, submitJob, API_URL } from '../fixtures/cluster.fixture';
 
 test.describe('Jobs List', () => {
@@ -51,7 +51,7 @@ test.describe('Jobs List', () => {
     await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
   });
 
-  test.skip('job transitions to a terminal state', async ({ authedPage: page }) => {
+  test('job transitions to a terminal state', async ({ authedPage: page }) => {
     // TODO: coordinator lacks a dispatch loop — submitted jobs stay PENDING
     const token = getRootToken();
     const jobId = `e2e-term-${Date.now()}`;
@@ -71,7 +71,7 @@ test.describe('Jobs List', () => {
     }).toPass({timeout: 15_000, intervals: [2_000] });
   });
 
-  test.skip('status filter works for completed jobs', async ({ authedPage: page }) => {
+  test('status filter works for completed jobs', async ({ authedPage: page }) => {
     await navigateTo(page, '/jobs');
     await expect(page.locator('table[mat-table]')).toBeVisible({ timeout: 15_000 });
 
@@ -167,7 +167,7 @@ test.describe('Jobs List', () => {
 
 test.describe('Job Detail', () => {
 
-  test.skip('shows full metadata card for a completed job', async ({ authedPage: page }) => {
+  test('shows full metadata card for a completed job', async ({ authedPage: page }) => {
     const token = getRootToken();
     const jobId = `e2e-meta-${Date.now()}`;
 
@@ -182,7 +182,11 @@ test.describe('Job Detail', () => {
       expect(['completed', 'failed', 'timeout', 'lost']).toContain(job.status);
     }).toPass({timeout: 15_000, intervals: [2_000] });
 
-    await authenticate(page); await page.goto(`/jobs/${jobId}`);
+    // Navigate to job detail via jobs list
+    await navigateTo(page, '/jobs');
+    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await page.click(`a.job-link:has-text("${jobId}")`);
+
     await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
 
     // Job ID
@@ -226,16 +230,25 @@ test.describe('Job Detail', () => {
     await expect(page).toHaveURL(/\/jobs$/);
   });
 
-  test.skip('log panel shows ENDED for terminal jobs', async ({ authedPage: page }) => {
+  test('log panel shows ENDED for terminal jobs', async ({ authedPage: page }) => {
     const token = getRootToken();
     const jobId = `e2e-logend-${Date.now()}`;
 
     await submitJob(token, { id: jobId, command: 'echo', args: ['log-end'] });
 
-    // Wait for job to complete
-    await new Promise(r => setTimeout(r, 5_000));
+    // Wait for dispatch + execution
+    await expect(async () => {
+      const res = await fetch(`${API_URL}/jobs/${jobId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const job = await res.json();
+      expect(['completed', 'failed', 'timeout', 'lost']).toContain(job.status);
+    }).toPass({timeout: 15_000, intervals: [2_000] });
 
-    await authenticate(page); await page.goto(`/jobs/${jobId}`);
+    // Navigate to job detail via jobs list
+    await navigateTo(page, '/jobs');
+    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await page.click(`a.job-link:has-text("${jobId}")`);
     await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
 
     // Log panel should exist
@@ -269,15 +282,22 @@ test.describe('Job Detail', () => {
     await expect(page.locator('.meta-card')).toBeVisible();
   });
 
-  test.skip('job not found shows error', async ({ authedPage: page }) => {
-    // TODO: can't navigate to /jobs/nonexistent without page.goto (loses auth)
-    await expect(true).toBe(true);
+  test('job not found shows error', async ({ authedPage: page }) => {
+    // Navigate to jobs list first, then push to a nonexistent job via Angular router
+    await navigateTo(page, '/jobs');
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/jobs/nonexistent-job-id-12345');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.error-banner')).toContainText('Job not found');
   });
 });
 
 test.describe('Rust Runtime (node2)', () => {
 
-  test.skip('job dispatched to Rust runtime node completes and shows on dashboard', async ({ authedPage: page }) => {
+  test('job dispatched to Rust runtime node completes and shows on dashboard', async ({ authedPage: page }) => {
     const token = getRootToken();
 
     // Submit multiple jobs — round-robin scheduler will dispatch some to
@@ -305,7 +325,7 @@ test.describe('Rust Runtime (node2)', () => {
     }).toPass({timeout: 15_000, intervals: [2_000] });
   });
 
-  test.skip('job on Rust node visible in detail view', async ({ authedPage: page }) => {
+  test('job on Rust node visible in detail view', async ({ authedPage: page }) => {
     const token = getRootToken();
     const jobId = `e2e-rust-detail-${Date.now()}`;
 
@@ -320,8 +340,10 @@ test.describe('Rust Runtime (node2)', () => {
       expect(['completed', 'failed', 'timeout', 'lost']).toContain(job.status);
     }).toPass({timeout: 15_000, intervals: [2_000] });
 
-    // Verify it shows up in the dashboard detail view
-    await authenticate(page); await page.goto(`/jobs/${jobId}`);
+    // Navigate to job detail via jobs list
+    await navigateTo(page, '/jobs');
+    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await page.click(`a.job-link:has-text("${jobId}")`);
     await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.job-id')).toContainText(jobId);
     await expect(page.locator('.meta-value.cmd')).toContainText('echo');

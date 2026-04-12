@@ -53,6 +53,9 @@ logs/
 *.sst
 MANIFEST
 
+# Benchmark results (machine-specific, regenerate with make bench)
+benchmarks/
+
 # Proto generated files (regenerate with make proto)
 **/*.pb.go
 **/*_grpc.pb.go

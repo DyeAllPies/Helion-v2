@@ -118,27 +118,23 @@ test.describe('Login Flow', () => {
     await expect(page).toHaveURL(/\/login/, );
   });
 
-  test.skip('401 response from API triggers auto-logout', async ({ page }) => {
-    // TODO: page.goto() loses in-memory token; route intercept needs /api/* pattern
+  test('401 response from API triggers auto-logout', async ({ page }) => {
     const token = getRootToken();
 
     // Login
     await page.goto('/login');
     await page.fill('textarea.token-input', token);
     await page.click('button.login-btn');
-    await expect(page).toHaveURL(/\/nodes/, );
+    await expect(page).toHaveURL(/\/nodes/);
 
-    // Intercept the next /nodes request to return 401 (simulating token revocation)
-    await page.route('**/nodes', route => {
-      route.fulfill({ status: 401, body: 'Unauthorized' });
+    // Intercept API /nodes calls with 401 (simulating token revocation).
+    // The nodes page auto-polls every 5s, so the next poll hits the 401.
+    await page.route('**/api/nodes', route => {
+      route.fulfill({ status: 401, body: '{"error":"unauthorized"}' });
     });
 
-    // Navigate away and back to trigger a new API call
-    await page.goto('/jobs');
-    await page.goto('/nodes');
-
-    // The 401 should trigger the interceptor → auth.onUnauthorized() → redirect
-    await expect(page).toHaveURL(/\/login/, );
+    // Wait for the auto-poll to fire and the 401 interceptor to redirect
+    await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
   });
 });
 
@@ -152,34 +148,38 @@ test.describe('Route Guards & Redirects', () => {
     }
   });
 
-  test.skip('wildcard routes redirect to root', async ({ page }) => {
-    // TODO: page.goto() after login loses in-memory token
+  test('wildcard routes redirect to root', async ({ page }) => {
     const token = getRootToken();
 
-    // Login first
     await page.goto('/login');
     await page.fill('textarea.token-input', token);
     await page.click('button.login-btn');
-    await expect(page).toHaveURL(/\/nodes/, );
+    await expect(page).toHaveURL(/\/nodes/);
 
-    // Navigate to a nonexistent route
-    await page.goto('/this-does-not-exist');
+    // Use Angular router to navigate to a nonexistent route (no full reload)
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/this-does-not-exist');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
 
-    // Should redirect to / which redirects to /nodes
-    await expect(page).toHaveURL(/\/nodes/, );
+    // The wildcard route redirects to / → /nodes
+    await expect(page).toHaveURL(/\/nodes/, { timeout: 5_000 });
   });
 
-  test.skip('root path redirects to /nodes when authenticated', async ({ page }) => {
-    // TODO: page.goto('/') after login loses in-memory token
+  test('root path redirects to /nodes when authenticated', async ({ page }) => {
     const token = getRootToken();
 
     await page.goto('/login');
     await page.fill('textarea.token-input', token);
     await page.click('button.login-btn');
-    await expect(page).toHaveURL(/\/nodes/, );
+    await expect(page).toHaveURL(/\/nodes/);
 
-    // Navigate explicitly to root
-    await page.goto('/');
-    await expect(page).toHaveURL(/\/nodes/, );
+    // Use Angular router to navigate to root (no full reload)
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    await expect(page).toHaveURL(/\/nodes/, { timeout: 5_000 });
   });
 });

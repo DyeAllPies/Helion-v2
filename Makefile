@@ -3,7 +3,7 @@ PROTO_FILES := coordinator.proto node.proto runtime.proto
 
 .PHONY: proto build build-rust build-all test test-short lint clean \
         test-dashboard lint-dashboard coverage-go test-all lint-all \
-        test-e2e test-e2e-headed test-e2e-ui
+        test-e2e test-e2e-headed test-e2e-ui bench
 
 # ── protobuf ──────────────────────────────────────────────────────────────────
 
@@ -60,6 +60,9 @@ test-e2e-headed:
 
 test-e2e-ui:
 	./scripts/run-e2e.sh --ui
+
+bench:
+	./scripts/run-bench.sh
 
 # ── combined ──────────────────────────────────────────────────────────────────
 

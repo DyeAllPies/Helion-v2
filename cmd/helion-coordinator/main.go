@@ -267,6 +267,23 @@ func main() {
 		}
 	}()
 
+	// ── Job dispatch loop ────────────────────────────────────────────────
+	policy := cluster.PolicyFromEnv()
+	scheduler := cluster.NewScheduler(registry, policy)
+	log.Info("scheduler initialized", slog.String("policy", scheduler.PolicyName()))
+
+	// Build a TLS config for dialing node agents (coordinator as client).
+	dispatchTLS, err := bundle.RawTLSConfig("helion-node")
+	if err != nil {
+		log.Error("dispatch TLS config", slog.Any("err", err))
+		os.Exit(1)
+	}
+	// Accept any server cert from nodes (same as RequireAnyClientCert logic)
+	dispatchTLS.InsecureSkipVerify = true
+	nodeDispatcher := cluster.NewGRPCNodeDispatcher(dispatchTLS)
+	dispatchLoop := cluster.NewDispatchLoop(jobs, scheduler, nodeDispatcher, 2*time.Second, log)
+	go dispatchLoop.Run(ctx)
+
 	// ── Background goroutines ─────────────────────────────────────────────
 	go registry.RunPruneLoop(ctx)
 
