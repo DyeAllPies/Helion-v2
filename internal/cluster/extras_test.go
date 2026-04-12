@@ -440,3 +440,31 @@ func TestResetToPending_PersistFails_RecoveryReturnsError(t *testing.T) {
 		t.Errorf("expected 4 SaveJob calls, got %d", calls)
 	}
 }
+
+// ── Registry.Close ───────────────────────────────────────────────────────────
+
+func TestRegistry_Close_ReturnsWithoutBlocking(t *testing.T) {
+	r := newRegistry(t)
+	ctx := context.Background()
+
+	// Register a node (triggers background persist via auditWG).
+	_, _ = r.Register(ctx, &pb.RegisterRequest{NodeId: "close-n1", Address: "127.0.0.1:9090"})
+
+	start := time.Now()
+	r.Close(1 * time.Second)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Fatalf("Close blocked too long: %v", elapsed)
+	}
+}
+
+func TestRegistry_Close_NoNodes_ReturnsImmediately(t *testing.T) {
+	r := newRegistry(t)
+	start := time.Now()
+	r.Close(100 * time.Millisecond)
+	elapsed := time.Since(start)
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("Close with no nodes blocked too long: %v", elapsed)
+	}
+}
