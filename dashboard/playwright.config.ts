@@ -18,8 +18,8 @@ export default defineConfig({
   retries: process.env['CI'] ? 1 : 0,
   workers: process.env['CI'] ? 2 : 4,
   reporter: process.env['CI']
-    ? [['html', { open: 'never' }], ['github']]
-    : [['html', { open: 'on-failure' }]],
+    ? [['list'], ['html', { open: 'never' }], ['github']]
+    : [['list'], ['html', { open: 'on-failure' }]],
   timeout: 15_000,
   expect: { timeout: 2_000 },
 
