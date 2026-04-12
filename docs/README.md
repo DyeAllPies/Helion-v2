@@ -88,7 +88,7 @@ helion-v2/
 │   └── pqcrypto/             # PQC key generation + hybrid TLS helpers
 ├── proto/                    # .proto definitions + generated Go stubs
 ├── dashboard/                # Angular 21 project
-│   └── e2e/                  # Playwright E2E tests (77 tests)
+│   └── e2e/                  # Playwright E2E tests (78 tests)
 ├── deploy/
 │   ├── helm/                 # Helm chart
 │   ├── k8s/                  # Raw Kubernetes manifests
@@ -150,7 +150,7 @@ go tool cover -func=coverage.out | grep total:
 # Dashboard unit tests
 cd dashboard && ng test --watch=false --browsers=ChromeHeadless
 
-# Full-stack E2E tests (boots cluster, runs 77 Playwright tests, tears down)
+# Full-stack E2E tests (boots cluster, runs 78 Playwright tests, tears down)
 make test-e2e
 
 # E2E with visible browser

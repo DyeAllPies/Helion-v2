@@ -244,6 +244,7 @@ Every security and operational event is written to an append-only log in BadgerD
 | `rate_limit_hit` | Per-node rate limit exceeded |
 | `security_violation` | Seccomp or OOMKilled reported by node |
 | `coordinator_start` | Coordinator process started |
+| `coordinator_stop` | Coordinator process stopping (graceful shutdown) |
 
 ### Storage
 

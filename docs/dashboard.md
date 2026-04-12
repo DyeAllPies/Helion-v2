@@ -44,7 +44,7 @@ dashboard/
 │   ├── fixtures/
 │   │   ├── cluster.fixture.ts   # Token reader, health/node waiters, job submitter
 │   │   └── auth.fixture.ts      # Login-via-textarea Playwright fixture
-│   └── specs/                   # 77 Playwright E2E test specs (6 files)
+│   └── specs/                   # 78 Playwright E2E test specs (6 files)
 ├── playwright.config.ts         # Playwright config (Chromium, auto-starts ng serve)
 ├── Dockerfile                   # Two-stage: Node builder → Nginx runtime
 ├── nginx.conf                   # SPA serving + /api and /ws reverse proxy to coordinator
@@ -74,7 +74,7 @@ ng test --watch=false --browsers=ChromeHeadless   # CI mode
 ### E2E tests (full-stack)
 
 E2E tests use Playwright to drive a real browser against the live dashboard backed by
-a real coordinator + node cluster. 77 tests cover login, navigation, nodes, jobs,
+a real coordinator + node cluster. 78 tests cover login, navigation, nodes, jobs,
 metrics (WebSocket), and audit log.
 
 ```bash

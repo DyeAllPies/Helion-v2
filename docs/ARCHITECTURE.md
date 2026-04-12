@@ -114,6 +114,11 @@ pending → dispatching → running → completed
 
 All transitions are persisted atomically and written to the audit log.
 
+**Dispatch loop.** Periodically polls the job store for pending jobs and dispatches them
+to healthy nodes. Uses the scheduler to pick a target node, transitions the job to
+`dispatching`, then sends it via gRPC to the node agent. On dispatch failure the job is
+marked `failed`; on success the node takes ownership and reports back via `ReportResult`.
+
 **Certificate Authority.** Issues per-node X.509 certificates on first registration using
 ML-DSA (Dilithium-3) in hybrid mode with ECDSA. Acts as the cluster's internal CA.
 
@@ -319,7 +324,7 @@ AppComponent  (shell: nav sidebar + router outlet)
 | Every push / PR | `build` | `go vet` · `golangci-lint` · `go test -race ./...` · `go test ./internal/...` with ≥ 90% coverage gate |
 | Every push / PR | `test-rust` | `cargo clippy -D warnings` · `cargo llvm-cov` with ≥ 85% coverage gate |
 | Every push / PR | `test-dashboard` | `npm ci` · `ng lint` · `ng test --browsers=ChromeHeadless` with coverage thresholds |
-| After unit suites pass | `e2e` | Build Docker images · boot cluster · wait for healthy nodes · run 77 Playwright E2E tests · tear down |
+| After unit suites pass | `e2e` | Build Docker images · boot cluster · wait for healthy nodes · run 78 Playwright E2E tests · tear down |
 | After all suites pass | `snyk` | `snyk test --severity-threshold=high` (Go deps) · `snyk container test` (coordinator image) |
 | After all suites pass | `docker` | `docker buildx build` for coordinator and node images (cache to GHA) |
 
@@ -339,7 +344,7 @@ artifacts for debugging.
   node certificate, rate limit enforcement, audit log completeness.
 - **Angular unit tests.** Karma + Jasmine for component unit tests. Coverage thresholds enforced
   in `karma.conf.js` (98% stmt/lines, 96% fn, 95% branch).
-- **E2E tests.** In `dashboard/e2e/`. 77 Playwright specs covering the full path from
+- **E2E tests.** In `dashboard/e2e/`. 78 Playwright specs covering the full path from
   coordinator + nodes (gRPC registration, job dispatch) through the Angular dashboard
   (login, nodes, jobs, metrics, audit). Tests run against a real cluster — no mocks.
 - **Benchmarks.** In `tests/bench/`. Measure Go vs Rust runtime latency and throughput.
