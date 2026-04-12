@@ -33,14 +33,24 @@ type ResourceLimits struct {
 	CPUPeriodUS uint64 `json:"cpu_period_us,omitempty"` // period in microseconds (default 100000)
 }
 
+// RetryPolicyRequest is the optional retry configuration in SubmitRequest.
+type RetryPolicyRequest struct {
+	MaxAttempts    uint32 `json:"max_attempts,omitempty"`     // total attempts (default: 1 = no retry)
+	Backoff        string `json:"backoff,omitempty"`          // "none", "linear", "exponential" (default: exponential)
+	InitialDelayMs uint32 `json:"initial_delay_ms,omitempty"` // base delay in ms (default: 1000)
+	MaxDelayMs     uint32 `json:"max_delay_ms,omitempty"`     // cap in ms (default: 60000)
+	Jitter         *bool  `json:"jitter,omitempty"`           // add 0-25% jitter (default: true)
+}
+
 // SubmitRequest is the JSON body for POST /jobs.
 type SubmitRequest struct {
-	ID             string            `json:"id"`              // client-generated; required
-	Command        string            `json:"command"`         // required
-	Args           []string          `json:"args"`            // optional
-	Env            map[string]string `json:"env,omitempty"`   // optional key-value environment variables
-	TimeoutSeconds int64             `json:"timeout_seconds"` // optional; 0 means no limit
-	Limits         ResourceLimits    `json:"limits,omitempty"` // optional cgroup v2 resource limits
+	ID             string              `json:"id"`              // client-generated; required
+	Command        string              `json:"command"`         // required
+	Args           []string            `json:"args"`            // optional
+	Env            map[string]string   `json:"env,omitempty"`   // optional key-value environment variables
+	TimeoutSeconds int64               `json:"timeout_seconds"` // optional; 0 means no limit
+	Limits         ResourceLimits      `json:"limits,omitempty"` // optional cgroup v2 resource limits
+	RetryPolicy    *RetryPolicyRequest `json:"retry_policy,omitempty"` // optional retry configuration
 }
 
 // JobResponse is the JSON body returned by POST /jobs and GET /jobs/{id}.
@@ -58,6 +68,8 @@ type JobResponse struct {
 	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
 	Error          string            `json:"error,omitempty"`
 	SubmittedBy    string            `json:"submitted_by,omitempty"` // AUDIT L1
+	Attempt        uint32            `json:"attempt,omitempty"`
+	RetryAfter     *time.Time        `json:"retry_after,omitempty"`
 }
 
 // ErrorResponse is the JSON body for error responses.

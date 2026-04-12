@@ -102,6 +102,8 @@ func (s *JobStore) GetJobsByStatus(ctx context.Context, status string) ([]*cpb.J
 		targetStatus = cpb.JobStatusTimeout
 	case "LOST":
 		targetStatus = cpb.JobStatusLost
+	case "RETRYING":
+		targetStatus = cpb.JobStatusRetrying
 	default:
 		return nil, fmt.Errorf("unknown job status: %s", status)
 	}

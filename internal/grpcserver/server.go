@@ -84,6 +84,12 @@ type AuditLoggerIface interface {
 // failures. The callback receives the job ID and its final status.
 type JobCompletionCallback func(ctx context.Context, jobID string, status cpb.JobStatus)
 
+// RetryChecker decides whether a failed/timed-out job should be retried.
+// Returns true if the job was retried (transitioned back to pending).
+type RetryChecker interface {
+	RetryIfEligible(ctx context.Context, jobID string) bool
+}
+
 // ── Server ───────────────────────────────────────────────────────────────────
 
 // Server is the coordinator's gRPC server.
@@ -96,6 +102,7 @@ type Server struct {
 	audit             AuditLoggerIface
 	revocationChecker RevocationChecker     // nil means no revocation enforcement
 	onJobCompleted    JobCompletionCallback // nil means no workflow integration
+	retryChecker      RetryChecker          // nil means no retry support
 	log               *slog.Logger
 
 	// Active heartbeat streams: nodeID → done channel.
@@ -142,6 +149,12 @@ func WithRevocationChecker(rc RevocationChecker) Option {
 // terminal state. Used to trigger workflow dependency evaluation.
 func WithJobCompletionCallback(cb JobCompletionCallback) Option {
 	return func(s *Server) { s.onJobCompleted = cb }
+}
+
+// WithRetryChecker injects a retry checker that evaluates whether a
+// failed/timed-out job should be retried based on its retry policy.
+func WithRetryChecker(rc RetryChecker) Option {
+	return func(s *Server) { s.retryChecker = rc }
 }
 
 // WithLogger injects a structured logger.

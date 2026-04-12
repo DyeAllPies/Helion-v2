@@ -92,9 +92,15 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 	// Build set of workflow-eligible job IDs so we can skip blocked jobs.
 	eligible := d.buildEligibleSet()
 
+	now := time.Now()
 	jobs := d.jobs.List()
 	for _, job := range jobs {
 		if job.Status != cpb.JobStatusPending {
+			continue
+		}
+
+		// Skip jobs in backoff window (waiting for retry delay to expire).
+		if !job.RetryAfter.IsZero() && now.Before(job.RetryAfter) {
 			continue
 		}
 

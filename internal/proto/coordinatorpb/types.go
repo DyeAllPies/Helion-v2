@@ -35,6 +35,7 @@ const (
 	JobStatusFailed      JobStatus = 5
 	JobStatusTimeout     JobStatus = 6
 	JobStatusLost        JobStatus = 7
+	JobStatusRetrying    JobStatus = 8
 )
 
 func (s JobStatus) String() string {
@@ -53,6 +54,8 @@ func (s JobStatus) String() string {
 		return "timeout"
 	case JobStatusLost:
 		return "lost"
+	case JobStatusRetrying:
+		return "retrying"
 	default:
 		return "unknown"
 	}
@@ -129,6 +132,68 @@ type Job struct {
 
 	// WorkflowID links this job to a workflow. Empty for standalone jobs.
 	WorkflowID string `json:"workflow_id,omitempty"`
+
+	// RetryPolicy controls automatic retry behavior on failure/timeout.
+	// Zero value (nil) means no retry — job fails immediately (max_attempts=1).
+	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
+
+	// Attempt is the current attempt number (1-indexed). First attempt is 1.
+	Attempt uint32 `json:"attempt,omitempty"`
+
+	// RetryAfter is the earliest time this job can be retried. Set when a job
+	// enters the retrying state. The dispatch loop skips jobs where now < RetryAfter.
+	RetryAfter time.Time `json:"retry_after,omitempty"`
+}
+
+// ── BackoffStrategy ──────────────────────────────────────────────────────────
+
+// BackoffStrategy controls how retry delay increases between attempts.
+type BackoffStrategy int32
+
+const (
+	// BackoffNone uses a fixed delay (initial_delay_ms every time).
+	BackoffNone BackoffStrategy = 0
+	// BackoffLinear increases delay by initial_delay_ms each attempt.
+	BackoffLinear BackoffStrategy = 1
+	// BackoffExponential doubles the delay each attempt (capped at max_delay_ms).
+	BackoffExponential BackoffStrategy = 2
+)
+
+func (s BackoffStrategy) String() string {
+	switch s {
+	case BackoffNone:
+		return "none"
+	case BackoffLinear:
+		return "linear"
+	case BackoffExponential:
+		return "exponential"
+	default:
+		return "unknown"
+	}
+}
+
+// ── RetryPolicy ──────────────────────────────────────────────────────────────
+
+// RetryPolicy defines per-job retry behavior on failure or timeout.
+type RetryPolicy struct {
+	// MaxAttempts is the total number of attempts (not retries). Default: 1 (no retry).
+	// A value of 3 means: 1 initial attempt + 2 retries.
+	MaxAttempts uint32 `json:"max_attempts"`
+
+	// Backoff controls how delay grows between retries.
+	Backoff BackoffStrategy `json:"backoff"`
+
+	// InitialDelayMs is the base delay in milliseconds before the first retry.
+	// Default: 1000 (1 second).
+	InitialDelayMs uint32 `json:"initial_delay_ms"`
+
+	// MaxDelayMs caps the delay regardless of backoff strategy.
+	// Default: 60000 (60 seconds).
+	MaxDelayMs uint32 `json:"max_delay_ms"`
+
+	// Jitter adds random noise (0-25% of calculated delay) to prevent thundering herd.
+	// Default: true.
+	Jitter bool `json:"jitter"`
 }
 
 // ── WorkflowStatus ───────────────────────────────────────────────────────────

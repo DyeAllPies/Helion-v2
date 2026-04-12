@@ -195,6 +195,15 @@ func (s *Server) ReportResult(
 		}
 	}
 
+	// Check if the job should be retried before notifying workflows.
+	// If retried, the job goes back to pending — skip workflow notification.
+	if s.retryChecker != nil && s.retryChecker.RetryIfEligible(ctx, result.JobId) {
+		s.log.Info("job retried",
+			slog.String("job_id", result.JobId),
+		)
+		return &pb.Ack{Ok: true}, nil
+	}
+
 	// Notify workflow system of job completion so it can evaluate downstream
 	// dependency eligibility and cascade failures.
 	if s.onJobCompleted != nil {

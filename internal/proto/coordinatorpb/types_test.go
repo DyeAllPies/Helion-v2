@@ -21,6 +21,7 @@ func TestJobStatus_String_AllValues(t *testing.T) {
 		{cpb.JobStatusFailed, "failed"},
 		{cpb.JobStatusTimeout, "timeout"},
 		{cpb.JobStatusLost, "lost"},
+		{cpb.JobStatusRetrying, "retrying"},
 		{cpb.JobStatus(99), "unknown"}, // out-of-range → "unknown"
 	}
 	for _, tc := range cases {
@@ -53,6 +54,7 @@ func TestJobStatus_IsTerminal_NonTerminalStatuses(t *testing.T) {
 		cpb.JobStatusPending,
 		cpb.JobStatusDispatching,
 		cpb.JobStatusRunning,
+		cpb.JobStatusRetrying,
 	}
 	for _, s := range nonTerminals {
 		if s.IsTerminal() {
@@ -125,6 +127,26 @@ func TestDependencyCondition_String_AllValues(t *testing.T) {
 		got := tc.cond.String()
 		if got != tc.want {
 			t.Errorf("DependencyCondition(%d).String() = %q, want %q", tc.cond, got, tc.want)
+		}
+	}
+}
+
+// ── BackoffStrategy.String ────────────────────────────────────────────────────
+
+func TestBackoffStrategy_String_AllValues(t *testing.T) {
+	cases := []struct {
+		s    cpb.BackoffStrategy
+		want string
+	}{
+		{cpb.BackoffNone, "none"},
+		{cpb.BackoffLinear, "linear"},
+		{cpb.BackoffExponential, "exponential"},
+		{cpb.BackoffStrategy(99), "unknown"},
+	}
+	for _, tc := range cases {
+		got := tc.s.String()
+		if got != tc.want {
+			t.Errorf("BackoffStrategy(%d).String() = %q, want %q", tc.s, got, tc.want)
 		}
 	}
 }

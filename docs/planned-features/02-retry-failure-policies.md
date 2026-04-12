@@ -1,8 +1,8 @@
 # Feature: Retry + Failure Policies
 
 **Priority:** P0
-**Status:** Partial — dispatch retries passively on timer, no backoff/max/jitter
-**Affected files:** `proto/coordinator.proto`, `internal/cluster/dispatch.go`, `internal/cluster/job.go`, `internal/cluster/job_transition.go`
+**Status:** Implemented
+**Affected files:** `internal/proto/coordinatorpb/types.go`, `internal/cluster/retry.go`, `internal/cluster/job_retry.go`, `internal/cluster/job.go`, `internal/cluster/dispatch.go`, `internal/api/handlers_jobs.go`
 
 ## Problem
 

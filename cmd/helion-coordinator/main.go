@@ -219,6 +219,7 @@ func main() {
 		grpcserver.WithJobCompletionCallback(func(cbCtx context.Context, jobID string, status cpb.JobStatus) {
 			workflows.OnJobCompleted(cbCtx, jobID, status, jobs)
 		}),
+		grpcserver.WithRetryChecker(jobs),
 	)
 	if err != nil {
 		log.Error("create gRPC server", slog.Any("err", err))

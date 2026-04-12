@@ -99,6 +99,9 @@ var allowedTransitions = map[cpb.JobStatus][]cpb.JobStatus{
 	cpb.JobStatusPending:     {cpb.JobStatusDispatching},
 	cpb.JobStatusDispatching: {cpb.JobStatusRunning, cpb.JobStatusFailed},
 	cpb.JobStatusRunning:     {cpb.JobStatusCompleted, cpb.JobStatusFailed, cpb.JobStatusTimeout},
+	cpb.JobStatusFailed:      {cpb.JobStatusRetrying},
+	cpb.JobStatusTimeout:     {cpb.JobStatusRetrying},
+	cpb.JobStatusRetrying:    {cpb.JobStatusPending},
 }
 
 func isAllowed(from, to cpb.JobStatus) bool {
@@ -108,6 +111,11 @@ func isAllowed(from, to cpb.JobStatus) bool {
 		}
 	}
 	return false
+}
+
+// isRetryable returns true if the status can trigger a retry transition.
+func isRetryable(s cpb.JobStatus) bool {
+	return s == cpb.JobStatusFailed || s == cpb.JobStatusTimeout
 }
 
 // ── TransitionOptions ─────────────────────────────────────────────────────────

@@ -21,6 +21,9 @@ import (
 func (s *JobStore) Submit(ctx context.Context, j *cpb.Job) error {
 	j.Status = cpb.JobStatusPending
 	j.CreatedAt = time.Now()
+	if j.Attempt == 0 {
+		j.Attempt = 1
+	}
 
 	s.mu.Lock()
 	if _, exists := s.jobs[j.ID]; exists {

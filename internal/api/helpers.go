@@ -56,6 +56,13 @@ func jobToResponse(j *cpb.Job) JobResponse {
 		t := j.FinishedAt
 		resp.FinishedAt = &t
 	}
+	if j.Attempt > 0 {
+		resp.Attempt = j.Attempt
+	}
+	if !j.RetryAfter.IsZero() {
+		t := j.RetryAfter
+		resp.RetryAfter = &t
+	}
 	return resp
 }
 

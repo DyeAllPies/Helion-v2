@@ -153,6 +153,38 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	// Parse optional retry policy.
+	if req.RetryPolicy != nil {
+		rp := req.RetryPolicy
+		if rp.MaxAttempts > 100 {
+			writeError(w, http.StatusBadRequest, "retry_policy.max_attempts must not exceed 100")
+			return
+		}
+		policy := &cpb.RetryPolicy{
+			MaxAttempts:    rp.MaxAttempts,
+			InitialDelayMs: rp.InitialDelayMs,
+			MaxDelayMs:     rp.MaxDelayMs,
+			Jitter:         true, // default
+		}
+		if rp.Jitter != nil {
+			policy.Jitter = *rp.Jitter
+		}
+		switch strings.ToLower(rp.Backoff) {
+		case "none":
+			policy.Backoff = cpb.BackoffNone
+		case "linear":
+			policy.Backoff = cpb.BackoffLinear
+		case "", "exponential":
+			policy.Backoff = cpb.BackoffExponential
+		default:
+			writeError(w, http.StatusBadRequest, "retry_policy.backoff must be none, linear, or exponential")
+			return
+		}
+		if policy.MaxAttempts > 1 {
+			job.RetryPolicy = policy
+		}
+	}
+
 	// AUDIT L1 (fixed): record the caller's JWT subject so handleGetJob
 	// can enforce per-job RBAC. Skipped when auth is disabled (dev mode).
 	if s.tokenManager != nil {
@@ -235,6 +267,7 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 var validJobStatuses = map[string]bool{
 	"UNKNOWN": true, "PENDING": true, "DISPATCHING": true, "RUNNING": true,
 	"COMPLETED": true, "FAILED": true, "TIMEOUT": true, "LOST": true,
+	"RETRYING": true,
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
