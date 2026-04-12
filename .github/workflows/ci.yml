@@ -262,31 +262,39 @@ jobs:
 
       - name: Wait for nodes to register
         run: |
-          echo "Waiting for at least 1 healthy node..."
-          echo "Token length: ${#E2E_TOKEN}"
-          for i in $(seq 1 20); do
-            # Debug: show HTTP status and response body on first iteration
-            if [ "$i" -eq 1 ]; then
-              echo "--- debug: curl response ---"
-              curl -v -H "Authorization: Bearer $E2E_TOKEN" \
-                http://127.0.0.1:8080/nodes 2>&1 || true
-              echo "--- end debug ---"
-            fi
-            HEALTHY=$(curl -sf -H "Authorization: Bearer $E2E_TOKEN" \
-              http://127.0.0.1:8080/nodes 2>/dev/null \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print(sum(1 for n in d.get('nodes',d) if n.get('healthy')))" 2>/dev/null || echo 0)
-            echo "attempt $i: HEALTHY=$HEALTHY"
-            if [ "$HEALTHY" -ge 1 ]; then
-              echo "$HEALTHY healthy node(s) registered."
-              break
-            fi
-            if [ "$i" -eq 20 ]; then
-              echo "FAIL: no healthy nodes after 60s"
-              docker compose -f docker-compose.yml -f docker-compose.e2e.yml logs
-              exit 1
-            fi
-            sleep 3
-          done
+          python3 - <<'PYEOF'
+          import http.client, json, os, time, sys
+
+          token = os.environ.get("E2E_TOKEN", "")
+          print(f"Token present: {bool(token)}, length: {len(token)}")
+
+          for attempt in range(1, 21):
+              try:
+                  conn = http.client.HTTPConnection("127.0.0.1", 8080, timeout=5)
+                  conn.request("GET", "/nodes", headers={"Authorization": f"Bearer {token}"})
+                  resp = conn.getresponse()
+                  body = resp.read().decode()
+                  print(f"attempt {attempt}: status={resp.status}, body_len={len(body)}")
+                  if attempt == 1:
+                      # Print response body (safe: no token in response)
+                      print(f"  response: {body[:500]}")
+                  if resp.status == 200:
+                      data = json.loads(body)
+                      nodes = data.get("nodes", data) if isinstance(data, dict) else data
+                      healthy = sum(1 for n in nodes if n.get("healthy"))
+                      print(f"  healthy={healthy}")
+                      if healthy >= 1:
+                          print(f"{healthy} healthy node(s) registered.")
+                          sys.exit(0)
+                  conn.close()
+              except Exception as e:
+                  print(f"attempt {attempt}: error={e}")
+              time.sleep(3)
+
+          print("FAIL: no healthy nodes after 60s")
+          os.system("docker compose -f docker-compose.yml -f docker-compose.e2e.yml logs")
+          sys.exit(1)
+          PYEOF
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
