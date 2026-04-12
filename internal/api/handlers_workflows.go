@@ -82,11 +82,6 @@ type WorkflowListResponse struct {
 // ── Handlers ────────────────────────────────────────────────────────────────
 
 func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
-	if s.workflowStore == nil {
-		writeError(w, http.StatusNotImplemented, "workflow support not enabled")
-		return
-	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitBodyBytes)
 	var req SubmitWorkflowRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -183,19 +178,7 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
-	if s.workflowStore == nil {
-		writeError(w, http.StatusNotImplemented, "workflow support not enabled")
-		return
-	}
-
 	id := r.PathValue("id")
-	if id == "" {
-		id = strings.TrimPrefix(r.URL.Path, "/workflows/")
-	}
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "workflow id required")
-		return
-	}
 
 	wf, err := s.workflowStore.Get(id)
 	if err != nil {
@@ -208,11 +191,6 @@ func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
-	if s.workflowStore == nil {
-		writeError(w, http.StatusNotImplemented, "workflow support not enabled")
-		return
-	}
-
 	pageStr := r.URL.Query().Get("page")
 	page := 1
 	if pageStr != "" {
@@ -264,19 +242,7 @@ func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCancelWorkflow(w http.ResponseWriter, r *http.Request) {
-	if s.workflowStore == nil {
-		writeError(w, http.StatusNotImplemented, "workflow support not enabled")
-		return
-	}
-
 	id := r.PathValue("id")
-	if id == "" {
-		id = strings.TrimPrefix(r.URL.Path, "/workflows/")
-	}
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "workflow id required")
-		return
-	}
 
 	if err := s.workflowStore.Cancel(r.Context(), id, s.workflowJobStore); err != nil {
 		if errors.Is(err, cluster.ErrWorkflowNotFound) {

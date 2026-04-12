@@ -142,6 +142,110 @@ func TestWorkflowStore_Start_CreatesJobs(t *testing.T) {
 	}
 }
 
+// ── RunningWorkflowIDs ───────────────────────────────────────────────────────
+
+func TestWorkflowStore_RunningWorkflowIDs(t *testing.T) {
+	ws, _ := newTestWorkflowStore()
+	js := newTestJobStore()
+	ctx := context.Background()
+
+	// No workflows → empty.
+	if ids := ws.RunningWorkflowIDs(); len(ids) != 0 {
+		t.Fatalf("expected empty, got %v", ids)
+	}
+
+	// Submit + start two workflows, leave one pending.
+	_ = ws.Submit(ctx, &cpb.Workflow{ID: "wf-r1", Jobs: []cpb.WorkflowJob{{Name: "a", Command: "echo"}}})
+	_ = ws.Start(ctx, "wf-r1", js)
+
+	_ = ws.Submit(ctx, &cpb.Workflow{ID: "wf-r2", Jobs: []cpb.WorkflowJob{{Name: "a", Command: "echo"}}})
+	_ = ws.Start(ctx, "wf-r2", js)
+
+	_ = ws.Submit(ctx, &cpb.Workflow{ID: "wf-pending", Jobs: []cpb.WorkflowJob{{Name: "a", Command: "echo"}}})
+
+	ids := ws.RunningWorkflowIDs()
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 running, got %d: %v", len(ids), ids)
+	}
+}
+
+func TestWorkflowStore_Start_NotFound(t *testing.T) {
+	ws, _ := newTestWorkflowStore()
+	js := newTestJobStore()
+	err := ws.Start(context.Background(), "nonexistent", js)
+	if !errors.Is(err, cluster.ErrWorkflowNotFound) {
+		t.Fatalf("expected ErrWorkflowNotFound, got %v", err)
+	}
+}
+
+func TestWorkflowStore_Start_NotPending(t *testing.T) {
+	ws, _ := newTestWorkflowStore()
+	js := newTestJobStore()
+	ctx := context.Background()
+
+	_ = ws.Submit(ctx, &cpb.Workflow{ID: "wf-np", Jobs: []cpb.WorkflowJob{{Name: "a", Command: "echo"}}})
+	_ = ws.Start(ctx, "wf-np", js)
+
+	// Try starting again — should fail (already running).
+	err := ws.Start(ctx, "wf-np", js)
+	if err == nil {
+		t.Fatal("expected error starting already-running workflow")
+	}
+}
+
+func TestWorkflowStore_Start_JobCreationFails(t *testing.T) {
+	ws, _ := newTestWorkflowStore()
+	ctx := context.Background()
+
+	// Use a job store that already has a job with the same ID the workflow would create.
+	js := newTestJobStore()
+	_ = js.Submit(ctx, &cpb.Job{ID: "wf-fail-start/build", Command: "pre-existing"})
+
+	wf := &cpb.Workflow{
+		ID: "wf-fail-start",
+		Jobs: []cpb.WorkflowJob{
+			{Name: "build", Command: "make"},
+		},
+	}
+	_ = ws.Submit(ctx, wf)
+
+	err := ws.Start(ctx, "wf-fail-start", js)
+	if err == nil {
+		t.Fatal("expected error when job creation fails due to duplicate ID")
+	}
+
+	// Workflow should be marked failed.
+	got, _ := ws.Get("wf-fail-start")
+	if got.Status != cpb.WorkflowStatusFailed {
+		t.Errorf("status = %s, want failed", got.Status)
+	}
+}
+
+func TestWorkflowStore_Submit_PersistFailure(t *testing.T) {
+	ws, _ := newTestWorkflowStore()
+	ctx := context.Background()
+
+	// Valid workflow should succeed.
+	wf := &cpb.Workflow{
+		ID:   "wf-persist-ok",
+		Jobs: []cpb.WorkflowJob{{Name: "a", Command: "echo"}},
+	}
+	if err := ws.Submit(ctx, wf); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wf.Status != cpb.WorkflowStatusPending {
+		t.Errorf("status = %s, want pending", wf.Status)
+	}
+}
+
+func TestWorkflowStore_Get_NotFound(t *testing.T) {
+	ws, _ := newTestWorkflowStore()
+	_, err := ws.Get("nonexistent")
+	if !errors.Is(err, cluster.ErrWorkflowNotFound) {
+		t.Fatalf("expected ErrWorkflowNotFound, got %v", err)
+	}
+}
+
 // ── List + Restore ───────────────────────────────────────────────────────────
 
 func TestWorkflowStore_List(t *testing.T) {

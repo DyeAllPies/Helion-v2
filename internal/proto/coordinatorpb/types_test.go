@@ -63,6 +63,74 @@ func TestJobStatus_IsTerminal_NonTerminalStatuses(t *testing.T) {
 
 // ── Job.Env and Job.TimeoutSeconds ────────────────────────────────────────────
 
+// ── WorkflowStatus.String ────────────────────────────────────────────────────
+
+func TestWorkflowStatus_String_AllValues(t *testing.T) {
+	cases := []struct {
+		status cpb.WorkflowStatus
+		want   string
+	}{
+		{cpb.WorkflowStatusPending, "pending"},
+		{cpb.WorkflowStatusRunning, "running"},
+		{cpb.WorkflowStatusCompleted, "completed"},
+		{cpb.WorkflowStatusFailed, "failed"},
+		{cpb.WorkflowStatusCancelled, "cancelled"},
+		{cpb.WorkflowStatus(99), "unknown"},
+	}
+	for _, tc := range cases {
+		got := tc.status.String()
+		if got != tc.want {
+			t.Errorf("WorkflowStatus(%d).String() = %q, want %q", tc.status, got, tc.want)
+		}
+	}
+}
+
+// ── WorkflowStatus.IsTerminal ────────────────────────────────────────────────
+
+func TestWorkflowStatus_IsTerminal(t *testing.T) {
+	terminals := []cpb.WorkflowStatus{
+		cpb.WorkflowStatusCompleted,
+		cpb.WorkflowStatusFailed,
+		cpb.WorkflowStatusCancelled,
+	}
+	for _, s := range terminals {
+		if !s.IsTerminal() {
+			t.Errorf("expected %s to be terminal", s)
+		}
+	}
+	nonTerminals := []cpb.WorkflowStatus{
+		cpb.WorkflowStatusPending,
+		cpb.WorkflowStatusRunning,
+	}
+	for _, s := range nonTerminals {
+		if s.IsTerminal() {
+			t.Errorf("expected %s to not be terminal", s)
+		}
+	}
+}
+
+// ── DependencyCondition.String ───────────────────────────────────────────────
+
+func TestDependencyCondition_String_AllValues(t *testing.T) {
+	cases := []struct {
+		cond cpb.DependencyCondition
+		want string
+	}{
+		{cpb.DependencyOnSuccess, "on_success"},
+		{cpb.DependencyOnFailure, "on_failure"},
+		{cpb.DependencyOnComplete, "on_complete"},
+		{cpb.DependencyCondition(99), "unknown"},
+	}
+	for _, tc := range cases {
+		got := tc.cond.String()
+		if got != tc.want {
+			t.Errorf("DependencyCondition(%d).String() = %q, want %q", tc.cond, got, tc.want)
+		}
+	}
+}
+
+// ── Job.Env and Job.TimeoutSeconds ────────────────────────────────────────────
+
 func TestJob_EnvAndTimeout_DefaultToZeroValues(t *testing.T) {
 	j := cpb.Job{ID: "j1", Command: "echo"}
 	if len(j.Env) != 0 {

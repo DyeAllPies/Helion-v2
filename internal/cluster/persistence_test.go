@@ -370,3 +370,127 @@ func TestBadgerPersister_Scan_ZeroLimit_ReturnsAll(t *testing.T) {
 		t.Errorf("want 10 results with limit=0, got %d", len(results))
 	}
 }
+
+// ── SaveWorkflow / LoadAllWorkflows ──────────────────────────────────────────
+
+func TestBadgerPersister_SaveWorkflow_RoundTrip(t *testing.T) {
+	p := newBadgerPersister(t)
+	ctx := context.Background()
+
+	wf := &cpb.Workflow{
+		ID:     "wf-persist-1",
+		Name:   "test pipeline",
+		Status: cpb.WorkflowStatusRunning,
+		Jobs: []cpb.WorkflowJob{
+			{Name: "build", Command: "make", JobID: "wf-persist-1/build"},
+			{Name: "test", Command: "make", DependsOn: []string{"build"}, JobID: "wf-persist-1/test"},
+		},
+	}
+
+	if err := p.SaveWorkflow(ctx, wf); err != nil {
+		t.Fatalf("SaveWorkflow: %v", err)
+	}
+
+	workflows, err := p.LoadAllWorkflows(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllWorkflows: %v", err)
+	}
+	if len(workflows) != 1 {
+		t.Fatalf("expected 1 workflow, got %d", len(workflows))
+	}
+
+	got := workflows[0]
+	if got.ID != "wf-persist-1" {
+		t.Errorf("id = %q, want wf-persist-1", got.ID)
+	}
+	if got.Name != "test pipeline" {
+		t.Errorf("name = %q, want test pipeline", got.Name)
+	}
+	if got.Status != cpb.WorkflowStatusRunning {
+		t.Errorf("status = %s, want running", got.Status)
+	}
+	if len(got.Jobs) != 2 {
+		t.Fatalf("jobs = %d, want 2", len(got.Jobs))
+	}
+	if got.Jobs[1].DependsOn[0] != "build" {
+		t.Errorf("depends_on = %v, want [build]", got.Jobs[1].DependsOn)
+	}
+}
+
+func TestBadgerPersister_SaveWorkflow_Overwrite(t *testing.T) {
+	p := newBadgerPersister(t)
+	ctx := context.Background()
+
+	wf := &cpb.Workflow{
+		ID:     "wf-overwrite",
+		Status: cpb.WorkflowStatusPending,
+		Jobs:   []cpb.WorkflowJob{{Name: "a", Command: "echo"}},
+	}
+	_ = p.SaveWorkflow(ctx, wf)
+
+	wf.Status = cpb.WorkflowStatusCompleted
+	_ = p.SaveWorkflow(ctx, wf)
+
+	workflows, _ := p.LoadAllWorkflows(ctx)
+	if len(workflows) != 1 {
+		t.Fatalf("expected 1 workflow after overwrite, got %d", len(workflows))
+	}
+	if workflows[0].Status != cpb.WorkflowStatusCompleted {
+		t.Errorf("status = %s, want completed", workflows[0].Status)
+	}
+}
+
+func TestBadgerPersister_LoadAllWorkflows_EmptyDB(t *testing.T) {
+	p := newBadgerPersister(t)
+	workflows, err := p.LoadAllWorkflows(context.Background())
+	if err != nil {
+		t.Fatalf("LoadAllWorkflows on empty DB: %v", err)
+	}
+	if len(workflows) != 0 {
+		t.Errorf("expected 0 workflows, got %d", len(workflows))
+	}
+}
+
+// ── NopPersister workflow methods ───────────────────────────────────────────
+
+func TestNopPersister_WorkflowMethods(t *testing.T) {
+	var p cluster.NopPersister
+	ctx := context.Background()
+
+	if err := p.SaveWorkflow(ctx, &cpb.Workflow{ID: "x"}); err != nil {
+		t.Errorf("SaveWorkflow: %v", err)
+	}
+	wfs, err := p.LoadAllWorkflows(ctx)
+	if err != nil {
+		t.Errorf("LoadAllWorkflows: %v", err)
+	}
+	if len(wfs) != 0 {
+		t.Errorf("expected nil, got %v", wfs)
+	}
+}
+
+// ── MemPersister workflow methods ───────────────────────────────────────────
+
+func TestMemPersister_WorkflowMethods(t *testing.T) {
+	p := cluster.NewMemPersister()
+	ctx := context.Background()
+
+	wf := &cpb.Workflow{
+		ID:   "wf-mem",
+		Jobs: []cpb.WorkflowJob{{Name: "a", Command: "echo"}},
+	}
+	if err := p.SaveWorkflow(ctx, wf); err != nil {
+		t.Fatalf("SaveWorkflow: %v", err)
+	}
+
+	wfs, err := p.LoadAllWorkflows(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllWorkflows: %v", err)
+	}
+	if len(wfs) != 1 {
+		t.Fatalf("expected 1, got %d", len(wfs))
+	}
+	if wfs[0].ID != "wf-mem" {
+		t.Errorf("id = %q, want wf-mem", wfs[0].ID)
+	}
+}
