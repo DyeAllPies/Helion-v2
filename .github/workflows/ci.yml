@@ -136,7 +136,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, llvm-tools-preview
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
@@ -148,11 +148,35 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('runtime-rust/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: cargo clippy
         run: cargo clippy --manifest-path runtime-rust/Cargo.toml -- -D warnings
 
-      - name: cargo test
-        run: cargo test --manifest-path runtime-rust/Cargo.toml
+      # Coverage replaces the bare `cargo test` step — llvm-cov runs the same
+      # tests under instrumentation and emits both a summary and an lcov file.
+      #
+      # Excluded from the denominator:
+      #   main.rs    — binary entry point (signal/exec wiring, same rationale
+      #                as Go cmd/ tier; not unit-testable in isolation)
+      #   proto.rs   — generated protobuf stubs
+      #   cgroups.rs — root-only Linux cgroup syscalls; cannot run in CI
+      #                without privileged containers
+      - name: cargo llvm-cov (test + coverage)
+        run: |
+          cargo llvm-cov --manifest-path runtime-rust/Cargo.toml \
+            --ignore-filename-regex '(main\.rs|proto\.rs|cgroups\.rs)' \
+            --lcov --output-path runtime-rust/lcov.info \
+            --fail-under-lines 85
+
+      - name: Upload Rust coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage
+          path: runtime-rust/lcov.info
+          retention-days: 14
 
   # ── Angular: lint + test + coverage ──────────────────────────────────────────
   test-dashboard:
@@ -185,7 +209,7 @@ jobs:
             --watch=false \
             --browsers=ChromeHeadless \
             --code-coverage
-        # karma.conf.js enforces the coverage threshold (50% stmt/fn/lines, 40% branch).
+        # karma.conf.js enforces coverage thresholds (98% stmt/lines, 96% fn, 95% branch).
         # If coverage falls below it, ng test exits non-zero and this step fails.
 
       - name: Upload Angular coverage report

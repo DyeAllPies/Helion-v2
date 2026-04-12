@@ -115,6 +115,51 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn threading_syscalls_allowed() {
+        let syscalls = allowed_syscalls();
+        for nr in [libc::SYS_clone, libc::SYS_clone3, libc::SYS_futex, libc::SYS_set_tid_address] {
+            assert!(syscalls.contains(&nr), "threading syscall {} must be allowed", nr);
+        }
+    }
+
+    #[test]
+    fn networking_syscalls_allowed() {
+        let syscalls = allowed_syscalls();
+        for nr in [libc::SYS_socket, libc::SYS_connect, libc::SYS_bind, libc::SYS_accept, libc::SYS_listen] {
+            assert!(syscalls.contains(&nr), "networking syscall {} must be allowed", nr);
+        }
+    }
+
+    #[test]
+    fn file_io_syscalls_allowed() {
+        let syscalls = allowed_syscalls();
+        for nr in [libc::SYS_open, libc::SYS_openat, libc::SYS_close, libc::SYS_read, libc::SYS_write, libc::SYS_lseek] {
+            assert!(syscalls.contains(&nr), "file I/O syscall {} must be allowed", nr);
+        }
+    }
+
+    #[test]
+    fn exec_syscalls_allowed() {
+        let syscalls = allowed_syscalls();
+        assert!(syscalls.contains(&libc::SYS_execve), "execve must be allowed for sandbox to work");
+        assert!(syscalls.contains(&libc::SYS_execveat), "execveat must be allowed");
+    }
+
+    #[test]
+    fn signal_syscalls_allowed() {
+        let syscalls = allowed_syscalls();
+        for nr in [libc::SYS_rt_sigaction, libc::SYS_rt_sigprocmask, libc::SYS_rt_sigreturn, libc::SYS_kill] {
+            assert!(syscalls.contains(&nr), "signal syscall {} must be allowed", nr);
+        }
+    }
+
+    #[test]
+    fn bpf_program_has_multiple_instructions() {
+        let prog = build_allowlist().expect("build should succeed");
+        assert!(prog.len() > 10, "BPF program should have many instructions, got {}", prog.len());
+    }
 }
 
 /// Returns the list of allowed syscall numbers for x86-64.

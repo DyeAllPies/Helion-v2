@@ -127,6 +127,24 @@ describe('ApiService', () => {
     req.flush(mockAuditPage);
   });
 
+  it('getJobs() uses default page=0, size=25 when called with no args', () => {
+    service.getJobs().subscribe();
+    const req = httpMock.expectOne(r => r.url.endsWith('/jobs'));
+    expect(req.request.params.get('page')).toBe('0');
+    expect(req.request.params.get('size')).toBe('25');
+    expect(req.request.params.has('status')).toBeFalse();
+    req.flush(mockPage);
+  });
+
+  it('getAudit() uses default page=0, size=50 when called with no args', () => {
+    service.getAudit().subscribe();
+    const req = httpMock.expectOne(r => r.url.endsWith('/audit'));
+    expect(req.request.params.get('page')).toBe('0');
+    expect(req.request.params.get('size')).toBe('50');
+    expect(req.request.params.has('type')).toBeFalse();
+    req.flush(mockAuditPage);
+  });
+
   it('getAudit() does NOT append type param when omitted', () => {
     service.getAudit(0, 50).subscribe();
     const req = httpMock.expectOne(r => r.url.endsWith('/audit'));

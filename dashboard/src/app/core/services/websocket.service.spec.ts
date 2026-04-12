@@ -91,4 +91,34 @@ describe('WebSocketService', () => {
     sub.unsubscribe();
     expect(MockWebSocket.instance.readyState).toBe(MockWebSocket.CLOSED);
   });
+
+  it('should error observable when onerror fires', (done) => {
+    service.jobLogs('job-002').subscribe({
+      error: err => {
+        expect(err.message).toContain('WebSocket error');
+        done();
+      },
+    });
+    MockWebSocket.instance.simulateError();
+  });
+
+  it('should omit token param when auth token is null', (done) => {
+    (Object.getOwnPropertyDescriptor(authSpy, 'token')!.get as jasmine.Spy).and.returnValue(null);
+    service.jobLogs('job-003').subscribe({ complete: done });
+    expect(MockWebSocket.instance.url).not.toContain('token=');
+    MockWebSocket.instance.simulateClose(1000);
+  });
+
+  it('should skip malformed JSON frames without erroring', (done) => {
+    const received: LogChunk[] = [];
+    service.jobLogs('job-004').subscribe({
+      next: c => received.push(c),
+      complete: () => {
+        expect(received.length).toBe(0);
+        done();
+      },
+    });
+    MockWebSocket.instance.onmessage?.({ data: 'not-json{{{' });
+    MockWebSocket.instance.simulateClose(1000);
+  });
 });

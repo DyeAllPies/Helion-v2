@@ -195,4 +195,107 @@ mod tests {
         let decoded = CancelRequest::decode(encoded.as_slice()).expect("decode");
         assert_eq!(decoded.job_id, "cancel-me");
     }
+
+    #[test]
+    fn cancel_response_round_trip() {
+        use crate::proto::CancelResponse;
+        use prost::Message;
+
+        let resp = CancelResponse { ok: true, error: String::new() };
+        let encoded = resp.encode_to_vec();
+        let decoded = CancelResponse::decode(encoded.as_slice()).expect("decode");
+        assert!(decoded.ok);
+        assert!(decoded.error.is_empty());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn read_write_frame_round_trip() {
+        let (client, server) = tokio::net::UnixStream::pair().unwrap();
+        let mut writer = client;
+        let mut reader = server;
+
+        let payload = b"test-payload";
+        write_frame(&mut writer, MSG_RUN_REQUEST, payload).await.unwrap();
+
+        let (msg_type, data) = read_frame(&mut reader).await.unwrap();
+        assert_eq!(msg_type, MSG_RUN_REQUEST);
+        assert_eq!(data, payload);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn read_frame_rejects_oversized() {
+        let (mut writer, mut reader) = tokio::net::UnixStream::pair().unwrap();
+
+        let mut hdr = [0u8; 8];
+        hdr[0..4].copy_from_slice(&MSG_RUN_REQUEST.to_be_bytes());
+        let huge_len: u32 = MAX_FRAME_BYTES + 1;
+        hdr[4..8].copy_from_slice(&huge_len.to_be_bytes());
+        tokio::io::AsyncWriteExt::write_all(&mut writer, &hdr).await.unwrap();
+
+        let result = read_frame(&mut reader).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("frame too large"));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn handle_connection_unknown_msg_type_errors() {
+        let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
+        let executor = Arc::new(Executor::new());
+
+        // Write a frame with unknown msg_type 99
+        write_frame(&mut client, 99, b"").await.unwrap();
+        drop(client);
+
+        let result = handle_connection(server, executor).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown msg_type"));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn handle_connection_run_request_e2e() {
+        let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
+        let executor = Arc::new(Executor::new());
+
+        let req = RunRequest {
+            job_id: "ipc-e2e".into(),
+            command: "/bin/echo".into(),
+            args: vec!["ipc-test".into()],
+            env: Default::default(),
+            timeout_seconds: 5,
+            limits: None,
+        };
+        let encoded = req.encode_to_vec();
+        write_frame(&mut client, MSG_RUN_REQUEST, &encoded).await.unwrap();
+
+        handle_connection(server, executor).await.unwrap();
+
+        let (msg_type, payload) = read_frame(&mut client).await.unwrap();
+        assert_eq!(msg_type, MSG_RUN_RESPONSE);
+        let resp = crate::proto::RunResponse::decode(payload.as_slice()).unwrap();
+        assert_eq!(resp.exit_code, 0);
+        assert!(String::from_utf8_lossy(&resp.stdout).contains("ipc-test"));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn handle_connection_cancel_request_e2e() {
+        let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
+        let executor = Arc::new(Executor::new());
+
+        let req = CancelRequest { job_id: "no-such-job".into() };
+        let encoded = req.encode_to_vec();
+        write_frame(&mut client, MSG_CANCEL_REQUEST, &encoded).await.unwrap();
+
+        handle_connection(server, executor).await.unwrap();
+
+        let (msg_type, payload) = read_frame(&mut client).await.unwrap();
+        assert_eq!(msg_type, MSG_CANCEL_RESPONSE);
+        let resp = crate::proto::CancelResponse::decode(payload.as_slice()).unwrap();
+        assert!(!resp.ok);
+        assert!(resp.error.contains("not found"));
+    }
 }

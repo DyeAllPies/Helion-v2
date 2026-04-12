@@ -98,6 +98,14 @@ describe('JobListComponent', () => {
     expect(el.querySelector('.empty-state')).toBeTruthy();
   });
 
+  it('onPage should update pageIndex/pageSize and reload', () => {
+    apiSpy.getJobs.calls.reset();
+    component.onPage({ pageIndex: 3, pageSize: 50, length: 200 });
+    expect(component.pageIndex).toBe(3);
+    expect(component.pageSize).toBe(50);
+    expect(apiSpy.getJobs).toHaveBeenCalledWith(3, 50, undefined);
+  });
+
   it('statuses list should include all expected values', () => {
     expect(component.statuses).toContain('pending');
     expect(component.statuses).toContain('running');

@@ -57,6 +57,26 @@ describe('LoginComponent', () => {
     expect(el.querySelector('.error-msg')).toBeTruthy();
   }));
 
+  it('ngOnInit should redirect to /nodes if already authenticated', () => {
+    // Re-create with a spy that reports a token
+    const authedSpy = jasmine.createSpyObj('AuthService', ['login'], { token: 'existing.jwt.token' });
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      imports: [LoginComponent],
+      providers: [
+        provideRouter([{ path: 'nodes', component: {} as never }]),
+        provideAnimations(),
+        { provide: AuthService, useValue: authedSpy },
+      ],
+    });
+    const f = TestBed.createComponent(LoginComponent);
+    const r = TestBed.inject(Router);
+    const rSpy = spyOn(r, 'navigate').and.returnValue(Promise.resolve(true));
+    f.detectChanges();
+    expect(rSpy).toHaveBeenCalledWith(['/nodes']);
+    f.destroy();
+  });
+
   it('should navigate to /nodes on successful login', fakeAsync(() => {
     authSpy.login.and.returnValue(true);
     const navSpy = spyOn(router, 'navigate').and.returnValue(Promise.resolve(true));

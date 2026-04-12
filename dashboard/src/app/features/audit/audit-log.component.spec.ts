@@ -126,6 +126,14 @@ describe('AuditLogComponent', () => {
     expect(component.eventClass('auth_failure')).toBe('evt-auth');
   });
 
+  it('onPage should update pageIndex/pageSize and reload', () => {
+    apiSpy.getAudit.calls.reset();
+    component.onPage({ pageIndex: 2, pageSize: 100, length: 200 });
+    expect(component.pageIndex).toBe(2);
+    expect(component.pageSize).toBe(100);
+    expect(apiSpy.getAudit).toHaveBeenCalledWith(2, 100, undefined);
+  });
+
   it('eventClass: unknown future type falls back to first-word prefix', () => {
     expect(component.eventClass('foo_bar_baz')).toBe('evt-foo');
   });

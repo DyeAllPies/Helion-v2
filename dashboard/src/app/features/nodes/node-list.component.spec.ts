@@ -92,4 +92,21 @@ describe('NodeListComponent', () => {
     const ts = new Date(Date.now() - 30_000).toISOString();
     expect(component.relativeTime(ts)).toBe('30s ago');
   });
+
+  it('relativeTime should return minutes ago', () => {
+    const ts = new Date(Date.now() - 300_000).toISOString();
+    expect(component.relativeTime(ts)).toBe('5m ago');
+  });
+
+  it('relativeTime should return hours ago', () => {
+    const ts = new Date(Date.now() - 7_200_000).toISOString();
+    expect(component.relativeTime(ts)).toBe('2h ago');
+  });
+
+  it('ngOnDestroy should unsubscribe from polling', () => {
+    component.ngOnDestroy();
+    apiSpy.getNodes.calls.reset();
+    // After destroy, no further calls should be made
+    expect(apiSpy.getNodes).not.toHaveBeenCalled();
+  });
 });

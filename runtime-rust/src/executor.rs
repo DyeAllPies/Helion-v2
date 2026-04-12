@@ -339,4 +339,104 @@ mod tests {
         assert_ne!(resp.exit_code, 0);
         assert!(!resp.error.is_empty(), "expected error message for missing binary");
     }
+
+    #[test]
+    fn zero_timeout_defaults_to_1800() {
+        let exec = Executor::new();
+        let req = RunRequest {
+            job_id: "test-zero-timeout".into(),
+            command: "/bin/true".into(),
+            args: vec![],
+            env: Default::default(),
+            timeout_seconds: 0,
+            limits: None,
+        };
+        let resp = exec.run(req);
+        assert_eq!(resp.exit_code, 0, "zero-timeout job should still succeed");
+        assert!(resp.kill_reason.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_passes_env_vars() {
+        let exec = Executor::new();
+        let mut env = std::collections::HashMap::new();
+        env.insert("MY_VAR".into(), "hello_from_test".into());
+        let req = RunRequest {
+            job_id: "test-env".into(),
+            command: "/usr/bin/env".into(),
+            args: vec![],
+            env,
+            timeout_seconds: 5,
+            limits: None,
+        };
+        let resp = exec.run(req);
+        assert_eq!(resp.exit_code, 0);
+        let stdout = String::from_utf8_lossy(&resp.stdout);
+        assert!(stdout.contains("MY_VAR=hello_from_test"), "env not passed: {}", stdout);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_captures_stderr() {
+        let exec = Executor::new();
+        let req = RunRequest {
+            job_id: "test-stderr".into(),
+            command: "/bin/sh".into(),
+            args: vec!["-c".into(), "echo err_msg >&2".into()],
+            env: Default::default(),
+            timeout_seconds: 5,
+            limits: None,
+        };
+        let resp = exec.run(req);
+        assert_eq!(resp.exit_code, 0);
+        let stderr = String::from_utf8_lossy(&resp.stderr);
+        assert!(stderr.contains("err_msg"), "stderr not captured: {}", stderr);
+    }
+
+    #[test]
+    fn seccomp_kill_reason_non_linux_returns_empty() {
+        let output = std::process::Output {
+            status: std::process::Command::new("/bin/true").status().unwrap_or_else(|_| {
+                std::process::Command::new("cmd").arg("/C").arg("exit 0").status().unwrap()
+            }),
+            stdout: vec![],
+            stderr: vec![],
+        };
+        let reason = seccomp_kill_reason(&output);
+        #[cfg(not(target_os = "linux"))]
+        assert!(reason.is_empty());
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux, normal exit -> no SIGSYS -> empty string
+            assert!(reason.is_empty());
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cancel_running_job() {
+        let exec = Arc::new(Executor::new());
+        let exec2 = Arc::clone(&exec);
+
+        let handle = std::thread::spawn(move || {
+            let req = RunRequest {
+                job_id: "test-cancel".into(),
+                command: "/bin/sleep".into(),
+                args: vec!["60".into()],
+                env: Default::default(),
+                timeout_seconds: 30,
+                limits: None,
+            };
+            exec2.run(req)
+        });
+
+        // Wait for the job to register in the cancel map
+        std::thread::sleep(Duration::from_millis(200));
+        let cancel_resp = exec.cancel("test-cancel");
+        assert!(cancel_resp.ok, "cancel should succeed");
+
+        let resp = handle.join().unwrap();
+        assert_ne!(resp.exit_code, 0, "cancelled job should have non-zero exit");
+    }
 }

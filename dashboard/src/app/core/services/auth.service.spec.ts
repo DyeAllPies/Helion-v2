@@ -81,6 +81,24 @@ describe('AuthService', () => {
     });
   });
 
+  it('onUnauthorized should clear token and navigate to login', () => {
+    const jwt = makeJwt(Math.floor(Date.now() / 1000) + 3600);
+    service.login(jwt);
+    service.onUnauthorized();
+    expect(service.token).toBeNull();
+    expect(routerSpy.navigate).toHaveBeenCalledWith(['/login']);
+  });
+
+  it('should reject token with wrong number of segments', () => {
+    expect(service.login('only-two.segments')).toBeFalse();
+    expect(service.token).toBeNull();
+  });
+
+  it('should reject token with four segments', () => {
+    expect(service.login('a.b.c.d')).toBeFalse();
+    expect(service.token).toBeNull();
+  });
+
   it('JWT must NOT be in localStorage or sessionStorage after login', () => {
     const jwt = makeJwt(Math.floor(Date.now() / 1000) + 3600);
     service.login(jwt);
