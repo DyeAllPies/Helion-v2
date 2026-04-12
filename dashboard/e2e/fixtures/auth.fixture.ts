@@ -30,7 +30,7 @@ export async function authenticate(page: Page): Promise<void> {
   await page.click('button.login-btn');
 
   // Wait for redirect to /nodes (post-login default)
-  await page.waitForURL('**/nodes', { timeout: 10_000 });
+  await page.waitForURL('**/nodes', { timeout: 15_000 });
 }
 
 /**

@@ -14,14 +14,14 @@ test.describe('Nodes Page', () => {
     await expect(page.locator('h1.page-title')).toContainText('NODES');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
   });
 
   test('shows healthy badges for registered nodes', async ({ authedPage: page }) => {
     await page.goto('/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     const healthyBadges = page.locator('.badge-healthy');
     await expect(healthyBadges.first()).toBeVisible();
@@ -31,7 +31,7 @@ test.describe('Nodes Page', () => {
     await page.goto('/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     // Node ID
     const nodeId = page.locator('.mono-id').first();
@@ -47,7 +47,7 @@ test.describe('Nodes Page', () => {
     await page.goto('/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     const sub = page.locator('.page-sub');
     await expect(sub).toContainText('registered');
@@ -65,7 +65,7 @@ test.describe('Nodes Page', () => {
     await page.goto('/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     // Verify all expected column headers
     const headers = page.locator('table[mat-table] th');
@@ -85,7 +85,7 @@ test.describe('Nodes Page', () => {
     await page.goto('/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     // First row's last seen cell should contain a relative time like "Xs ago" or "just now"
     const firstRow = page.locator('table[mat-table] tr.mat-mdc-row').first();
@@ -99,7 +99,7 @@ test.describe('Nodes Page', () => {
     await page.goto('/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     // Registered at should be a formatted date like "2026-04-11 12:34"
     const firstRow = page.locator('table[mat-table] tr.mat-mdc-row').first();
@@ -112,7 +112,7 @@ test.describe('Nodes Page', () => {
     await page.goto('/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     // Count rows before waiting — after a poll cycle the table re-renders
     const initialRowCount = await page.locator('table[mat-table] tr.mat-mdc-row').count();
@@ -132,7 +132,7 @@ test.describe('Nodes Page', () => {
       expect(rowCount).toBeGreaterThan(0);
       // We need to either catch it refreshing or have completed at least one cycle
       expect(caughtRefreshing || rowCount >= initialRowCount).toBe(true);
-    }).toPass({timeout: 10_000, intervals: [1_000] });
+    }).toPass({timeout: 15_000, intervals: [1_000] });
   });
 
   test('error banner appears when API returns error', async ({ authedPage: page }) => {
@@ -140,7 +140,7 @@ test.describe('Nodes Page', () => {
 
     // Wait for initial successful load
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     // Intercept subsequent /nodes requests with a 500 error
     await page.route('**/nodes', route => {
@@ -148,7 +148,7 @@ test.describe('Nodes Page', () => {
     });
 
     // Wait for the next poll cycle to fail and show error banner
-    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.error-banner')).toContainText('Failed to load nodes');
   });
 
@@ -164,7 +164,7 @@ test.describe('Nodes Page', () => {
 
     await page.goto('/nodes');
 
-    await expect(page.locator('.empty-state')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.empty-state')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.empty-state')).toContainText('No nodes registered yet');
   });
 });

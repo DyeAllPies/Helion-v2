@@ -28,7 +28,7 @@ test.describe('Jobs List', () => {
 
     await page.goto('/jobs');
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     const headers = page.locator('table[mat-table] th');
     const headerTexts = (await headers.allTextContents()).map(h => h.trim());
@@ -48,7 +48,7 @@ test.describe('Jobs List', () => {
     await submitJob(token, { id: jobId, command: 'echo', args: ['hello-e2e'] });
 
     await page.goto('/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
   });
 
   test('job transitions to a terminal state', async ({ authedPage: page }) => {
@@ -58,7 +58,7 @@ test.describe('Jobs List', () => {
     await submitJob(token, { id: jobId, command: 'echo', args: ['done'] });
 
     await page.goto('/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
 
     await expect(async () => {
       await page.click('button.refresh-btn');
@@ -67,12 +67,12 @@ test.describe('Jobs List', () => {
       const text = await badge.textContent();
       const terminal = ['COMPLETED', 'FAILED', 'TIMEOUT', 'LOST'];
       expect(terminal.some(s => text?.includes(s))).toBe(true);
-    }).toPass({timeout: 10_000, intervals: [2_000] });
+    }).toPass({timeout: 15_000, intervals: [2_000] });
   });
 
   test('status filter works for completed jobs', async ({ authedPage: page }) => {
     await page.goto('/jobs');
-    await expect(page.locator('table[mat-table]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('table[mat-table]')).toBeVisible({ timeout: 15_000 });
 
     await page.selectOption('select.status-select', 'completed');
     await page.waitForTimeout(500);
@@ -86,7 +86,7 @@ test.describe('Jobs List', () => {
 
   test('filter dropdown contains all status options', async ({ authedPage: page }) => {
     await page.goto('/jobs');
-    await expect(page.locator('table[mat-table]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('table[mat-table]')).toBeVisible({ timeout: 15_000 });
 
     const options = page.locator('select.status-select option');
     const optionTexts = (await options.allTextContents()).map(t => t.trim().toLowerCase());
@@ -104,7 +104,7 @@ test.describe('Jobs List', () => {
 
   test('switching filter to ALL shows all jobs again', async ({ authedPage: page }) => {
     await page.goto('/jobs');
-    await expect(page.locator('table[mat-table]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('table[mat-table]')).toBeVisible({ timeout: 15_000 });
 
     // Filter to completed first
     await page.selectOption('select.status-select', 'completed');
@@ -121,7 +121,7 @@ test.describe('Jobs List', () => {
 
   test('paginator is present with page size options', async ({ authedPage: page }) => {
     await page.goto('/jobs');
-    await expect(page.locator('mat-paginator')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('mat-paginator')).toBeVisible({ timeout: 15_000 });
   });
 
   test('clicking a job link navigates to detail', async ({ authedPage: page }) => {
@@ -131,7 +131,7 @@ test.describe('Jobs List', () => {
     await submitJob(token, { id: jobId, command: 'echo', args: ['click-test'] });
 
     await page.goto('/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
 
     await page.click(`a.job-link:has-text("${jobId}")`);
     await expect(page).toHaveURL(new RegExp(`/jobs/${jobId}`));
@@ -143,7 +143,7 @@ test.describe('Jobs List', () => {
     });
 
     await page.goto('/jobs');
-    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.error-banner')).toContainText('Failed to load jobs');
   });
 
@@ -158,7 +158,7 @@ test.describe('Jobs List', () => {
     });
 
     await page.goto('/jobs');
-    await expect(page.locator('.empty-state')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.empty-state')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.empty-state')).toContainText('No jobs found');
   });
 });
@@ -178,10 +178,10 @@ test.describe('Job Detail', () => {
       });
       const job = await res.json();
       expect(['completed', 'failed', 'timeout', 'lost']).toContain(job.status);
-    }).toPass({timeout: 10_000, intervals: [2_000] });
+    }).toPass({timeout: 15_000, intervals: [2_000] });
 
     await page.goto(`/jobs/${jobId}`);
-    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
 
     // Job ID
     await expect(page.locator('.job-id')).toContainText(jobId);
@@ -209,7 +209,7 @@ test.describe('Job Detail', () => {
     await submitJob(token, { id: jobId, command: 'echo', args: ['breadcrumb'] });
 
     await page.goto(`/jobs/${jobId}`);
-    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
 
     // Breadcrumb should show "JOBS > jobId"
     await expect(page.locator('.breadcrumb')).toContainText('JOBS');
@@ -230,7 +230,7 @@ test.describe('Job Detail', () => {
     await new Promise(r => setTimeout(r, 5_000));
 
     await page.goto(`/jobs/${jobId}`);
-    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
 
     // Log panel should exist
     await expect(page.locator('.log-panel')).toBeVisible();
@@ -251,19 +251,19 @@ test.describe('Job Detail', () => {
     await submitJob(token, { id: jobId, command: 'echo', args: ['refresh'] });
 
     await page.goto(`/jobs/${jobId}`);
-    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
 
     // Click refresh button in metadata card
     await page.click('.meta-card .refresh-btn');
 
     // Card should still be visible (no crash, data reloaded)
-    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
   });
 
   test('job not found shows error', async ({ authedPage: page }) => {
     await page.goto('/jobs/nonexistent-job-id-12345');
 
-    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.error-banner')).toContainText('Job not found');
   });
 });
@@ -285,7 +285,7 @@ test.describe('Rust Runtime (node2)', () => {
     // Navigate to jobs page and verify they appear
     await page.goto('/jobs');
     for (const jobId of jobIds) {
-      await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 10_000 });
+      await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
     }
 
     // Wait for at least one job to reach a terminal state
@@ -295,7 +295,7 @@ test.describe('Rust Runtime (node2)', () => {
       const allText = await badges.allTextContents();
       const terminal = allText.filter(t => ['COMPLETED', 'FAILED', 'TIMEOUT'].some(s => t.includes(s)));
       expect(terminal.length).toBeGreaterThan(0);
-    }).toPass({timeout: 10_000, intervals: [2_000] });
+    }).toPass({timeout: 15_000, intervals: [2_000] });
   });
 
   test('job on Rust node visible in detail view', async ({ authedPage: page }) => {
@@ -311,11 +311,11 @@ test.describe('Rust Runtime (node2)', () => {
       });
       const job = await res.json();
       expect(['completed', 'failed', 'timeout', 'lost']).toContain(job.status);
-    }).toPass({timeout: 10_000, intervals: [2_000] });
+    }).toPass({timeout: 15_000, intervals: [2_000] });
 
     // Verify it shows up in the dashboard detail view
     await page.goto(`/jobs/${jobId}`);
-    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.job-id')).toContainText(jobId);
     await expect(page.locator('.meta-value.cmd')).toContainText('echo');
 

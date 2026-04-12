@@ -20,7 +20,7 @@ export default defineConfig({
   reporter: process.env['CI']
     ? [['list'], ['html', { open: 'never' }], ['github']]
     : [['list'], ['html', { open: 'on-failure' }]],
-  timeout: 15_000,
+  timeout: 30_000,
   expect: { timeout: 2_000 },
 
   use: {

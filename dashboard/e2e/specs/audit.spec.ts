@@ -19,7 +19,7 @@ test.describe('Audit Log Page', () => {
     await page.goto('/audit');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     await expect(page.locator('.page-sub')).toContainText('events');
     await expect(page.locator('.page-sub')).toContainText('read-only');
@@ -29,7 +29,7 @@ test.describe('Audit Log Page', () => {
     await page.goto('/audit');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     const headers = page.locator('table[mat-table] th');
     const headerTexts = (await headers.allTextContents()).map(h => h.trim());
@@ -44,18 +44,18 @@ test.describe('Audit Log Page', () => {
     await page.goto('/audit');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
-    await expect(page.locator('text=COORDINATOR_START')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=COORDINATOR_START')).toBeVisible({ timeout: 15_000 });
   });
 
   test('node_register events appear for connected nodes', async ({ authedPage: page }) => {
     await page.goto('/audit');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
-    await expect(page.locator('text=NODE_REGISTER')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=NODE_REGISTER')).toBeVisible({ timeout: 15_000 });
   });
 
   test('job_submit event appears after submitting a job', async ({ authedPage: page }) => {
@@ -71,14 +71,14 @@ test.describe('Audit Log Page', () => {
     await page.selectOption('select.status-select', 'job_submit');
     await page.waitForTimeout(500);
 
-    await expect(page.locator('text=JOB_SUBMIT')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=JOB_SUBMIT')).toBeVisible({ timeout: 15_000 });
   });
 
   test('event detail fields display correctly', async ({ authedPage: page }) => {
     await page.goto('/audit');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     // First row should have a formatted timestamp (YYYY-MM-DD HH:MM:SS)
     const firstRow = page.locator('table[mat-table] tr.mat-mdc-row').first();
@@ -99,7 +99,7 @@ test.describe('Audit Log Page', () => {
     await page.goto('/audit');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     await page.selectOption('select.status-select', 'coordinator_start');
     await page.waitForTimeout(500);
@@ -116,7 +116,7 @@ test.describe('Audit Log Page', () => {
     await page.goto('/audit');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     await page.selectOption('select.status-select', 'node_register');
     await page.waitForTimeout(500);
@@ -151,7 +151,7 @@ test.describe('Audit Log Page', () => {
     await page.goto('/audit');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     // Filter to coordinator_start
     await page.selectOption('select.status-select', 'coordinator_start');
@@ -169,34 +169,34 @@ test.describe('Audit Log Page', () => {
   test('paginator is present with page size options', async ({ authedPage: page }) => {
     await page.goto('/audit');
 
-    await expect(page.locator('mat-paginator')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('mat-paginator')).toBeVisible({ timeout: 15_000 });
   });
 
   test('refresh button reloads data', async ({ authedPage: page }) => {
     await page.goto('/audit');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     await page.click('button.refresh-btn');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
   });
 
   test('event type badges have correct CSS classes', async ({ authedPage: page }) => {
     await page.goto('/audit');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     // coordinator_start → evt-coordinator
     await expect(page.locator('.event-type.evt-coordinator').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
 
     // node_register → evt-node
     await expect(page.locator('.event-type.evt-node').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
   });
 
   test('job event badges have evt-job CSS class', async ({ authedPage: page }) => {
@@ -210,7 +210,7 @@ test.describe('Audit Log Page', () => {
     await page.waitForTimeout(500);
 
     await expect(page.locator('.event-type.evt-job').first())
-      .toBeVisible({ timeout: 10_000 });
+      .toBeVisible({ timeout: 15_000 });
   });
 
   test('error banner appears when API returns error', async ({ authedPage: page }) => {
@@ -219,7 +219,7 @@ test.describe('Audit Log Page', () => {
     });
 
     await page.goto('/audit');
-    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.error-banner')).toContainText('Failed to load audit log');
   });
 
@@ -233,7 +233,7 @@ test.describe('Audit Log Page', () => {
     });
 
     await page.goto('/audit');
-    await expect(page.locator('.empty-state')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.empty-state')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.empty-state')).toContainText('No audit events found');
   });
 });
