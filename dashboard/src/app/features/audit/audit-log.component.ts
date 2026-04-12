@@ -190,7 +190,8 @@ export class AuditLogComponent implements OnInit {
       },
       error: err => {
         this.loading = false;
-        this.error   = `Failed to load audit log: ${(err as Error).message}`;
+        console.error('Failed to load audit log:', err);
+        this.error   = 'Failed to load audit log. Please try again or contact your administrator.';
       }
     });
   }

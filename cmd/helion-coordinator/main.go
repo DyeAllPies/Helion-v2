@@ -24,6 +24,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -237,6 +239,10 @@ func main() {
 	// node cert carries a valid out-of-band ML-DSA signature from this CA.
 	registry.SetCertVerifier(bundle.CA)
 
+	// AUDIT 2026-04-12/H1: wire cert issuer so Register returns a
+	// coordinator-signed cert for the node's gRPC server.
+	registry.SetCertIssuer(bundle.CA)
+
 	go func() {
 		log.Info("gRPC server listening", slog.String("addr", grpcAddr))
 		if err := grpcSrv.Serve(grpcAddr); err != nil {
@@ -272,14 +278,38 @@ func main() {
 	scheduler := cluster.NewScheduler(registry, policy)
 	log.Info("scheduler initialized", slog.String("policy", scheduler.PolicyName()))
 
-	// Build a TLS config for dialing node agents (coordinator as client).
+	// AUDIT 2026-04-12/H1 (fixed): Build a TLS config for dialing node agents.
+	// Nodes now present coordinator-signed certificates on their gRPC server
+	// (issued during Register and returned in RegisterResponse.SignedCertificate).
+	// The coordinator verifies the cert chain against its own CA.
+	//
+	// InsecureSkipVerify=true is still needed because each node has a unique
+	// CN/SAN (its nodeID) and the dispatcher connects to different nodes.
+	// VerifyConnection manually checks the CA chain — this is the standard
+	// pattern for services connecting to peers with dynamic hostnames.
 	dispatchTLS, err := bundle.RawTLSConfig("helion-node")
 	if err != nil {
 		log.Error("dispatch TLS config", slog.Any("err", err))
 		os.Exit(1)
 	}
-	// Accept any server cert from nodes (same as RequireAnyClientCert logic)
+	caPool := dispatchTLS.RootCAs
 	dispatchTLS.InsecureSkipVerify = true
+	dispatchTLS.VerifyConnection = func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return fmt.Errorf("dispatch TLS: no peer certificates presented")
+		}
+		opts := x509.VerifyOptions{
+			Roots:         caPool,
+			Intermediates: x509.NewCertPool(),
+		}
+		for _, ic := range cs.PeerCertificates[1:] {
+			opts.Intermediates.AddCert(ic)
+		}
+		if _, err := cs.PeerCertificates[0].Verify(opts); err != nil {
+			return fmt.Errorf("dispatch TLS: cert not signed by coordinator CA: %w", err)
+		}
+		return nil
+	}
 	nodeDispatcher := cluster.NewGRPCNodeDispatcher(dispatchTLS)
 	dispatchLoop := cluster.NewDispatchLoop(jobs, scheduler, nodeDispatcher, 2*time.Second, log)
 	go dispatchLoop.Run(ctx)

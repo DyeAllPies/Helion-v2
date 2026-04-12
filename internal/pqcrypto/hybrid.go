@@ -224,16 +224,17 @@ func (ca *CA) EnhancedNodeTLSConfig(certPEM, keyPEM []byte, serverName string) (
 // VerifyCertificateWithKEM verifies a certificate's ML-DSA (Dilithium) signature
 // stored in a custom X.509 extension alongside the standard ECDSA signature.
 //
-// NOTE: ML-DSA verification is not yet implemented (tracked as AUDIT.md C1).
-// The function currently returns nil so the rest of the TLS handshake proceeds
-// using standard x509 ECDSA verification only. Do not claim post-quantum
-// certificate authentication until this is implemented.
-func VerifyCertificateWithKEM(_ *x509.Certificate, _ *KEMPublicKey) error {
-	// TODO(Phase 5): Implement ML-DSA (Dilithium-3) signature verification.
-	// Steps:
-	//   1. Extract the ML-DSA signature from cert's ExtraExtensions (OID TBD).
-	//   2. Deserialise caPub into a dilithium.PublicKey.
-	//   3. Call mldsa.Verify(caPub, cert.RawTBSCertificate, sig).
-	//   4. Return an error if verification fails.
-	return nil
+// AUDIT 2026-04-12/M3 (fixed): previously returned nil unconditionally. Now
+// delegates to VerifyMLDSASignature in mldsa.go which extracts the ML-DSA
+// signature from the certificate's PQC extension and verifies it against the
+// CA's ML-DSA public key.
+//
+// The caPub parameter carries the CA's ML-DSA public key (not the KEM key).
+// When caPub is nil, verification is skipped — this preserves backwards
+// compatibility for deployments that have not enabled ML-DSA on the CA.
+func VerifyCertificateWithKEM(cert *x509.Certificate, caPub *MLDSAPublicKey) error {
+	if caPub == nil {
+		return nil // ML-DSA not enabled; skip verification.
+	}
+	return VerifyMLDSASignature(cert, caPub)
 }

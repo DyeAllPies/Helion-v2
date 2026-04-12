@@ -194,12 +194,14 @@ func (tm *TokenManager) RevokeToken(ctx context.Context, jti string) error {
 // prior run is invalidated automatically.
 // Returns the new token string so the caller can display or persist it.
 func (tm *TokenManager) RotateRootToken(ctx context.Context) (string, error) {
-	// Revoke the old token's JTI so it is immediately rejected.
+	// AUDIT 2026-04-12/M4 (fixed): revoke the old token's JTI using validated
+	// parsing instead of ParseUnverified. If signature validation fails (e.g.
+	// the secret was regenerated), the old token is already invalid under the
+	// new secret — skip revocation entirely rather than parsing untrusted data.
 	existing, err := tm.store.Get(ctx, RootTokenKey)
 	if err == nil && len(existing) > 0 {
-		if oldJTI, err := extractJTIUnchecked(string(existing)); err == nil {
-			// Best-effort revocation; ignore errors (token may already be expired).
-			_ = tm.RevokeToken(ctx, oldJTI)
+		if claims, err := tm.ValidateToken(ctx, string(existing)); err == nil {
+			_ = tm.RevokeToken(ctx, claims.ID)
 		}
 		_ = tm.store.Delete(ctx, RootTokenKey)
 	}

@@ -116,11 +116,49 @@ func TestGetMLDSASignature_UnknownSerial_ReturnsFalse(t *testing.T) {
 	}
 }
 
-func TestVerifyCertificateWithKEM_NoError(t *testing.T) {
+func TestVerifyCertificateWithKEM_NilPub_Skips(t *testing.T) {
 	ca, _ := pqcrypto.NewCA()
-	pub, _, _ := pqcrypto.GenerateKEMKeyPair()
-	if err := pqcrypto.VerifyCertificateWithKEM(ca.Cert, pub); err != nil {
-		t.Errorf("VerifyCertificateWithKEM: %v", err)
+	// nil public key → verification skipped (ML-DSA not enabled).
+	if err := pqcrypto.VerifyCertificateWithKEM(ca.Cert, nil); err != nil {
+		t.Errorf("VerifyCertificateWithKEM with nil pub: %v", err)
+	}
+}
+
+func TestVerifyCertificateWithKEM_ValidMLDSA(t *testing.T) {
+	ca, _ := pqcrypto.NewCA()
+
+	// Issue a node cert to get a real x509 Certificate.
+	certPEM, _, err := ca.IssueNodeCert("verify-kem-node")
+	if err != nil {
+		t.Fatalf("IssueNodeCert: %v", err)
+	}
+	cert := parseCertPEM(t, certPEM)
+
+	// Generate a standalone ML-DSA key pair, sign the TBS, embed as extension.
+	pub, priv, err := pqcrypto.GenerateMLDSAKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateMLDSAKeyPair: %v", err)
+	}
+	sig, err := priv.Sign(cert.RawTBSCertificate)
+	if err != nil {
+		t.Fatalf("ML-DSA sign: %v", err)
+	}
+	extValue := makeMLDSAExtension(t, oidMLDSA65, sig)
+	certWithExt := certWithMLDSAExt(cert, extValue)
+
+	if err := pqcrypto.VerifyCertificateWithKEM(certWithExt, pub); err != nil {
+		t.Errorf("VerifyCertificateWithKEM on valid cert: %v", err)
+	}
+}
+
+func TestVerifyCertificateWithKEM_NoCertExt_ReturnsError(t *testing.T) {
+	ca, _ := pqcrypto.NewCA()
+	if err := ca.EnhanceWithMLDSA(); err != nil {
+		t.Fatalf("EnhanceWithMLDSA: %v", err)
+	}
+	// The CA's own cert has no ML-DSA extension (it's self-signed with ECDSA only).
+	if err := pqcrypto.VerifyCertificateWithKEM(ca.Cert, ca.GetMLDSAPublicKey()); err == nil {
+		t.Error("expected error for cert without ML-DSA extension, got nil")
 	}
 }
 

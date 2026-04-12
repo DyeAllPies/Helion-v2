@@ -269,7 +269,8 @@ export class JobListComponent implements OnInit {
       },
       error: err => {
         this.loading = false;
-        this.error   = `Failed to load jobs: ${(err as Error).message}`;
+        console.error('Failed to load jobs:', err);
+        this.error   = 'Failed to load jobs. Please try again or contact your administrator.';
       }
     });
   }

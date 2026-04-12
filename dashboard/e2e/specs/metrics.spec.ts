@@ -144,8 +144,9 @@ test.describe('Metrics Page', () => {
     await expect(page.locator('.waiting')).toContainText('Waiting for first metrics snapshot');
   });
 
-  test.skip('WS error shows error banner', async ({ authedPage: page }) => {
-    // Playwright page.route() cannot intercept WebSocket upgrade requests.
-    // WS error handling is covered by Angular unit tests.
+  test.skip('WS error shows error banner', async () => {
+    // Playwright page.route() cannot intercept WebSocket upgrade requests —
+    // this is a known Playwright limitation (https://github.com/microsoft/playwright/issues/4488).
+    // WS error handling is verified by Angular Karma unit tests instead.
   });
 });

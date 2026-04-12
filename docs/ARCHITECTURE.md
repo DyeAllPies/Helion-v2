@@ -120,7 +120,9 @@ to healthy nodes. Uses the scheduler to pick a target node, transitions the job 
 marked `failed`; on success the node takes ownership and reports back via `ReportResult`.
 
 **Certificate Authority.** Issues per-node X.509 certificates on first registration using
-ML-DSA (Dilithium-3) in hybrid mode with ECDSA. Acts as the cluster's internal CA.
+ML-DSA (Dilithium-3) in hybrid mode with ECDSA. Acts as the cluster's internal CA. The
+signed certificate is returned in the `RegisterResponse` so the node can present it on
+its own gRPC server — this allows the coordinator to verify node certs during dispatch.
 
 **REST/WebSocket API.** Serves the Angular dashboard and `helion-run` CLI. All endpoints
 except `/healthz`, `/readyz`, and `/metrics` require a valid JWT. Admin-only endpoints
@@ -268,8 +270,8 @@ runtime. Resource limits are enforced only when `HELION_RUNTIME=rust`.
 | `POST` | `/admin/nodes/{id}/revoke` | Bearer (admin) | Revoke node registration |
 | `POST` | `/admin/tokens` | Bearer (admin) | Issue scoped JWT `{subject, role, ttl_hours}` |
 | `DELETE` | `/admin/tokens/{jti}` | Bearer (admin) | Immediately revoke a token by JTI |
-| `GET` | `/ws/jobs/{id}/logs` | Bearer (query) | WebSocket live log stream |
-| `GET` | `/ws/metrics` | Bearer (query) | WebSocket live cluster metrics |
+| `GET` | `/ws/jobs/{id}/logs` | First-message | WebSocket live log stream |
+| `GET` | `/ws/metrics` | First-message | WebSocket live cluster metrics |
 
 ---
 
@@ -310,8 +312,13 @@ AppComponent  (shell: nav sidebar + router outlet)
 - **HTTP interceptor.** Attaches `Authorization: Bearer {token}` to every request. On 401,
   clears token and redirects to login.
 - **Route guards.** `AuthGuard` blocks navigation to protected routes if no token is present.
+- **WebSocket first-message auth.** The JWT is sent as the first frame
+  (`{"type":"auth","token":"..."}`) after the WebSocket handshake — never as a URL query
+  parameter. This keeps tokens out of server access logs and browser history.
 - **Content Security Policy.** Nginx sets a strict CSP: no inline scripts, no eval,
   same-origin only.
+- **Generic error messages.** All error banners show user-friendly text. Raw error details
+  are logged to `console.error` only — never displayed to users.
 
 ---
 

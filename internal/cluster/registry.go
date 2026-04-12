@@ -67,6 +67,13 @@ type StreamRevoker interface {
 	CancelStream(nodeID string)
 }
 
+// CertIssuer issues a coordinator-signed TLS certificate for a node.
+// Implemented by *pqcrypto.CA; injected via Registry.SetCertIssuer so that
+// Register can return a signed cert the node uses for its gRPC server.
+type CertIssuer interface {
+	IssueNodeCert(nodeID string) (certPEM, keyPEM []byte, err error)
+}
+
 // Persister is the narrow storage interface used by the Registry.
 // Tests inject NopPersister or MemPersister; production uses BadgerJSONPersister.
 type Persister interface {
@@ -93,6 +100,9 @@ type Registry struct {
 
 	certVerifierMu sync.RWMutex
 	certVerifier   CertVerifier // optional; verifies ML-DSA out-of-band signature at Register time
+
+	certIssuerMu sync.RWMutex
+	certIssuer   CertIssuer // optional; issues coordinator-signed certs at Register time
 
 	persister         Persister
 	heartbeatInterval time.Duration
@@ -134,6 +144,14 @@ func (r *Registry) SetCertVerifier(cv CertVerifier) {
 	r.certVerifierMu.Lock()
 	r.certVerifier = cv
 	r.certVerifierMu.Unlock()
+}
+
+// SetCertIssuer injects a CertIssuer so that Register can return a
+// coordinator-signed TLS certificate for the node's gRPC server.
+func (r *Registry) SetCertIssuer(ci CertIssuer) {
+	r.certIssuerMu.Lock()
+	r.certIssuer = ci
+	r.certIssuerMu.Unlock()
 }
 
 // SetStreamRevoker injects a StreamRevoker so that RevokeNode can immediately

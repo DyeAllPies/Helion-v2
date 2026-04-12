@@ -166,9 +166,12 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /admin/tokens", s.authMiddleware(s.adminMiddleware(s.handleIssueToken)))
 	s.mux.HandleFunc("DELETE /admin/tokens/{jti}", s.authMiddleware(s.adminMiddleware(s.handleRevokeToken)))
 
-	// WebSocket endpoints (auth via query param or header)
-	s.mux.HandleFunc("GET /ws/jobs/{id}/logs", s.wsAuthMiddleware(s.handleJobLogStream))
-	s.mux.HandleFunc("GET /ws/metrics", s.wsAuthMiddleware(s.handleMetricsStream))
+	// AUDIT 2026-04-12/H2 (fixed): WebSocket endpoints authenticate via
+	// first-message pattern instead of URL query parameters. The connection is
+	// upgraded without auth; the first frame must be {"type":"auth","token":"..."}.
+	// This keeps JWTs out of server access logs and browser history.
+	s.mux.HandleFunc("GET /ws/jobs/{id}/logs", s.handleJobLogStream)
+	s.mux.HandleFunc("GET /ws/metrics", s.handleMetricsStream)
 }
 
 // Handler returns the underlying http.Handler for testing.
@@ -186,11 +189,15 @@ func (s *Server) Serve(addr string) error {
 	}
 	// AUDIT L6 (fixed): IdleTimeout prevents keep-alive connections from being held
 	// open indefinitely, limiting the resource impact of slow or idle clients.
+	// AUDIT 2026-04-12/L1 (fixed): ReadHeaderTimeout limits how long the
+	// server waits for request headers, countering Slowloris-style attacks
+	// that trickle headers one byte at a time to hold connection slots open.
 	hsrv := &http.Server{
-		Handler:      s.mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Handler:           s.mux,
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	s.httpSrvMu.Lock()
 	s.httpSrv = hsrv

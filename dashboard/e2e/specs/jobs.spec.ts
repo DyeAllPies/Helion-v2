@@ -48,18 +48,23 @@ test.describe('Jobs List', () => {
     await submitJob(token, { id: jobId, command: 'echo', args: ['hello-e2e'] });
 
     await navigateTo(page, '/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
   });
 
   test('job transitions to a terminal state', async ({ authedPage: page }) => {
-    // TODO: coordinator lacks a dispatch loop — submitted jobs stay PENDING
     const token = getRootToken();
     const jobId = `e2e-term-${Date.now()}`;
 
     await submitJob(token, { id: jobId, command: 'echo', args: ['done'] });
 
     await navigateTo(page, '/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
 
     await expect(async () => {
       await page.click('button.refresh-btn');
@@ -133,7 +138,10 @@ test.describe('Jobs List', () => {
     await submitJob(token, { id: jobId, command: 'echo', args: ['click-test'] });
 
     await navigateTo(page, '/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
 
     await page.click(`a.job-link:has-text("${jobId}")`);
     await expect(page).toHaveURL(new RegExp(`/jobs/${jobId}`));
@@ -184,7 +192,10 @@ test.describe('Job Detail', () => {
 
     // Navigate to job detail via jobs list
     await navigateTo(page, '/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
     await page.click(`a.job-link:has-text("${jobId}")`);
 
     await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
@@ -214,9 +225,12 @@ test.describe('Job Detail', () => {
 
     await submitJob(token, { id: jobId, command: 'echo', args: ['breadcrumb'] });
 
-    // Navigate to jobs list, then click into the job detail
+    // Navigate to jobs list, wait for job to appear via refresh
     await navigateTo(page, '/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
     await page.click(`a.job-link:has-text("${jobId}")`);
 
     await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
@@ -247,7 +261,10 @@ test.describe('Job Detail', () => {
 
     // Navigate to job detail via jobs list
     await navigateTo(page, '/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
     await page.click(`a.job-link:has-text("${jobId}")`);
     await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
 
@@ -271,7 +288,10 @@ test.describe('Job Detail', () => {
 
     // Navigate to job detail via jobs list
     await navigateTo(page, '/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
     await page.click(`a.job-link:has-text("${jobId}")`);
     await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
 
@@ -309,11 +329,14 @@ test.describe('Rust Runtime (node2)', () => {
       await submitJob(token, { id: jobId, command: 'echo', args: ['rust-runtime-test'] });
     }
 
-    // Navigate to jobs page and verify they appear
+    // Navigate to jobs page and verify they appear (retry with refresh)
     await navigateTo(page, '/jobs');
-    for (const jobId of jobIds) {
-      await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
-    }
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      for (const jobId of jobIds) {
+        await expect(page.locator(`text=${jobId}`)).toBeVisible();
+      }
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
 
     // Wait for at least one job to reach a terminal state
     await expect(async () => {
@@ -342,7 +365,10 @@ test.describe('Rust Runtime (node2)', () => {
 
     // Navigate to job detail via jobs list
     await navigateTo(page, '/jobs');
-    await expect(page.locator(`text=${jobId}`)).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
     await page.click(`a.job-link:has-text("${jobId}")`);
     await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.job-id')).toContainText(jobId);

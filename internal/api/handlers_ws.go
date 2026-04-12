@@ -3,16 +3,80 @@
 // WebSocket handlers:
 //   GET /ws/jobs/{id}/logs  — real-time job log streaming (not yet implemented)
 //   GET /ws/metrics         — server-push cluster metrics stream
+//
+// AUDIT 2026-04-12/H2 (fixed): WebSocket endpoints use first-message auth.
+// The connection is upgraded without authentication. The client must send
+// {"type":"auth","token":"<jwt>"} as the first frame. The server validates
+// the token and replies with {"type":"auth_ok"} on success or closes with
+// 4001 on failure. This keeps JWTs out of URLs, server logs, and browser
+// history.
 
 package api
 
 import (
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// wsAuthMsg is the first-message auth frame from the client.
+type wsAuthMsg struct {
+	Type  string `json:"type"`
+	Token string `json:"token"`
+}
+
+// wsAuthenticateConn reads the first frame from conn, validates the JWT,
+// and sends back {"type":"auth_ok"} or closes with 4001.
+// Returns nil on success, non-nil on auth failure (connection already closed).
+func (s *Server) wsAuthenticateConn(conn *websocket.Conn) error {
+	if s.disableAuth {
+		return nil
+	}
+	if s.tokenManager == nil {
+		slog.Error("ws auth: tokenManager is nil and DisableAuth not set")
+		_ = conn.WriteJSON(map[string]string{"type": "auth_error", "message": "authentication not configured"})
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(4001, "auth not configured"))
+		return http.ErrAbortHandler
+	}
+
+	// Read first frame (5 s deadline for the auth handshake).
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		return err
+	}
+	_ = conn.SetReadDeadline(time.Time{}) // clear deadline
+
+	var msg wsAuthMsg
+	if err := json.Unmarshal(raw, &msg); err != nil || msg.Type != "auth" || msg.Token == "" {
+		if s.audit != nil {
+			_ = s.audit.LogAuthFailure(nil, "invalid ws auth frame", "")
+		}
+		_ = conn.WriteJSON(map[string]string{"type": "auth_error", "message": "invalid auth frame"})
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(4001, "invalid auth frame"))
+		return http.ErrAbortHandler
+	}
+
+	if _, err := s.tokenManager.ValidateToken(nil, msg.Token); err != nil {
+		if s.audit != nil {
+			_ = s.audit.LogAuthFailure(nil, err.Error(), "")
+		}
+		slog.Error("ws token validation failed", slog.Any("err", err))
+		_ = conn.WriteJSON(map[string]string{"type": "auth_error", "message": "authentication failed"})
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(4001, "authentication failed"))
+		return http.ErrAbortHandler
+	}
+
+	_ = conn.WriteJSON(map[string]string{"type": "auth_ok"})
+	return nil
+}
 
 func (s *Server) handleJobLogStream(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("id")
@@ -32,6 +96,11 @@ func (s *Server) handleJobLogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+
+	// First-message auth.
+	if err := s.wsAuthenticateConn(conn); err != nil {
+		return
+	}
 
 	// AUDIT C2 (fixed): real-time log streaming is not yet implemented (requires a
 	// gRPC server-streaming back-channel from node agents). Previously this handler
@@ -65,6 +134,11 @@ func (s *Server) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+
+	// First-message auth.
+	if err := s.wsAuthenticateConn(conn); err != nil {
+		return
+	}
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()

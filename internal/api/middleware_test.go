@@ -50,16 +50,18 @@ func TestAuthMiddleware_NilTokenManager_WithoutOptIn_Returns500(t *testing.T) {
 	}
 }
 
-// TestWsAuthMiddleware_NilTokenManager_WithoutOptIn_Returns500 — same
-// regression guard for the WebSocket auth path.
-func TestWsAuthMiddleware_NilTokenManager_WithoutOptIn_Returns500(t *testing.T) {
+// TestWsEndpoint_WithoutUpgrade_RejectsPlainHTTP verifies that a plain HTTP
+// GET to a WS endpoint (without WebSocket upgrade headers) does not return
+// 200. Auth is now handled post-upgrade via first-message pattern (AUDIT H2).
+func TestWsEndpoint_WithoutUpgrade_RejectsPlainHTTP(t *testing.T) {
 	srv := api.NewServer(newMockJobStore(), nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/ws/jobs/j1/logs", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("ws middleware: want 500 without DisableAuth, got %d", rr.Code)
+	// Without WebSocket upgrade headers the upgrader rejects the request.
+	if rr.Code == http.StatusOK {
+		t.Errorf("ws endpoint should not return 200 for plain HTTP")
 	}
 }
 
@@ -140,98 +142,6 @@ func TestAuthMiddleware_InvalidToken_WithAuditLog_LogsFailure(t *testing.T) {
 	}
 }
 
-// ── wsAuthMiddleware ──────────────────────────────────────────────────────────
-
-func TestWsAuthMiddleware_NilTokenManager_PassesThrough(t *testing.T) {
-	// Calling GET /ws/jobs/{id}/logs without token manager — should NOT return 401.
-	srv := newServer(newMockJobStore(), nil, nil)
-	req := httptest.NewRequest("GET", "/ws/jobs/j1/logs", nil)
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	// Should not be 401 (wsAuthMiddleware passed through).
-	if rr.Code == http.StatusUnauthorized {
-		t.Errorf("expected pass-through with nil token manager, got 401")
-	}
-}
-
-func TestWsAuthMiddleware_MissingToken_Returns401(t *testing.T) {
-	tm, _ := auth.NewTokenManager(context.Background(), newTokenStore())
-	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
-
-	req := httptest.NewRequest("GET", "/ws/jobs/j1/logs", nil)
-	// No token in query param and no Authorization header.
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("want 401 for missing token, got %d", rr.Code)
-	}
-}
-
-func TestWsAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
-	tm, _ := auth.NewTokenManager(context.Background(), newTokenStore())
-	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
-
-	req := httptest.NewRequest("GET", "/ws/jobs/j1/logs?token=not.a.valid.jwt", nil)
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("want 401 for invalid token, got %d", rr.Code)
-	}
-}
-
-func TestWsAuthMiddleware_ValidTokenInQueryParam_PassesThrough(t *testing.T) {
-	tm, _ := auth.NewTokenManager(context.Background(), newTokenStore())
-	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
-
-	tok, _ := tm.GenerateToken(context.Background(), "user", "admin", time.Minute)
-	req := httptest.NewRequest("GET", "/ws/jobs/j1/logs?token="+tok, nil)
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	// Token is valid — wsAuthMiddleware passes, but the WebSocket upgrade fails
-	// (non-WS test request). Should NOT be 401.
-	if rr.Code == http.StatusUnauthorized {
-		t.Errorf("want pass-through with valid token, got 401")
-	}
-}
-
-func TestWsAuthMiddleware_ValidTokenInHeader_PassesThrough(t *testing.T) {
-	tm, _ := auth.NewTokenManager(context.Background(), newTokenStore())
-	srv := api.NewServer(newMockJobStore(), nil, nil, nil, tm, nil, nil, nil)
-
-	tok, _ := tm.GenerateToken(context.Background(), "user", "admin", time.Minute)
-	req := httptest.NewRequest("GET", "/ws/metrics", nil)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	if rr.Code == http.StatusUnauthorized {
-		t.Errorf("want pass-through with valid token in header, got 401")
-	}
-}
-
-// ── wsAuthMiddleware with audit log ──────────────────────────────────────────
-
-func TestWsAuthMiddleware_MissingToken_WithAuditLog_LogsFailure(t *testing.T) {
-	tm, _ := auth.NewTokenManager(context.Background(), newTokenStore())
-	auditLog := audit.NewLogger(newAuditStore(), 0)
-	srv := api.NewServer(newMockJobStore(), nil, nil, auditLog, tm, nil, nil, nil)
-
-	req := httptest.NewRequest("GET", "/ws/jobs/j1/logs", nil)
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("want 401, got %d", rr.Code)
-	}
-}
-
-func TestWsAuthMiddleware_InvalidToken_WithAuditLog_LogsFailure(t *testing.T) {
-	tm, _ := auth.NewTokenManager(context.Background(), newTokenStore())
-	auditLog := audit.NewLogger(newAuditStore(), 0)
-	srv := api.NewServer(newMockJobStore(), nil, nil, auditLog, tm, nil, nil, nil)
-
-	req := httptest.NewRequest("GET", "/ws/jobs/j1/logs?token=invalid.jwt.token", nil)
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("want 401 for invalid ws token, got %d", rr.Code)
-	}
-}
+// AUDIT 2026-04-12/H2: wsAuthMiddleware removed — WebSocket auth is now
+// handled via first-message pattern inside the WS handlers (handlers_ws.go).
+// WS endpoints no longer have pre-upgrade HTTP-level auth.

@@ -55,11 +55,11 @@ The coordinator runs as a Kubernetes `Deployment`. Node agents run as a `DaemonS
 
 ## Security model
 
-All coordinator↔node communication is mutually authenticated via mTLS from the first commit. The coordinator acts as its own internal CA and issues per-node X.509 certificates on first registration.
+All coordinator↔node communication is mutually authenticated via mTLS. The coordinator acts as its own internal CA and issues per-node X.509 certificates on first registration. The signed certificate is returned to the node in the `RegisterResponse` so the node presents a coordinator-verified cert on its own gRPC server — the coordinator validates the cert chain during job dispatch.
 
 Key exchange uses a hybrid classical + post-quantum mode (X25519 + ML-KEM/Kyber-768) so sessions are resistant to harvest-now-decrypt-later attacks. Node certificates are signed with ML-DSA (Dilithium) in hybrid mode alongside ECDSA. The coordinator verifies the ML-DSA out-of-band signature on every registration, and pins the cert fingerprint (SHA-256) so a newly-issued cert for the same node ID is rejected unless the node goes through the full revoke → re-register cycle.
 
-The REST/WebSocket API uses short-lived JWTs (15-minute expiry). The root token is rotated on every coordinator restart — the previous token is immediately revoked so a leaked token from a prior run is dead on restart. Scoped tokens for individual users or services can be issued and revoked via `POST /admin/tokens` and `DELETE /admin/tokens/{jti}` (admin role required). Tokens are stored in memory only — never in `localStorage` or `sessionStorage`. Every job state transition, node registration, auth failure, and token event is written to an append-only audit log in BadgerDB.
+The REST API uses short-lived JWTs (15-minute expiry). WebSocket endpoints authenticate via a first-message pattern — the token is sent as the first frame after the handshake, never as a URL query parameter, keeping tokens out of server logs and browser history. The root token is rotated on every coordinator restart — the previous token is immediately revoked so a leaked token from a prior run is dead on restart. Scoped tokens for individual users or services can be issued and revoked via `POST /admin/tokens` and `DELETE /admin/tokens/{jti}` (admin role required). Tokens are stored in memory only — never in `localStorage` or `sessionStorage`. Every job state transition, node registration, auth failure, and token event is written to an append-only audit log in BadgerDB.
 
 Snyk scans Go dependencies and the coordinator container image on every push, blocking on high-severity CVEs. Internal coverage is gated at ≥ 90% on `./internal/...`.
 

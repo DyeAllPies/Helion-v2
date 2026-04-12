@@ -12,11 +12,16 @@ class MockWebSocket {
   static CLOSED = 3;
   readyState = 1; // OPEN
 
+  onopen:    (() => void) | null = null;
   onmessage: ((e: { data: string }) => void) | null = null;
   onerror:   (() => void) | null = null;
   onclose:   ((e: { code: number; reason: string }) => void) | null = null;
 
+  lastSent = '';
+
   constructor(public url: string) { MockWebSocket.instance = this; }
+
+  send(data: string) { this.lastSent = data; }
 
   close(code = 1000, reason = '') {
     this.readyState = MockWebSocket.CLOSED;
@@ -24,6 +29,7 @@ class MockWebSocket {
   }
 
   // Test helpers
+  simulateOpen()                 { this.onopen?.(); }
   simulateMessage(data: unknown) { this.onmessage?.({ data: JSON.stringify(data) }); }
   simulateError()                { this.onerror?.(); }
   simulateClose(code = 1000)     { this.close(code); }
@@ -51,10 +57,15 @@ describe('WebSocketService', () => {
 
   it('should be created', () => expect(service).toBeTruthy());
 
-  it('jobLogs should append token to URL', (done) => {
+  // AUDIT 2026-04-12/H2: token is no longer in the URL — sent as first-message frame.
+  it('jobLogs should connect without token in URL and send auth frame', (done) => {
     service.jobLogs('job-001').subscribe({ complete: done });
-    expect(MockWebSocket.instance.url).toContain('token=test-jwt');
     expect(MockWebSocket.instance.url).toContain('/ws/jobs/job-001/logs');
+    expect(MockWebSocket.instance.url).not.toContain('token=');
+    // Trigger onopen to send the auth frame
+    MockWebSocket.instance.simulateOpen();
+    expect(MockWebSocket.instance.lastSent).toContain('"type":"auth"');
+    expect(MockWebSocket.instance.lastSent).toContain('test-jwt');
     MockWebSocket.instance.simulateClose(1000);
   });
 

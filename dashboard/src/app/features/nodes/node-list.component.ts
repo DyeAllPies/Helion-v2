@@ -282,7 +282,8 @@ export class NodeListComponent implements OnInit, OnDestroy {
       error: err => {
         this.loading    = false;
         this.refreshing = false;
-        this.error      = `Failed to load nodes: ${(err as Error).message}`;
+        console.error('Failed to load nodes:', err);
+        this.error      = 'Failed to load nodes. Please try again or contact your administrator.';
       }
     });
   }

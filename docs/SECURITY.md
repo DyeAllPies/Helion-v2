@@ -166,8 +166,12 @@ Maximum TTL: 720 hours (30 days).
 # REST API
 curl -H "Authorization: Bearer $ROOT_TOKEN" https://coordinator:8443/jobs
 
-# WebSocket (token in query parameter)
-wscat -c "wss://coordinator:8443/ws/metrics?token=$ROOT_TOKEN"
+# WebSocket (first-message auth — token sent as first frame after connect)
+# The client sends {"type":"auth","token":"<jwt>"} immediately after the
+# WebSocket handshake completes. The server validates and replies with
+# {"type":"auth_ok"} before streaming data. Tokens never appear in URLs.
+wscat -c "wss://coordinator:8443/ws/metrics"
+# then send: {"type":"auth","token":"$ROOT_TOKEN"}
 ```
 
 ### Revocation
@@ -349,6 +353,11 @@ paths record `actor = "anonymous"`.
 - HTTP interceptor attaches `Authorization: Bearer {token}` to every outbound request. On
   `401`, clears token and redirects to login.
 - `AuthGuard` blocks navigation to protected routes if no token is present.
+- WebSocket authentication uses first-message pattern: the JWT is sent as the first
+  frame after `onopen`, never as a URL query parameter. This prevents token leakage
+  via server access logs, browser history, and `Referer` headers.
+- Error banners display generic messages only. Raw error details are logged to
+  `console.error` — never rendered in the UI.
 - Nginx CSP header: no inline scripts, no eval, same-origin only.
 
 ---
@@ -409,10 +418,12 @@ restart the coordinator.
 The node's certificate may be revoked or the CA has been regenerated (coordinator restarted
 against empty BadgerDB). Delete the node's certificate on disk and let it re-register.
 
-### WebSocket connection fails (401)
+### WebSocket connection fails (4001 or no data)
 
-The token must be in the `?token=` query parameter or the `Authorization` header. Verify
-the token has not expired.
+WebSocket auth uses first-message pattern: the client must send
+`{"type":"auth","token":"<jwt>"}` as the first frame after connecting. The
+server replies `{"type":"auth_ok"}` on success or closes with code 4001 on
+failure. Verify the token has not expired and is being sent as the first frame.
 
 ### Seccomp or OOMKilled in job result
 

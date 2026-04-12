@@ -22,6 +22,7 @@ package main
 
 import (
 	"context"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net"
@@ -149,11 +150,24 @@ func main() {
 
 	regCtx, regCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer regCancel()
-	_, err = client.Register(regCtx, nodeID, nodeAddr)
+	regResp, err := client.Register(regCtx, nodeID, nodeAddr)
 	if err != nil {
 		log.Error("register with coordinator", slog.Any("err", err))
 		os.Exit(1)
 	}
+
+	// AUDIT 2026-04-12/H1: if the coordinator returned a signed certificate,
+	// use it for the node's gRPC server so the coordinator can verify the
+	// node's cert during dispatch (proper CA chain verification).
+	if payload := regResp.GetSignedCertificate(); len(payload) > 0 {
+		certPEM, keyPEM := splitCertKeyPEM(payload)
+		if len(certPEM) > 0 && len(keyPEM) > 0 {
+			bundle.CertPEM = certPEM
+			bundle.KeyPEM = keyPEM
+			log.Info("using coordinator-signed certificate for gRPC server")
+		}
+	}
+
 	// Heartbeat interval is fixed at 10 s; full negotiation is a Phase 5 item
 	// (certificate rotation / coordinator-driven config).
 	heartbeatInterval := 10 * time.Second
@@ -221,6 +235,27 @@ func main() {
 	cancel()
 	grpcSrv.GracefulStop()
 	log.Info("stopped")
+}
+
+// splitCertKeyPEM splits a concatenated PEM payload into certificate and
+// private key components by scanning for the PEM block types.
+func splitCertKeyPEM(payload []byte) (certPEM, keyPEM []byte) {
+	rest := payload
+	for len(rest) > 0 {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		encoded := pem.EncodeToMemory(block)
+		switch block.Type {
+		case "CERTIFICATE":
+			certPEM = append(certPEM, encoded...)
+		case "EC PRIVATE KEY", "PRIVATE KEY":
+			keyPEM = append(keyPEM, encoded...)
+		}
+	}
+	return certPEM, keyPEM
 }
 
 func envOr(key, fallback string) string {

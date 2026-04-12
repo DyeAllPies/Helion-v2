@@ -110,6 +110,24 @@ func (r *Registry) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.R
 	r.appendAuditAsync("node.registered", req.NodeId, req.NodeId,
 		fmt.Sprintf("address=%s new=%v", req.Address, !exists))
 
-	// SignedCertificate is populated by the auth layer (Phase 4).
-	return &pb.RegisterResponse{NodeId: req.NodeId}, nil
+	// AUDIT 2026-04-12/H1: issue a coordinator-signed certificate so the node
+	// can present it on its gRPC server. This allows the coordinator to verify
+	// node certs during dispatch instead of using InsecureSkipVerify.
+	resp := &pb.RegisterResponse{NodeId: req.NodeId}
+	r.certIssuerMu.RLock()
+	ci := r.certIssuer
+	r.certIssuerMu.RUnlock()
+	if ci != nil {
+		certPEM, keyPEM, err := ci.IssueNodeCert(req.NodeId)
+		if err != nil {
+			r.log.Error("registry: issue node cert failed",
+				slog.String("node_id", req.NodeId), slog.Any("err", err))
+		} else {
+			// Bundle cert + key into a single PEM payload. The node splits
+			// them by PEM block type ("CERTIFICATE" vs "EC PRIVATE KEY").
+			resp.SignedCertificate = append(certPEM, keyPEM...)
+		}
+	}
+
+	return resp, nil
 }

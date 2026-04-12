@@ -88,62 +88,6 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// ── wsAuthMiddleware ──────────────────────────────────────────────────────────
-
-// wsAuthMiddleware validates JWT for WebSocket connections. The token may
-// arrive in the ?token= query parameter (browsers cannot set headers on
-// WebSocket upgrades) or in the Authorization: Bearer header.
-func (s *Server) wsAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// AUDIT H2 (fixed): nil tokenManager now returns 500 unless the
-		// server was explicitly constructed with DisableAuth().
-		if s.tokenManager == nil {
-			if s.disableAuth {
-				next.ServeHTTP(w, r)
-				return
-			}
-			slog.Error("ws auth middleware: tokenManager is nil and DisableAuth not set")
-			http.Error(w, "authentication not configured", http.StatusInternalServerError)
-			return
-		}
-
-		// For WebSocket, token can be in query param (browsers can't set headers in EventSource/WS)
-		token := r.URL.Query().Get("token")
-		if token == "" {
-			// Fall back to Authorization header
-			authHeader := r.Header.Get("Authorization")
-			if strings.HasPrefix(authHeader, "Bearer ") {
-				token = strings.TrimPrefix(authHeader, "Bearer ")
-			}
-		}
-
-		if token == "" {
-			if s.audit != nil {
-				if err := s.audit.LogAuthFailure(r.Context(), "missing token", r.RemoteAddr); err != nil {
-					logAuditErr(true, "wsauth.missing_token", err)
-				}
-			}
-			http.Error(w, "unauthorized: missing token", http.StatusUnauthorized)
-			return
-		}
-
-		claims, err := s.tokenManager.ValidateToken(r.Context(), token)
-		if err != nil {
-			if s.audit != nil {
-				if aerr := s.audit.LogAuthFailure(r.Context(), err.Error(), r.RemoteAddr); aerr != nil {
-					logAuditErr(true, "wsauth.invalid_token", aerr)
-				}
-			}
-			slog.Error("ws token validation failed", slog.String("remote", r.RemoteAddr), slog.Any("err", err))
-			http.Error(w, "authentication failed", http.StatusUnauthorized)
-			return
-		}
-
-		ctx := context.WithValue(r.Context(), claimsContextKey, claims)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	}
-}
-
 // ── adminMiddleware ───────────────────────────────────────────────────────────
 
 // adminMiddleware rejects requests whose JWT role is not "admin".

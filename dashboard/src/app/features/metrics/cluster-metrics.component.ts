@@ -285,7 +285,8 @@ export class ClusterMetricsComponent implements OnInit, OnDestroy {
       },
       error: err => {
         this.connected = false;
-        this.error     = `Metrics WebSocket error: ${(err as Error).message}`;
+        console.error('Metrics WebSocket error:', err);
+        this.error     = 'Metrics connection lost. Retrying automatically\u2026';
       },
       complete: () => { this.connected = false; }
     });

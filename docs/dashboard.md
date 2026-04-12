@@ -126,6 +126,12 @@ docker run -p 3000:80 \
 - Route guards block access to all protected routes without a valid in-memory token.
 - Nginx serves a strict Content-Security-Policy header: no inline scripts, no eval, same-origin only.
 - Auto-logout fires 30 s before JWT expiry (configurable via `jwtExpiryBufferMs`).
+- **WebSocket first-message auth** — the JWT is sent as the first frame after `onopen`
+  (`{"type":"auth","token":"..."}`), never as a URL query parameter. The server replies
+  `{"type":"auth_ok"}` before streaming data. This keeps tokens out of server logs and
+  browser history.
+- **Generic error messages** — all error banners display user-friendly text. Raw error
+  details are logged to `console.error` for developer diagnostics only.
 
 ## Environment variables
 

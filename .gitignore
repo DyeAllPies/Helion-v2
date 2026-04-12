@@ -53,6 +53,15 @@ logs/
 *.sst
 MANIFEST
 
+# Rust build output (rebuild with cargo build)
+target/
+Cargo.lock
+
+# Playwright E2E artifacts (regenerate with npx playwright test)
+dashboard/test-results/
+dashboard/playwright-report/
+dashboard/helion-e2e-full-run.mp4
+
 # Benchmark results (machine-specific, regenerate with make bench)
 benchmarks/
 

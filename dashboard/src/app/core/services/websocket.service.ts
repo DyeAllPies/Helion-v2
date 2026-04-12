@@ -37,16 +37,32 @@ export class WebSocketService {
 
   // ── Private factory ───────────────────────────────────────────────────────────
 
+  // AUDIT 2026-04-12/H2 (fixed): token is sent as the first WebSocket message
+  // instead of a URL query parameter. This keeps the JWT out of server access
+  // logs, browser history, and Referer headers.
   private _connect<T>(baseUrl: string): Observable<T> {
     return new Observable<T>(observer => {
-      const token = this.auth.token;
-      const url   = token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl;
+      // Connect without token in URL — auth happens via first-message frame.
+      let ws: WebSocket | null = new WebSocket(baseUrl);
 
-      let ws: WebSocket | null = new WebSocket(url);
+      ws.onopen = () => {
+        const token = this.auth.token;
+        if (token && ws) {
+          ws.send(JSON.stringify({ type: 'auth', token }));
+        }
+      };
 
       ws.onmessage = ({ data }) => {
         try {
-          observer.next(JSON.parse(data as string) as T);
+          const msg = JSON.parse(data as string);
+          // Server sends {"type":"auth_ok"} after successful auth — skip it.
+          if (msg.type === 'auth_ok' || msg.type === 'auth_error') {
+            if (msg.type === 'auth_error') {
+              observer.error(new Error('WebSocket authentication failed'));
+            }
+            return;
+          }
+          observer.next(msg as T);
         } catch {
           // malformed frame — skip
         }

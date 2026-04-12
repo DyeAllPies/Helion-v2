@@ -349,7 +349,8 @@ export class JobDetailComponent implements OnInit, OnDestroy, AfterViewChecked {
       },
       error: err => {
         this.loading = false;
-        this.error   = `Job not found: ${(err as Error).message}`;
+        console.error('Job not found:', err);
+        this.error   = 'Job not found. Please check the job ID and try again.';
       }
     });
   }
