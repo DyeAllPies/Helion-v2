@@ -4,7 +4,7 @@
 // Verifies: all 7 KPI cards, WebSocket connection, chart rendering,
 // health percentage display, WS error handling, and live streaming.
 
-import { test, expect } from '../fixtures/auth.fixture';
+import { test, expect, navigateTo } from '../fixtures/auth.fixture';
 
 test.describe('Metrics Page', () => {
 
@@ -16,7 +16,7 @@ test.describe('Metrics Page', () => {
   });
 
   test('shows WebSocket connection indicator', async ({ authedPage: page }) => {
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
 
     const wsIndicator = page.locator('.ws-indicator');
     await expect(wsIndicator).toBeVisible();
@@ -29,7 +29,7 @@ test.describe('Metrics Page', () => {
   });
 
   test('renders all 7 KPI cards', async ({ authedPage: page }) => {
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
 
     await expect(page.locator('.kpi-grid')).toBeVisible({ timeout: 15_000 });
 
@@ -47,7 +47,7 @@ test.describe('Metrics Page', () => {
   });
 
   test('KPI values are numeric', async ({ authedPage: page }) => {
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
     await expect(page.locator('.kpi-grid')).toBeVisible({ timeout: 15_000 });
 
     // Every .kpi-value should be a valid number
@@ -62,7 +62,7 @@ test.describe('Metrics Page', () => {
   });
 
   test('healthy nodes KPI shows correct count > 0', async ({ authedPage: page }) => {
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
     await expect(page.locator('.kpi-grid')).toBeVisible({ timeout: 15_000 });
 
     const healthyCard = page.locator('.kpi-card:has-text("HEALTHY NODES") .kpi-value');
@@ -73,7 +73,7 @@ test.describe('Metrics Page', () => {
   });
 
   test('healthy nodes percentage is displayed', async ({ authedPage: page }) => {
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
     await expect(page.locator('.kpi-grid')).toBeVisible({ timeout: 15_000 });
 
     // The HEALTHY NODES card shows "X% healthy" as a subtitle
@@ -83,14 +83,14 @@ test.describe('Metrics Page', () => {
   });
 
   test('HEALTHY NODES card has accent border styling', async ({ authedPage: page }) => {
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
     await expect(page.locator('.kpi-grid')).toBeVisible({ timeout: 15_000 });
 
     await expect(page.locator('.kpi-card--accent')).toBeVisible();
   });
 
   test('time-series chart renders after receiving data', async ({ authedPage: page }) => {
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
 
     await expect(page.locator('.chart-panel')).toBeVisible({ timeout: 15_000 });
 
@@ -102,7 +102,7 @@ test.describe('Metrics Page', () => {
   });
 
   test('KPI values update over time via WebSocket', async ({ authedPage: page }) => {
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
     await expect(page.locator('.kpi-grid')).toBeVisible({ timeout: 15_000 });
 
     const getSnapshotCount = async () => {
@@ -119,7 +119,7 @@ test.describe('Metrics Page', () => {
   });
 
   test('total nodes KPI matches healthy + unhealthy', async ({ authedPage: page }) => {
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
     await expect(page.locator('.kpi-grid')).toBeVisible({ timeout: 15_000 });
 
     const totalText = await page.locator('.kpi-card:has-text("TOTAL NODES") .kpi-value').textContent();
@@ -137,7 +137,7 @@ test.describe('Metrics Page', () => {
     // Block the WS connection to see the waiting spinner
     await page.route('**/ws/metrics**', route => route.abort());
 
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
 
     // The waiting spinner should appear since WS never connects
     await expect(page.locator('.waiting')).toBeVisible({ timeout: 15_000 });
@@ -145,7 +145,7 @@ test.describe('Metrics Page', () => {
   });
 
   test('WS error shows error banner', async ({ authedPage: page }) => {
-    await page.goto('/metrics');
+    await navigateTo(page, '/metrics');
 
     // Wait for initial WS connection to establish
     await expect(page.locator('.kpi-grid')).toBeVisible({ timeout: 15_000 });
@@ -154,8 +154,8 @@ test.describe('Metrics Page', () => {
     await page.route('**/ws/metrics**', route => route.abort());
 
     // Navigate away and back to force a new WS connection (which will fail)
-    await page.goto('/nodes');
-    await page.goto('/metrics');
+    await navigateTo(page, '/nodes');
+    await navigateTo(page, '/metrics');
 
     // Error banner should appear since WS can't connect
     await expect(page.locator('.error-banner')).toBeVisible({ timeout: 15_000 });

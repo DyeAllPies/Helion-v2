@@ -57,7 +57,7 @@ export class ApiService {
 
   getJobs(page = 0, size = 25, status?: string): Observable<JobsPage> {
     let params = new HttpParams()
-      .set('page', page)
+      .set('page', page + 1)   // API is 1-indexed
       .set('size', size);
     if (status) params = params.set('status', status);
     return this.http.get<JobsPage>(`${this.base}/jobs`, { params });
@@ -81,7 +81,7 @@ export class ApiService {
 
   getAudit(page = 0, size = 50, type?: string): Observable<AuditPage> {
     let params = new HttpParams()
-      .set('page', page)
+      .set('page', page + 1)   // API is 1-indexed
       .set('size', size);
     if (type) params = params.set('type', type);
     return this.http.get<AuditPage>(`${this.base}/audit`, { params });

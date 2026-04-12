@@ -41,7 +41,7 @@ export default defineConfig({
   // Optionally start the Angular dev server automatically.
   // Comment out if you prefer to start it manually.
   webServer: {
-    command: 'npx ng serve --port 4200',
+    command: 'npx ng serve --port 4200 --proxy-config proxy.conf.json',
     url: 'http://localhost:4200',
     reuseExistingServer: !process.env['CI'],
     timeout: 120_000,

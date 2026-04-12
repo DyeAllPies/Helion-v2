@@ -39,6 +39,8 @@ trap cleanup EXIT
 # ── 1. Start cluster ────────────────────────────────────────────────────────
 
 log "Starting cluster..."
+# Clean state from previous runs to avoid stale data accumulation
+rm -rf "$ROOT_DIR/state" "$ROOT_DIR/logs"
 mkdir -p "$ROOT_DIR/state" "$ROOT_DIR/logs"
 # Container runs as non-root user 'helion' — ensure mounted dirs are writable
 chmod 777 "$ROOT_DIR/state" "$ROOT_DIR/logs"
@@ -62,7 +64,8 @@ done
 # ── 3. Wait for nodes to register ───────────────────────────────────────────
 
 # Token file inside container is owned by user helion (mode 0600) — read via docker exec
-TOKEN=$(docker exec helion-coordinator cat /app/state/root-token)
+# Double-slash prevents Git Bash (MSYS2) from converting /app/... to C:/Program Files/Git/app/...
+TOKEN=$(docker exec helion-coordinator cat //app/state/root-token)
 export E2E_TOKEN="$TOKEN"
 log "Waiting for healthy nodes..."
 for i in $(seq 1 20); do

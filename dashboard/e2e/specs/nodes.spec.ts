@@ -4,12 +4,12 @@
 // Verifies: node list renders, health badges, auto-refresh polling,
 // all table columns, error handling, and empty state.
 
-import { test, expect } from '../fixtures/auth.fixture';
+import { test, expect, navigateTo } from '../fixtures/auth.fixture';
 
 test.describe('Nodes Page', () => {
 
   test('displays the NODES page title and registered nodes', async ({ authedPage: page }) => {
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     await expect(page.locator('h1.page-title')).toContainText('NODES');
 
@@ -18,7 +18,7 @@ test.describe('Nodes Page', () => {
   });
 
   test('shows healthy badges for registered nodes', async ({ authedPage: page }) => {
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
       .toBeVisible({ timeout: 15_000 });
@@ -28,7 +28,7 @@ test.describe('Nodes Page', () => {
   });
 
   test('displays node details: ID, address, CPU, memory', async ({ authedPage: page }) => {
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
       .toBeVisible({ timeout: 15_000 });
@@ -44,7 +44,7 @@ test.describe('Nodes Page', () => {
   });
 
   test('shows subtitle with registered and healthy counts', async ({ authedPage: page }) => {
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
       .toBeVisible({ timeout: 15_000 });
@@ -55,14 +55,14 @@ test.describe('Nodes Page', () => {
   });
 
   test('refresh indicator is present', async ({ authedPage: page }) => {
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     const indicator = page.locator('.refresh-indicator');
     await expect(indicator).toBeVisible();
   });
 
   test('all table columns are rendered', async ({ authedPage: page }) => {
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
       .toBeVisible({ timeout: 15_000 });
@@ -82,7 +82,7 @@ test.describe('Nodes Page', () => {
   });
 
   test('last seen column shows relative timestamps', async ({ authedPage: page }) => {
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
       .toBeVisible({ timeout: 15_000 });
@@ -96,7 +96,7 @@ test.describe('Nodes Page', () => {
   });
 
   test('registered at column shows formatted date', async ({ authedPage: page }) => {
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
       .toBeVisible({ timeout: 15_000 });
@@ -109,7 +109,7 @@ test.describe('Nodes Page', () => {
   });
 
   test('auto-refresh polling updates table data', async ({ authedPage: page }) => {
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
       .toBeVisible({ timeout: 15_000 });
@@ -136,7 +136,7 @@ test.describe('Nodes Page', () => {
   });
 
   test('error banner appears when API returns error', async ({ authedPage: page }) => {
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     // Wait for initial successful load
     await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
@@ -162,7 +162,7 @@ test.describe('Nodes Page', () => {
       });
     });
 
-    await page.goto('/nodes');
+    await navigateTo(page, '/nodes');
 
     await expect(page.locator('.empty-state')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.empty-state')).toContainText('No nodes registered yet');

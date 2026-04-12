@@ -19,7 +19,6 @@ export { expect };
  */
 export async function authenticate(page: Page): Promise<void> {
   const token = getRootToken();
-
   await page.goto('/login');
   await page.waitForSelector('textarea.token-input', { state: 'visible' });
 
@@ -31,6 +30,36 @@ export async function authenticate(page: Page): Promise<void> {
 
   // Wait for redirect to /nodes (post-login default)
   await page.waitForURL('**/nodes', { timeout: 15_000 });
+}
+
+/** Map of route paths to sidebar link text for Angular router navigation. */
+const NAV_LINKS: Record<string, string> = {
+  '/nodes':   'Nodes',
+  '/jobs':    'Jobs',
+  '/metrics': 'Metrics',
+  '/audit':   'Audit',
+};
+
+/**
+ * Navigate to a route without losing the in-memory JWT.
+ * Uses sidebar link clicks (Angular router) instead of page.goto()
+ * which causes a full page reload and destroys the auth state.
+ * Falls back to re-authentication for routes not in the sidebar.
+ */
+export async function navigateTo(page: Page, path: string): Promise<void> {
+  const linkText = NAV_LINKS[path];
+  if (linkText) {
+    await page.click(`a.nav-link >> text=${linkText}`);
+    await page.waitForURL(`**${path}`, { timeout: 5_000 });
+  } else if (path.startsWith('/jobs/')) {
+    // Job detail — navigate via jobs list link or direct URL with re-auth
+    await authenticate(page);
+    await page.click(`a.nav-link >> text=Jobs`);
+    await page.waitForURL('**/jobs', { timeout: 5_000 });
+  } else {
+    // Unknown route — re-authenticate and goto
+    await authenticate(page);
+  }
 }
 
 /**
