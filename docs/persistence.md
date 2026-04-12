@@ -30,6 +30,7 @@ allow it, but the audit log must be immutable.
 |----------------|--------------------|-------------------|
 | `nodes/{addr}` | Node (proto)       | 2× heartbeat interval |
 | `jobs/{id}`    | Job (proto)        | none (permanent)  |
+| `workflows/{id}` | Workflow (JSON)  | none (permanent)  |
 | `certs/{id}`   | X.509 DER (raw)    | none (permanent)  |
 | `audit/{ts}-{id}` | AuditEvent (proto) | none (append-only) |
 | `tokens/{jti}` | JWT metadata (proto) | token expiry    |

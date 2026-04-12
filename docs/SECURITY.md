@@ -10,15 +10,14 @@ authentication, rate limiting, audit logging, and operational procedures.
 1. [Threat model](#1-threat-model)
 2. [mTLS and certificate architecture](#2-mtls-and-certificate-architecture)
 3. [Post-quantum cryptography](#3-post-quantum-cryptography)
-4. [JWT authentication](#4-jwt-authentication)
+4. [JWT authentication](#4-jwt-authentication) → [JWT-GUIDE.md](JWT-GUIDE.md)
 5. [Rate limiting](#5-rate-limiting)
 6. [Audit logging](#6-audit-logging)
 7. [Node revocation](#7-node-revocation)
 8. [REST API security](#8-rest-api-security)
 9. [Dashboard security](#9-dashboard-security)
-10. [Operational guide](#10-operational-guide)
-11. [Troubleshooting](#11-troubleshooting)
-12. [References](#12-references)
+10. [Operational guide](#10-operational-guide) → [SECURITY-OPS.md](SECURITY-OPS.md)
+11. [References](#11-references)
 
 ---
 
@@ -116,88 +115,12 @@ xxd -p node.crt | sed 's/00/FF/1' | xxd -r -p > node_tampered.crt
 
 ## 4. JWT authentication
 
-### Token properties
+See [JWT-GUIDE.md](JWT-GUIDE.md) for the full JWT reference: token properties,
+root token rotation, issuing scoped tokens, usage examples, and revocation.
 
-| Property | Value |
-|---|---|
-| Algorithm | HS256 (256-bit secret, auto-generated on first start) |
-| Normal token expiry | 15 minutes |
-| Root token expiry | 10 years |
-| Revocation mechanism | Delete JTI record from BadgerDB |
-| Revocation latency | < 1 second |
-
-### Root token rotation
-
-The coordinator **rotates** the root token on **every restart** by default. On startup it
-revokes the previous token's JTI and issues a fresh one, then writes it to the path
-specified by `HELION_TOKEN_FILE` (default: `/var/lib/helion/root-token`, mode `0600`).
-Set `HELION_ROTATE_TOKEN=false` to reuse the stored token across restarts (useful for
-automation that cannot read the token file on every restart).
-
-This eliminates the "10-year never-expiring token" problem: a token leaked from a prior run
-is invalidated automatically the moment the coordinator restarts. The current root token is
-stored in BadgerDB; if BadgerDB is wiped a new token is generated on the next start.
-
-### Issuing scoped tokens
-
-Use the root token to issue short-lived, role-scoped tokens for operators or services:
-
-```bash
-# Issue an admin token valid for 8 hours (default)
-curl -s -X POST https://coordinator:8443/admin/tokens \
-  -H "Authorization: Bearer $ROOT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"subject":"alice","role":"admin","ttl_hours":8}' \
-  | jq -r .token
-
-# Issue a node-role token valid for 1 hour
-curl -s -X POST https://coordinator:8443/admin/tokens \
-  -H "Authorization: Bearer $ROOT_TOKEN" \
-  -d '{"subject":"ci-runner","role":"node","ttl_hours":1}' \
-  | jq -r .token
-```
-
-Roles: `admin` (full access) · `node` (job submission and result reporting only, RBAC wiring in progress).
-Maximum TTL: 720 hours (30 days).
-
-### Token usage
-
-```bash
-# REST API
-curl -H "Authorization: Bearer $ROOT_TOKEN" https://coordinator:8443/jobs
-
-# WebSocket (first-message auth — token sent as first frame after connect)
-# The client sends {"type":"auth","token":"<jwt>"} immediately after the
-# WebSocket handshake completes. The server validates and replies with
-# {"type":"auth_ok"} before streaming data. Tokens never appear in URLs.
-wscat -c "wss://coordinator:8443/ws/metrics"
-# then send: {"type":"auth","token":"$ROOT_TOKEN"}
-```
-
-### Revocation
-
-Token revocation works by deleting the JTI record from BadgerDB. `ValidateToken` checks
-for JTI presence on every call — if the record is absent the token is rejected immediately.
-
-```bash
-# Extract JTI from token
-JTI=$(echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .jti)
-
-# Revoke immediately via the API (admin role required)
-curl -s -X DELETE https://coordinator:8443/admin/tokens/$JTI \
-  -H "Authorization: Bearer $ROOT_TOKEN"
-```
-
-**Timing test:**
-
-```bash
-START=$(date +%s%3N)
-# revoke ...
-curl -H "Authorization: Bearer $TOKEN" https://coordinator:8443/jobs
-END=$(date +%s%3N)
-echo "Rejection latency: $((END - START)) ms"
-# Expected: < 1000 ms
-```
+Summary: HS256 with 15-minute expiry (normal) or 10-year expiry (root, rotated
+on every restart). JTI-based revocation via `DELETE /admin/tokens/{jti}` with
+sub-second latency.
 
 ---
 
@@ -362,78 +285,14 @@ paths record `actor = "anonymous"`.
 
 ---
 
-## 10. Operational guide
+## 10. Operational guide & troubleshooting
 
-### Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `HELION_RATE_LIMIT_RPS` | `10` | Per-node rate limit (jobs/second) |
-| `HELION_AUDIT_TTL` | `7776000` (90 days) | Audit event TTL in seconds; `0` = no expiry |
-
-### First-start checklist
-
-- [ ] **Save the root token.** It is written to `HELION_TOKEN_FILE` (default
-      `/var/lib/helion/root-token`, mode `0600`). Store it in a password manager.
-- [ ] **Verify TLS with Wireshark.** Confirm `x25519_mlkem768 (0x6399)` appears in the
-      ClientHello supported_groups extension.
-- [ ] **Confirm audit logging.** Submit a test job and verify a `job_submit` event appears
-      at `GET /audit`.
-- [ ] **Test rate limiting.** Submit burst traffic and confirm `ResourceExhausted` responses
-      and `rate_limit_hit` audit events.
-
-### Saving the root token
-
-```bash
-export HELION_ROOT_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-echo "export HELION_ROOT_TOKEN=\"$HELION_ROOT_TOKEN\"" >> ~/.helion_env
-chmod 600 ~/.helion_env
-source ~/.helion_env
-```
-
-### Production recommendations
-
-1. Rotate root token periodically (every 90 days).
-2. Monitor `auth_failure` events — alert on sustained spikes.
-3. Export audit log to a SIEM for long-term retention.
-4. Restrict coordinator API access via firewall / VPN.
-5. Enable Kubernetes `NetworkPolicy` to limit pod-to-pod traffic.
+See [SECURITY-OPS.md](SECURITY-OPS.md) for environment variables, first-start
+checklist, production recommendations, and troubleshooting common issues.
 
 ---
 
-## 11. Troubleshooting
-
-### "token revoked or invalid JTI"
-
-The JTI record is absent from BadgerDB (revoked, expired TTL, or DB wiped). Generate a
-new root token by restarting the coordinator against an empty BadgerDB.
-
-### Rate limit hit immediately
-
-The burst is exhausted or the rate is set too low. Increase `HELION_RATE_LIMIT_RPS` and
-restart the coordinator.
-
-### Node rejected with Unauthenticated
-
-The node's certificate may be revoked or the CA has been regenerated (coordinator restarted
-against empty BadgerDB). Delete the node's certificate on disk and let it re-register.
-
-### WebSocket connection fails (4001 or no data)
-
-WebSocket auth uses first-message pattern: the client must send
-`{"type":"auth","token":"<jwt>"}` as the first frame after connecting. The
-server replies `{"type":"auth_ok"}` on success or closes with code 4001 on
-failure. Verify the token has not expired and is being sent as the first frame.
-
-### Seccomp or OOMKilled in job result
-
-Expected behaviour — the Rust runtime enforces syscall and memory limits. Check the
-coordinator audit log for a `security_violation` event with details about the violation.
-If the limits are too restrictive, adjust via the job submission request fields.
-
----
-
-## 12. References
+## 11. References
 
 - [NIST FIPS 203: ML-KEM (Kyber)](https://csrc.nist.gov/pubs/fips/203/final)
 - [NIST FIPS 204: ML-DSA (Dilithium)](https://csrc.nist.gov/pubs/fips/204/final)

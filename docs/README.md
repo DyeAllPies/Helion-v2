@@ -233,13 +233,18 @@ All project documentation lives under `docs/`:
 | File | Contents |
 |---|---|
 | [README.md](README.md) | This file — project overview, stack, environment variables, quick start |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Component responsibilities, lifecycle, concurrency model |
-| [SECURITY.md](SECURITY.md) | Threat model, mTLS + PQC, JWT lifecycle, audit log schema |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | High-level design, technology decisions, protocol contracts, CI/CD |
+| [COMPONENTS.md](COMPONENTS.md) | Coordinator, node agent, and runtime interface internals |
+| [PERFORMANCE.md](PERFORMANCE.md) | Go vs Rust benchmarks, cgroup/seccomp overhead |
+| [SECURITY.md](SECURITY.md) | Threat model, mTLS, PQC, rate limiting, audit logging |
+| [JWT-GUIDE.md](JWT-GUIDE.md) | JWT token lifecycle, issuance, usage, revocation |
+| [SECURITY-OPS.md](SECURITY-OPS.md) | Operational checklist, env vars, troubleshooting |
 | [AUDIT.md](AUDIT.md) | Security & code-quality audit **template** — copy into `audits/<YYYY-MM-DD>.md` to start a new audit |
 | [audits/](audits/) | Archive of closed audits (one file per run, filename = audit ID) |
 | [dashboard.md](dashboard.md) | Angular dashboard — stack, testing, local dev |
 | [persistence.md](persistence.md) | `internal/persistence` rules, key schema, test invariants |
 | [docker-compose-dev-notes.md](docker-compose-dev-notes.md) | Local Docker Compose workflow notes |
+| [planned-features/](planned-features/) | Feature specs for orchestrator enhancements |
 
 ### Packing the repo without the audit archive
 
