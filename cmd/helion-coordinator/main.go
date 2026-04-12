@@ -43,6 +43,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/grpcserver"
 	"github.com/DyeAllPies/Helion-v2/internal/metrics"
+	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
 )
 
@@ -78,6 +79,7 @@ func main() {
 	// ── Business logic ────────────────────────────────────────────────────
 	registry := cluster.NewRegistry(persister, heartbeatInterval, log)
 	jobs := cluster.NewJobStore(persister, log)
+	workflows := cluster.NewWorkflowStore(persister, log)
 
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
@@ -90,6 +92,10 @@ func main() {
 	}
 	if err := jobs.Restore(ctx); err != nil {
 		log.Error("restore job store", slog.Any("err", err))
+		os.Exit(1)
+	}
+	if err := workflows.Restore(ctx); err != nil {
+		log.Error("restore workflow store", slog.Any("err", err))
 		os.Exit(1)
 	}
 
@@ -210,6 +216,9 @@ func main() {
 		grpcserver.WithRateLimiter(rateLimiter),
 		grpcserver.WithAuditLogger(auditLogger),
 		grpcserver.WithRevocationChecker(registry),
+		grpcserver.WithJobCompletionCallback(func(cbCtx context.Context, jobID string, status cpb.JobStatus) {
+			workflows.OnJobCompleted(cbCtx, jobID, status, jobs)
+		}),
 	)
 	if err != nil {
 		log.Error("create gRPC server", slog.Any("err", err))
@@ -266,6 +275,7 @@ func main() {
 
 	readiness := &coordinatorReadiness{db: persister, reg: registry}
 	apiSrv := api.NewServer(jobsAdapter, nodeRegistry, metricsProvider, auditLogger, tokenManager, rateLimiter, readiness, promHandler)
+	apiSrv.SetWorkflowStore(workflows, jobs)
 	go func() {
 		log.Info("HTTP API listening", slog.String("addr", httpAddr))
 		if err := apiSrv.Serve(httpAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -312,6 +322,7 @@ func main() {
 	}
 	nodeDispatcher := cluster.NewGRPCNodeDispatcher(dispatchTLS)
 	dispatchLoop := cluster.NewDispatchLoop(jobs, scheduler, nodeDispatcher, 2*time.Second, log)
+	dispatchLoop.SetWorkflowStore(workflows)
 	go dispatchLoop.Run(ctx)
 
 	// ── Background goroutines ─────────────────────────────────────────────
