@@ -263,10 +263,19 @@ jobs:
       - name: Wait for nodes to register
         run: |
           echo "Waiting for at least 1 healthy node..."
+          echo "Token length: ${#E2E_TOKEN}"
           for i in $(seq 1 20); do
+            # Debug: show HTTP status and response body on first iteration
+            if [ "$i" -eq 1 ]; then
+              echo "--- debug: curl response ---"
+              curl -v -H "Authorization: Bearer $E2E_TOKEN" \
+                http://127.0.0.1:8080/nodes 2>&1 || true
+              echo "--- end debug ---"
+            fi
             HEALTHY=$(curl -sf -H "Authorization: Bearer $E2E_TOKEN" \
               http://127.0.0.1:8080/nodes 2>/dev/null \
               | python3 -c "import sys,json; d=json.load(sys.stdin); print(sum(1 for n in d.get('nodes',d) if n.get('healthy')))" 2>/dev/null || echo 0)
+            echo "attempt $i: HEALTHY=$HEALTHY"
             if [ "$HEALTHY" -ge 1 ]; then
               echo "$HEALTHY healthy node(s) registered."
               break
