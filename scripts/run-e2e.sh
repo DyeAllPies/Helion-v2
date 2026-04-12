@@ -61,7 +61,9 @@ done
 
 # ── 3. Wait for nodes to register ───────────────────────────────────────────
 
-TOKEN=$(cat "$ROOT_DIR/state/root-token")
+# Token file inside container is owned by user helion (mode 0600) — read via docker exec
+TOKEN=$(docker exec helion-coordinator cat /app/state/root-token)
+export E2E_TOKEN="$TOKEN"
 log "Waiting for healthy nodes..."
 for i in $(seq 1 20); do
   HEALTHY=$(curl -sf -H "Authorization: Bearer $TOKEN" \

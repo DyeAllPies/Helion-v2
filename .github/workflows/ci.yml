@@ -254,12 +254,17 @@ jobs:
             sleep 2
           done
 
+      - name: Read root token from coordinator container
+        run: |
+          TOKEN=$(docker exec helion-coordinator cat /app/state/root-token)
+          echo "E2E_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "::add-mask::$TOKEN"
+
       - name: Wait for nodes to register
         run: |
-          TOKEN=$(cat state/root-token)
           echo "Waiting for at least 1 healthy node..."
           for i in $(seq 1 20); do
-            HEALTHY=$(curl -sf -H "Authorization: Bearer $TOKEN" \
+            HEALTHY=$(curl -sf -H "Authorization: Bearer $E2E_TOKEN" \
               http://127.0.0.1:8080/nodes 2>/dev/null \
               | python3 -c "import sys,json; print(sum(1 for n in json.load(sys.stdin) if n.get('healthy')))" 2>/dev/null || echo 0)
             if [ "$HEALTHY" -ge 1 ]; then
@@ -293,6 +298,8 @@ jobs:
         working-directory: dashboard
         env:
           CI: "true"
+          # E2E_TOKEN was set in GITHUB_ENV by the "Read root token" step.
+          # The Playwright cluster fixture reads it to authenticate with the dashboard.
         run: npx playwright test
 
       - name: Upload Playwright report
