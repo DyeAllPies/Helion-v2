@@ -18,8 +18,7 @@ authentication, rate limiting, audit logging, and operational procedures.
 9. [Dashboard security](#9-dashboard-security)
 10. [Operational guide](#10-operational-guide)
 11. [Troubleshooting](#11-troubleshooting)
-12. [Exit criteria (Phase 4)](#12-exit-criteria-phase-4)
-13. [References](#13-references)
+12. [References](#12-references)
 
 ---
 
@@ -46,7 +45,7 @@ authentication, rate limiting, audit logging, and operational procedures.
 
 ## 2. mTLS and certificate architecture
 
-All coordinator↔node communication has been mutually authenticated since Phase 1.
+All coordinator↔node communication is mutually authenticated via mTLS.
 
 **Certificate issuance flow:**
 
@@ -129,19 +128,11 @@ xxd -p node.crt | sed 's/00/FF/1' | xxd -r -p > node_tampered.crt
 
 ### Root token rotation
 
-The coordinator **rotates** the root token on **every restart**. On startup it revokes the
-previous token's JTI and issues a fresh one, then prints it:
-
-```
-╔════════════════════════════════════════════════════════════════╗
-║         HELION COORDINATOR - ROOT TOKEN ROTATED                ║
-╠════════════════════════════════════════════════════════════════╣
-║ A new root API token has been generated. Save it securely!     ║
-║ Previous tokens are now REVOKED.                               ║
-╠════════════════════════════════════════════════════════════════╣
-║ Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...                 ║
-╚════════════════════════════════════════════════════════════════╝
-```
+The coordinator **rotates** the root token on **every restart** by default. On startup it
+revokes the previous token's JTI and issues a fresh one, then writes it to the path
+specified by `HELION_TOKEN_FILE` (default: `/var/lib/helion/root-token`, mode `0600`).
+Set `HELION_ROTATE_TOKEN=false` to reuse the stored token across restarts (useful for
+automation that cannot read the token file on every restart).
 
 This eliminates the "10-year never-expiring token" problem: a token leaked from a prior run
 is invalidated automatically the moment the coordinator restarts. The current root token is
@@ -201,7 +192,7 @@ START=$(date +%s%3N)
 curl -H "Authorization: Bearer $TOKEN" https://coordinator:8443/jobs
 END=$(date +%s%3N)
 echo "Rejection latency: $((END - START)) ms"
-# Expected: < 1000 ms (Phase 4 exit criterion)
+# Expected: < 1000 ms
 ```
 
 ---
@@ -372,8 +363,8 @@ paths record `actor = "anonymous"`.
 
 ### First-start checklist
 
-- [ ] **Save the root token.** It is printed once to stdout and stored in BadgerDB.
-      Store it in a password manager before the container restarts.
+- [ ] **Save the root token.** It is written to `HELION_TOKEN_FILE` (default
+      `/var/lib/helion/root-token`, mode `0600`). Store it in a password manager.
 - [ ] **Verify TLS with Wireshark.** Confirm `x25519_mlkem768 (0x6399)` appears in the
       ClientHello supported_groups extension.
 - [ ] **Confirm audit logging.** Submit a test job and verify a `job_submit` event appears
@@ -430,23 +421,7 @@ If the limits are too restrictive, adjust via the job submission request fields.
 
 ---
 
-## 12. Exit criteria (Phase 4)
-
-- [x] TLS handshake uses hybrid key exchange (X25519+ML-KEM-768)
-- [x] Node certificates include ML-DSA signatures (Dilithium-3)
-- [x] Revoked tokens rejected within 1 second
-- [x] Expired tokens rejected
-- [x] Token reuse after revocation rejected
-- [x] Revoked node must re-register with new certificate
-- [x] Load test: 100 jobs/s → 10 jobs/s enforced (`ResourceExhausted`)
-- [x] Complete audit trail for full job lifecycle
-- [x] All REST endpoints require JWT (except health probes)
-- [x] WebSocket endpoints require JWT (query param or header)
-- [x] Security integration tests pass (`tests/integration/security/`)
-
----
-
-## 13. References
+## 12. References
 
 - [NIST FIPS 203: ML-KEM (Kyber)](https://csrc.nist.gov/pubs/fips/203/final)
 - [NIST FIPS 204: ML-DSA (Dilithium)](https://csrc.nist.gov/pubs/fips/204/final)

@@ -15,7 +15,7 @@ All project documentation lives under **[`docs/`](docs/)**:
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, mTLS + PQC, JWT lifecycle, audit log schema |
 | [docs/AUDIT.md](docs/AUDIT.md) | Security & code-quality audit **template** (blank — copy into `docs/audits/<YYYY-MM-DD>.md` when starting a new audit) |
 | [docs/audits/](docs/audits/) | Archive of closed audits, one Markdown file per audit run (grows over time) |
-| [docs/dashboard.md](docs/dashboard.md) | Angular 18 dashboard notes |
+| [docs/dashboard.md](docs/dashboard.md) | Angular dashboard — stack, testing, local dev |
 | [docs/persistence.md](docs/persistence.md) | `internal/persistence` rules and key schema |
 | [docs/docker-compose-dev-notes.md](docs/docker-compose-dev-notes.md) | Local Docker Compose workflow |
 

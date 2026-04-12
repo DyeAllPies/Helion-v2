@@ -81,7 +81,7 @@ heartbeats) and occasional full scans (dashboard load, crash recovery) — it is
 The business logic accesses storage only through a typed interface. Swapping BadgerDB for
 etcd (for multi-coordinator HA) is a one-file change.
 
-### Dashboard — Angular 18
+### Dashboard — Angular 21
 
 React and Vue were already covered. Angular fills the enterprise-framework gap. The
 dashboard is not a UI exercise — it consumes real WebSocket streams, renders live metrics,
@@ -159,7 +159,7 @@ type Runtime interface {
 **GoRuntime** (current default) — uses Linux namespaces (UTS, PID, MNT) gated behind a
 privilege check. Falls back to a plain subprocess when `HELION_ALLOW_ISOLATION=false`.
 
-**RustRuntime** (Phase 6) — communicates with the `helion-runtime` Rust binary over a Unix
+**RustRuntime** — communicates with the `helion-runtime` Rust binary over a Unix
 domain socket using protobuf-framed messages. Adds cgroup v2 resource limits and
 seccomp-bpf syscall filtering. Enabled by setting `HELION_RUNTIME_SOCKET`.
 
@@ -292,7 +292,7 @@ AppComponent  (shell: nav sidebar + router outlet)
 
 | Concern | Choice |
 |---|---|
-| Framework | Angular 18 (standalone components, signals) |
+| Framework | Angular 21 (standalone components, signals) |
 | Components | Angular Material (table, badge, card, form) |
 | Async | RxJS — WebSocket streams as Observables, `HttpClient` with interceptors |
 | Charts | ng2-charts / Chart.js |
@@ -317,10 +317,17 @@ AppComponent  (shell: nav sidebar + router outlet)
 | Trigger | Job | Steps |
 |---|---|---|
 | Every push / PR | `build` | `go vet` · `golangci-lint` · `go test -race ./...` · `go test ./internal/...` with ≥ 90% coverage gate |
-| Every push / PR | `test-rust` | `cargo clippy -D warnings` · `cargo test` |
+| Every push / PR | `test-rust` | `cargo clippy -D warnings` · `cargo llvm-cov` with ≥ 85% coverage gate |
 | Every push / PR | `test-dashboard` | `npm ci` · `ng lint` · `ng test --browsers=ChromeHeadless` with coverage thresholds |
+| After unit suites pass | `e2e` | Build Docker images · boot cluster · wait for healthy nodes · run 77 Playwright E2E tests · tear down |
 | After all suites pass | `snyk` | `snyk test --severity-threshold=high` (Go deps) · `snyk container test` (coordinator image) |
 | After all suites pass | `docker` | `docker buildx build` for coordinator and node images (cache to GHA) |
+
+The `e2e` job runs after `build` (Go) and `test-dashboard` (Angular) pass. It builds
+coordinator + node Docker images, starts the full cluster via `docker-compose.e2e.yml`,
+waits for at least one healthy node, then runs Playwright against the live dashboard.
+On failure, CI uploads the Playwright HTML report, traces, and cluster Docker logs as
+artifacts for debugging.
 
 ### Test categories
 
@@ -330,8 +337,11 @@ AppComponent  (shell: nav sidebar + router outlet)
   within the test process against real BadgerDB (temp dir, cleaned after).
 - **Security tests.** In `tests/integration/security/`. TLS rejection, invalid JWT, revoked
   node certificate, rate limit enforcement, audit log completeness.
-- **Angular tests.** Karma + Jasmine for component unit tests. Coverage thresholds enforced
-  in `karma.conf.js` (50% stmt/fn/lines, 40% branch).
+- **Angular unit tests.** Karma + Jasmine for component unit tests. Coverage thresholds enforced
+  in `karma.conf.js` (98% stmt/lines, 96% fn, 95% branch).
+- **E2E tests.** In `dashboard/e2e/`. 77 Playwright specs covering the full path from
+  coordinator + nodes (gRPC registration, job dispatch) through the Angular dashboard
+  (login, nodes, jobs, metrics, audit). Tests run against a real cluster — no mocks.
 - **Benchmarks.** In `tests/bench/`. Measure Go vs Rust runtime latency and throughput.
   See §8.
 
@@ -439,11 +449,9 @@ path. The relative difference narrows as job count increases.
 | **Helm** | Package manager for Kubernetes. A chart is a parameterised collection of manifests. |
 | **Hybrid TLS** | TLS that negotiates both a classical (X25519) and post-quantum (ML-KEM) key exchange simultaneously. Breaking the session requires breaking both. |
 | **JTI (JWT ID)** | Unique identifier in a JWT. Storing it in BadgerDB with a TTL enables sub-second revocation. |
-| **LAMMPS** | Large-scale Atomic/Molecular Massively Parallel Simulator. HPC molecular dynamics software. The academic framing that makes Helion coherent as a project. |
 | **mTLS** | Mutual TLS. Both client and server present and verify certificates. Prevents unauthorised nodes from connecting. |
 | **PQC** | Post-Quantum Cryptography. NIST completed standardisation of ML-KEM and ML-DSA in 2024. |
 | **seccomp-bpf** | Linux kernel feature that restricts which syscalls a process can make. Used by the Rust runtime for job isolation. |
-| **SLURM** | Simple Linux Utility for Resource Management. The dominant job scheduler in HPC clusters. Helion mirrors its core concepts. |
 
 ---
 
@@ -452,10 +460,10 @@ path. The relative difference narrows as job count increases.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Primary language | Go | Native K8s/Docker ecosystem; first-class gRPC; same choice as etcd, Consul, Prometheus. |
-| Runtime language | Rust (future) | Memory safety matters for namespace/cgroup/seccomp code; deferred until interface boundary is clean. |
+| Runtime language | Rust | Memory safety matters for namespace/cgroup/seccomp code; isolated behind a clean Unix socket interface. |
 | Inter-node protocol | gRPC + Protobuf | Typed contracts, streaming, mTLS-native, language-agnostic (enables Rust node later). |
 | Persistence | BadgerDB | Embedded, no external process, ACID, pure Go. Swap path to etcd for HA. |
-| Frontend | Angular 18 | React + Vue already covered. Suitable complexity for real WebSocket + auth work. |
+| Frontend | Angular 21 | React + Vue already covered. Enterprise framework with real WebSocket + auth complexity. |
 | Key exchange | ML-KEM hybrid | NIST FIPS 203. Hybrid maintains classical compatibility while adding quantum resistance. Low cost at design time. |
 | Signatures | ML-DSA hybrid | NIST FIPS 204. Node certificate signing, hybrid with ECDSA during transition. |
 | Deployment | Kubernetes + Helm | True cloud agnosticism. Coordinator = Deployment, Agents = DaemonSet. One chart, per-cloud values files. |

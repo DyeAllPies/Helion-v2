@@ -8,7 +8,10 @@
     "build:prod": "ng build --configuration production",
     "test": "ng test",
     "lint": "ng lint",
-    "e2e": "ng e2e"
+    "e2e": "npx playwright test",
+    "e2e:ui": "npx playwright test --ui",
+    "e2e:headed": "npx playwright test --headed",
+    "e2e:report": "npx playwright show-report"
   },
   "private": true,
   "dependencies": {
@@ -37,9 +40,10 @@
     "@angular-eslint/template-parser": "^21.0.0",
     "@angular/cli": "^21.2.7",
     "@angular/compiler-cli": "^21.2.8",
+    "@playwright/test": "^1.59.1",
+    "@types/jasmine": "~5.1.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
-    "@types/jasmine": "~5.1.0",
     "eslint": "^9.0.0",
     "jasmine-core": "~5.1.0",
     "karma": "~6.4.0",

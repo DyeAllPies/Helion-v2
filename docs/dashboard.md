@@ -1,4 +1,4 @@
-# Helion Dashboard — Angular 18
+# Helion Dashboard — Angular 21
 
 The control-plane UI for the Helion v2 distributed job scheduler.
 
@@ -6,7 +6,7 @@ The control-plane UI for the Helion v2 distributed job scheduler.
 
 | Concern            | Choice                             |
 |--------------------|------------------------------------|
-| Framework          | Angular 18 (standalone components) |
+| Framework          | Angular 21 (standalone components) |
 | Component library  | Angular Material                   |
 | Reactive streams   | RxJS 7                             |
 | Charts             | Chart.js + ng2-charts              |
@@ -40,6 +40,12 @@ dashboard/
 │   │       └── audit/           # AuditLogComponent (paginated, filterable)
 │   ├── environments/            # environment.ts / environment.production.ts
 │   └── styles.scss              # Global SCSS + Material dark theme + badge utilities
+├── e2e/
+│   ├── fixtures/
+│   │   ├── cluster.fixture.ts   # Token reader, health/node waiters, job submitter
+│   │   └── auth.fixture.ts      # Login-via-textarea Playwright fixture
+│   └── specs/                   # 77 Playwright E2E test specs (6 files)
+├── playwright.config.ts         # Playwright config (Chromium, auto-starts ng serve)
 ├── Dockerfile                   # Two-stage: Node builder → Nginx runtime
 ├── nginx.conf                   # SPA serving + /api and /ws reverse proxy to coordinator
 └── karma.conf.js
@@ -49,7 +55,7 @@ dashboard/
 
 ### Prerequisites
 - Node.js 20+
-- Angular CLI 18: `npm install -g @angular/cli@18`
+- Angular CLI: `npm install -g @angular/cli`
 
 ### Run locally
 ```bash
@@ -59,11 +65,38 @@ ng serve
 # Coordinator must be running at the URL set in environment.ts
 ```
 
-### Tests
+### Unit tests
 ```bash
 ng test                         # Karma + Jasmine (watch mode)
 ng test --watch=false --browsers=ChromeHeadless   # CI mode
 ```
+
+### E2E tests (full-stack)
+
+E2E tests use Playwright to drive a real browser against the live dashboard backed by
+a real coordinator + node cluster. 77 tests cover login, navigation, nodes, jobs,
+metrics (WebSocket), and audit log.
+
+```bash
+# One command — boots cluster, runs tests, tears down (from project root)
+make test-e2e
+
+# With visible browser
+make test-e2e-headed
+
+# Playwright interactive UI (debug/step through tests)
+make test-e2e-ui
+
+# If the cluster is already running, run tests directly
+npm run e2e
+
+# View the HTML report after a run
+npm run e2e:report
+```
+
+The cluster is started via `docker-compose.e2e.yml` (an overlay on the base compose
+file that exposes the coordinator HTTP API on `:8080` and writes the root token to
+`state/root-token`). See `scripts/run-e2e.sh` for the full lifecycle.
 
 ### Production build
 ```bash

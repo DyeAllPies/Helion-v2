@@ -2,7 +2,8 @@ PROTO_DIR   := proto
 PROTO_FILES := coordinator.proto node.proto runtime.proto
 
 .PHONY: proto build build-rust build-all test test-short lint clean \
-        test-dashboard lint-dashboard coverage-go test-all lint-all
+        test-dashboard lint-dashboard coverage-go test-all lint-all \
+        test-e2e test-e2e-headed test-e2e-ui
 
 # ── protobuf ──────────────────────────────────────────────────────────────────
 
@@ -51,6 +52,15 @@ test-dashboard:
 lint-dashboard:
 	cd dashboard && $(MAKE) lint
 
+test-e2e:
+	./scripts/run-e2e.sh
+
+test-e2e-headed:
+	./scripts/run-e2e.sh --headed
+
+test-e2e-ui:
+	./scripts/run-e2e.sh --ui
+
 # ── combined ──────────────────────────────────────────────────────────────────
 
 build-all: build build-rust
@@ -63,9 +73,9 @@ coverage-go:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "HTML report → coverage.html"
 
-test-all: test test-rust test-dashboard
+test-all: test test-rust test-dashboard test-e2e
 	@echo ""
-	@echo "==> All test suites passed."
+	@echo "==> All test suites passed (Go + Rust + Angular + E2E)."
 
 lint-all: lint lint-rust lint-dashboard
 	@echo ""

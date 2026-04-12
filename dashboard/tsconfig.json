@@ -18,6 +18,7 @@
     "module": "ES2022",
     "lib": ["ES2022", "dom"]
   },
+  "exclude": ["e2e/**", "dist/**", "node_modules/**", "playwright.config.ts"],
   "angularCompilerOptions": {
     "enableI18nLegacyMessageIdFormat": false,
     "strictInjectionParameters": true,

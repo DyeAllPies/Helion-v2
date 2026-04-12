@@ -42,10 +42,10 @@ The coordinator runs as a Kubernetes `Deployment`. Node agents run as a `DaemonS
 | Concern | Choice | Why |
 |---|---|---|
 | Primary language | Go 1.26 | Native to the K8s/Docker ecosystem; same as etcd, Consul, Prometheus |
-| Runtime (Phase 6) | Rust | Memory safety without GC for namespace/cgroup/seccomp code |
+| Runtime | Rust | Memory safety without GC for namespace/cgroup/seccomp code |
 | Inter-node protocol | gRPC + Protocol Buffers | Typed contracts, bidirectional streaming, mTLS-native |
 | Persistence | BadgerDB | Embedded, ACID, pure Go; swap path to etcd if HA is needed |
-| Dashboard | Angular 18 | Covers the enterprise framework gap; real WebSocket + auth complexity |
+| Dashboard | Angular 21 | Covers the enterprise framework gap; real WebSocket + auth complexity |
 | Key exchange | ML-KEM / Kyber (NIST FIPS 203) | Hybrid PQC — quantum-resistant from day one |
 | Signatures | ML-DSA / Dilithium (NIST FIPS 204) | Node certificate signing, hybrid with ECDSA |
 | Deployment | Kubernetes + Helm | Cloud-agnostic; one chart, per-cloud values files |
@@ -62,21 +62,6 @@ Key exchange uses a hybrid classical + post-quantum mode (X25519 + ML-KEM/Kyber-
 The REST/WebSocket API uses short-lived JWTs (15-minute expiry). The root token is rotated on every coordinator restart — the previous token is immediately revoked so a leaked token from a prior run is dead on restart. Scoped tokens for individual users or services can be issued and revoked via `POST /admin/tokens` and `DELETE /admin/tokens/{jti}` (admin role required). Tokens are stored in memory only — never in `localStorage` or `sessionStorage`. Every job state transition, node registration, auth failure, and token event is written to an append-only audit log in BadgerDB.
 
 Snyk scans Go dependencies and the coordinator container image on every push, blocking on high-severity CVEs. Internal coverage is gated at ≥ 90% on `./internal/...`.
-
----
-
-## Build phases
-
-| Phase | Scope | Status |
-|---|---|---|
-| 1 — Foundation | Repo scaffold, protobuf toolchain, mTLS skeleton, CI, Docker Compose | Complete |
-| 2 — Core scheduler | BadgerDB persistence, node registry, scheduler engine, job lifecycle, crash recovery | Complete |
-| 3 — Angular dashboard | REST/WebSocket API, auth module, nodes/jobs/metrics/audit pages | Complete |
-| 4 — Security hardening | Hybrid PQC key exchange, ML-DSA certificates, JWT revocation, rate limiting | Complete |
-| 5 — Kubernetes & cloud | Helm chart, health probes, Prometheus metrics, CD pipeline | Complete |
-| 6 — Rust runtime | Runtime interface swap, cgroup v2 limits, seccomp filtering | Complete |
-
-Each phase produces a working, tested, runnable artifact. No phase is purely theoretical.
 
 ---
 
@@ -102,7 +87,8 @@ helion-v2/
 │   ├── runtime/              # Runtime interface, Go impl, Rust client
 │   └── pqcrypto/             # PQC key generation + hybrid TLS helpers
 ├── proto/                    # .proto definitions + generated Go stubs
-├── dashboard/                # Angular 18 project
+├── dashboard/                # Angular 21 project
+│   └── e2e/                  # Playwright E2E tests (77 tests)
 ├── deploy/
 │   ├── helm/                 # Helm chart
 │   ├── k8s/                  # Raw Kubernetes manifests
@@ -112,7 +98,10 @@ helion-v2/
 │   ├── bench/                # Runtime benchmarks (Go vs Rust)
 │   └── integration/
 │       └── security/         # mTLS, JWT, rate-limit integration tests
+├── scripts/
+│   └── run-e2e.sh            # One-command full-stack E2E test runner
 ├── docs/                     # All project documentation — see Documentation index below
+├── docker-compose.e2e.yml    # E2E overlay (exposes coordinator HTTP + stable token)
 └── .github/workflows/        # GitHub Actions CI/CD
 ```
 
@@ -157,6 +146,18 @@ go test -race -count=1 ./...
 # Internal packages with coverage report
 go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./internal/...
 go tool cover -func=coverage.out | grep total:
+
+# Dashboard unit tests
+cd dashboard && ng test --watch=false --browsers=ChromeHeadless
+
+# Full-stack E2E tests (boots cluster, runs 77 Playwright tests, tears down)
+make test-e2e
+
+# E2E with visible browser
+make test-e2e-headed
+
+# All test suites in one command (Go + Rust + Angular + E2E)
+make test-all
 ```
 
 CI enforces a ≥ 90% coverage threshold on `./internal/...`.
@@ -202,29 +203,12 @@ The coordinator runs as a single-replica `Deployment`. Node agents run as a `Dae
 
 ---
 
-## Comparison with SLURM
-
-| Concept | SLURM | Helion v2 |
-|---|---|---|
-| Job submission | `sbatch` script | `helion-run` CLI / REST API |
-| Node management | `slurmctld` + `slurmd` | Coordinator + Node Agents |
-| Scheduling policy | Priority queues, backfill, fairshare | Round-robin, least-loaded (extensible) |
-| State persistence | StateSave / MySQL / MariaDB | BadgerDB (embedded) |
-| Health monitoring | `slurmctld` polls `slurmd` | gRPC heartbeat stream + prune |
-| Isolation | cgroups, PAM, users | Linux namespaces + cgroup v2 + seccomp (Phase 6) |
-| Security | Munge authentication | mTLS + PQC + JWT |
-| Observability | `sacct`, `sinfo`, `sreport` | Angular dashboard + Prometheus metrics |
-| Cloud deployment | Bare metal / on-premise | Kubernetes / Helm (cloud-agnostic) |
-
----
-
 ## Known constraints
 
 - Single coordinator replica in v2. HA requires swapping BadgerDB for etcd — the interface is already designed for it.
 - Node agents require Linux for namespace isolation. Cross-compiled binaries run on other OS targets without isolation, suitable for local development.
 - Namespace isolation requires root or `CAP_SYS_ADMIN`. In Kubernetes this is set in the DaemonSet `SecurityContext`.
 - Resource limits (`memory_bytes`, `cpu_quota_us`) are enforced only by the Rust runtime (`HELION_RUNTIME=rust`). The Go runtime ignores them.
-- No multi-tenancy, no GPU scheduling, no MapReduce demo in v2 scope.
 
 ---
 
@@ -253,7 +237,7 @@ All project documentation lives under `docs/`:
 | [SECURITY.md](SECURITY.md) | Threat model, mTLS + PQC, JWT lifecycle, audit log schema |
 | [AUDIT.md](AUDIT.md) | Security & code-quality audit **template** — copy into `audits/<YYYY-MM-DD>.md` to start a new audit |
 | [audits/](audits/) | Archive of closed audits (one file per run, filename = audit ID) |
-| [dashboard.md](dashboard.md) | Angular 18 dashboard — stack, project layout, local dev |
+| [dashboard.md](dashboard.md) | Angular dashboard — stack, testing, local dev |
 | [persistence.md](persistence.md) | `internal/persistence` rules, key schema, test invariants |
 | [docker-compose-dev-notes.md](docker-compose-dev-notes.md) | Local Docker Compose workflow notes |
 

@@ -29,6 +29,11 @@ yarn-error.log
 # Coverage
 coverage/
 
+# Playwright
+playwright-report/
+test-results/
+blob-report/
+
 # Misc
 *.DS_Store
 Thumbs.db

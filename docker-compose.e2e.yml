@@ -1,0 +1,38 @@
+# docker-compose.e2e.yml
+#
+# E2E test overlay — exposes the coordinator HTTP API on host port 8080
+# and writes the root token to a mounted volume so Playwright can read it.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d
+#   # wait for healthy, then run:  npx playwright test
+
+name: helion-v2-e2e
+
+services:
+  coordinator:
+    # NOTE: compose merge REPLACES the ports array, so we must list ALL
+    # ports here — not just the ones being added.  Base has 9090 (gRPC);
+    # this overlay adds 8080 (HTTP API for the dashboard).
+    ports:
+      - "127.0.0.1:9090:9090"   # gRPC
+      - "127.0.0.1:8080:8080"   # HTTP API
+    environment:
+      - HELION_SCHEDULER=roundrobin
+      - HELION_ROTATE_TOKEN=false
+      - HELION_TOKEN_FILE=/app/state/root-token
+    volumes:
+      - ./state:/app/state
+      - ./logs:/app/logs
+
+  node1:
+    environment:
+      - PORT=8080
+      - HELION_COORDINATOR=coordinator:9090
+      - HELION_ALLOW_ISOLATION=false
+
+  node2:
+    environment:
+      - PORT=8081
+      - HELION_COORDINATOR=coordinator:9090
+      - HELION_ALLOW_ISOLATION=false
