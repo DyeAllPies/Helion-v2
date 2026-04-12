@@ -80,6 +80,13 @@ import { Job, JobStatus } from '../../shared/models';
         </td>
       </ng-container>
 
+      <ng-container matColumnDef="runtime">
+        <th mat-header-cell *matHeaderCellDef>RUNTIME</th>
+        <td mat-cell *matCellDef="let j">
+          <span class="badge" [class]="'badge-rt-' + (j.runtime || 'unknown')">{{ (j.runtime || '—') | uppercase }}</span>
+        </td>
+      </ng-container>
+
       <ng-container matColumnDef="created_at">
         <th mat-header-cell *matHeaderCellDef>CREATED</th>
         <td mat-cell *matCellDef="let j">{{ j.created_at | date:'MM-dd HH:mm:ss' }}</td>
@@ -193,6 +200,10 @@ import { Job, JobStatus } from '../../shared/models';
 
     .table-wrap { border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; }
 
+    .badge-rt-go   { font-size: 10px; letter-spacing: 0.07em; padding: 2px 7px; border-radius: var(--radius-sm); color: var(--color-info); background: rgba(64,196,255,0.1); }
+    .badge-rt-rust { font-size: 10px; letter-spacing: 0.07em; padding: 2px 7px; border-radius: var(--radius-sm); color: #ff8a65; background: rgba(255,138,101,0.1); }
+    .badge-rt-unknown { font-size: 10px; letter-spacing: 0.07em; padding: 2px 7px; border-radius: var(--radius-sm); color: var(--color-muted); background: rgba(136,150,170,0.08); }
+
     .job-link {
       color: var(--color-info);
       text-decoration: none;
@@ -240,7 +251,7 @@ export class JobListComponent implements OnInit {
   pageSize     = 25;
   statusFilter = '';
 
-  readonly cols     = ['status','id','command','node_id','created_at','finished_at','exit_code','actions'];
+  readonly cols     = ['status','id','command','node_id','runtime','created_at','finished_at','exit_code','actions'];
   readonly statuses: JobStatus[] = ['pending','dispatching','running','completed','failed','timeout','lost'];
 
   constructor(private api: ApiService) {}

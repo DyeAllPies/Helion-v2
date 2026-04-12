@@ -60,6 +60,10 @@ import { Job, LogChunk } from '../../shared/models';
           <span class="meta-label">NODE</span>
           <span class="meta-value">{{ job.node_id || '—' }}</span>
         </div>
+        <div class="meta-item" *ngIf="job.runtime">
+          <span class="meta-label">RUNTIME</span>
+          <span class="meta-value">{{ job.runtime | uppercase }}</span>
+        </div>
         <div class="meta-item">
           <span class="meta-label">CREATED</span>
           <span class="meta-value">{{ job.created_at | date:'yyyy-MM-dd HH:mm:ss' }}</span>

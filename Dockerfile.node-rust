@@ -1,0 +1,54 @@
+# Dockerfile.node-rust
+#
+# Multi-stage build: Go node agent + Rust runtime in one image.
+# The Rust runtime runs as a background process and the node agent
+# connects to it via Unix domain socket.
+#
+# Used by docker-compose.e2e.yml for node2 to exercise the Rust
+# runtime path in E2E tests.
+
+# ── Stage 1: Build Go node agent ─────────────────────────────────────────────
+FROM golang:1.26-alpine AS go-builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /helion-node ./cmd/helion-node
+
+# ── Stage 2: Build Rust runtime ──────────────────────────────────────────────
+FROM rust:1-alpine AS rust-builder
+RUN apk add --no-cache musl-dev protobuf-dev
+WORKDIR /build
+# Copy proto files (build.rs references ../proto/runtime.proto)
+COPY proto/ /proto/
+# Copy Rust source
+COPY runtime-rust/ ./runtime-rust/
+WORKDIR /build/runtime-rust
+RUN cargo build --release
+
+# ── Stage 3: Final image ─────────────────────────────────────────────────────
+FROM alpine:3.20
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+RUN addgroup -S helion && adduser -S -G helion helion
+
+COPY --from=go-builder /helion-node /usr/local/bin/helion-node
+COPY --from=rust-builder /build/runtime-rust/target/release/helion-runtime /usr/local/bin/helion-runtime
+COPY scripts/entrypoint-node-rust.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Create socket directory writable by helion user
+RUN mkdir -p /run/helion && chown helion:helion /run/helion
+
+USER helion
+EXPOSE 8080
+
+ENV HELION_RUNTIME=rust
+ENV HELION_RUNTIME_SOCKET=/run/helion/runtime.sock
+ENV RUST_LOG=info
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+  CMD nc -z localhost 8080 || exit 1
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

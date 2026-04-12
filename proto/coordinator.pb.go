@@ -327,8 +327,16 @@ type JobResult struct {
 	Error         string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
 	StartedAt     int64                  `protobuf:"varint,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	FinishedAt    int64                  `protobuf:"varint,7,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	Runtime       string                 `protobuf:"bytes,8,opt,name=runtime,proto3" json:"runtime,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JobResult) GetRuntime() string {
+	if x != nil {
+		return x.Runtime
+	}
+	return ""
 }
 
 func (x *JobResult) Reset() {

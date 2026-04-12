@@ -56,6 +56,9 @@ func (s *JobStore) Transition(ctx context.Context, jobID string, to cpb.JobStatu
 		if opts.ErrMsg != "" {
 			j.Error = opts.ErrMsg
 		}
+		if opts.Runtime != "" {
+			j.Runtime = opts.Runtime
+		}
 	}
 
 	if err := s.persister.SaveJob(ctx, j); err != nil {

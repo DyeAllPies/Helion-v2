@@ -45,7 +45,7 @@ test.describe('Login Flow', () => {
     await page.click('button.login-btn');
 
     // Error message should appear
-    await expect(page.locator('.error-msg')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('.error-msg')).toBeVisible();
     await expect(page.locator('.error-msg')).toContainText('invalid or expired');
 
     // Should still be on login page
@@ -64,7 +64,7 @@ test.describe('Login Flow', () => {
     await page.fill('textarea.token-input', expiredToken);
     await page.click('button.login-btn');
 
-    await expect(page.locator('.error-msg')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('.error-msg')).toBeVisible();
     await expect(page).toHaveURL(/\/login/);
   });
 
@@ -76,7 +76,7 @@ test.describe('Login Flow', () => {
     await page.click('button.login-btn');
 
     // Should redirect to /nodes
-    await expect(page).toHaveURL(/\/nodes/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/nodes/, );
 
     // Sidebar should be visible with HELION brand
     await expect(page.locator('.brand-name')).toContainText('HELION');
@@ -89,13 +89,13 @@ test.describe('Login Flow', () => {
     await page.goto('/login');
     await page.fill('textarea.token-input', token);
     await page.click('button.login-btn');
-    await expect(page).toHaveURL(/\/nodes/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/nodes/, );
 
     // Click logout
     await page.click('button.logout-btn');
 
     // Should be back on login page
-    await expect(page).toHaveURL(/\/login/, { timeout: 5_000 });
+    await expect(page).toHaveURL(/\/login/, );
 
     // Attempting to navigate to a protected route should redirect back
     await page.goto('/nodes');
@@ -109,13 +109,13 @@ test.describe('Login Flow', () => {
     await page.goto('/login');
     await page.fill('textarea.token-input', token);
     await page.click('button.login-btn');
-    await expect(page).toHaveURL(/\/nodes/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/nodes/, );
 
     // Hard refresh — token is in memory only, so it must be lost
     await page.reload();
 
     // Should redirect to login because authGuard checks token
-    await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/login/, );
   });
 
   test('401 response from API triggers auto-logout', async ({ page }) => {
@@ -125,7 +125,7 @@ test.describe('Login Flow', () => {
     await page.goto('/login');
     await page.fill('textarea.token-input', token);
     await page.click('button.login-btn');
-    await expect(page).toHaveURL(/\/nodes/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/nodes/, );
 
     // Intercept the next /nodes request to return 401 (simulating token revocation)
     await page.route('**/nodes', route => {
@@ -137,7 +137,7 @@ test.describe('Login Flow', () => {
     await page.goto('/nodes');
 
     // The 401 should trigger the interceptor → auth.onUnauthorized() → redirect
-    await expect(page).toHaveURL(/\/login/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/login/, );
   });
 });
 
@@ -158,13 +158,13 @@ test.describe('Route Guards & Redirects', () => {
     await page.goto('/login');
     await page.fill('textarea.token-input', token);
     await page.click('button.login-btn');
-    await expect(page).toHaveURL(/\/nodes/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/nodes/, );
 
     // Navigate to a nonexistent route
     await page.goto('/this-does-not-exist');
 
     // Should redirect to / which redirects to /nodes
-    await expect(page).toHaveURL(/\/nodes/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/nodes/, );
   });
 
   test('root path redirects to /nodes when authenticated', async ({ page }) => {
@@ -173,10 +173,10 @@ test.describe('Route Guards & Redirects', () => {
     await page.goto('/login');
     await page.fill('textarea.token-input', token);
     await page.click('button.login-btn');
-    await expect(page).toHaveURL(/\/nodes/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/nodes/, );
 
     // Navigate explicitly to root
     await page.goto('/');
-    await expect(page).toHaveURL(/\/nodes/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/nodes/, );
   });
 });

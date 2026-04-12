@@ -27,6 +27,7 @@ type Server struct {
 	rt          runtime.Runtime
 	client      *grpcclient.Client // coordinator gRPC client for callbacks
 	nodeID      string
+	runtimeName string // "go" or "rust" — reported in JobResult
 	runningJobs atomic.Int32
 	totalJobs   atomic.Int32
 	log         *slog.Logger
@@ -35,8 +36,10 @@ type Server struct {
 // New returns a Server backed by rt.
 // client and nodeID are used to call ReportResult and StreamLogs on the
 // coordinator after each job completes.
-func New(rt runtime.Runtime, client *grpcclient.Client, nodeID string, log *slog.Logger) *Server {
-	return &Server{rt: rt, client: client, nodeID: nodeID, log: log}
+// runtimeName is "go" or "rust" — included in every JobResult so the
+// coordinator knows which backend executed the job.
+func New(rt runtime.Runtime, client *grpcclient.Client, nodeID, runtimeName string, log *slog.Logger) *Server {
+	return &Server{rt: rt, client: client, nodeID: nodeID, runtimeName: runtimeName, log: log}
 }
 
 // RunningJobs returns the count of currently-executing jobs.
@@ -135,6 +138,7 @@ func (s *Server) reportResult(
 		Error:      errMsg,
 		StartedAt:  startedAt.UnixNano(),
 		FinishedAt: finishedAt.UnixNano(),
+		Runtime:    s.runtimeName,
 	}
 	if err := s.client.ReportResult(ctx, rr); err != nil {
 		s.log.Warn("ReportResult failed", slog.String("job_id", jobID), slog.Any("err", err))

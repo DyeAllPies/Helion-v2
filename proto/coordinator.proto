@@ -115,6 +115,9 @@ message JobResult {
   JobStatus status = 3;
   string error    = 4; // populated when status == FAILED or TIMEOUT
   google.protobuf.Timestamp finished_at = 5;
+
+  // runtime identifies the backend that executed the job ("go" or "rust").
+  string runtime = 8;
 }
 
 enum JobStatus {
@@ -185,6 +188,10 @@ message Job {
 
   // timeout_seconds caps how long a job may run. 0 means no limit.
   int64 timeout_seconds = 11;
+
+  // runtime records which runtime backend executed the job ("go" or "rust").
+  // Set at dispatch time based on the target node's configured runtime.
+  string runtime = 12;
 }
 
 // AuditEvent is written to audit/{timestamp}-{id} on every security-relevant

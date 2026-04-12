@@ -39,11 +39,19 @@ services:
       - ./state:/app/state
 
   node2:
+    # Override: use Rust runtime image so E2E tests exercise both runtimes.
+    # node1 = Go runtime, node2 = Rust runtime (cgroup v2 + seccomp).
+    build:
+      context: .
+      dockerfile: Dockerfile.node-rust
     environment:
       - PORT=8081
       - HELION_NODE_ID=e2e-node-2
       - HELION_COORDINATOR=coordinator:9090
       - HELION_ALLOW_ISOLATION=false
       - HELION_CA_CERT=/app/state/ca.pem
+      - HELION_RUNTIME=rust
+      - HELION_RUNTIME_SOCKET=/run/helion/runtime.sock
+      - RUST_LOG=info
     volumes:
       - ./state:/app/state

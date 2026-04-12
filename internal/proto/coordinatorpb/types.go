@@ -122,4 +122,8 @@ type Job struct {
 	// string, which yields a 403 for non-admin access (backward-compatible
 	// in the safe direction).
 	SubmittedBy string `json:"submitted_by,omitempty"`
+
+	// Runtime records which backend executed the job ("go" or "rust").
+	// Set when the node reports the result.
+	Runtime string `json:"runtime,omitempty"`
 }

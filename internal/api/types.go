@@ -53,6 +53,7 @@ type JobResponse struct {
 	Limits         ResourceLimits    `json:"limits,omitempty"`
 	Status         string            `json:"status"`
 	NodeID         string            `json:"node_id,omitempty"`
+	Runtime        string            `json:"runtime,omitempty"`
 	CreatedAt      time.Time         `json:"created_at"`
 	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
 	Error          string            `json:"error,omitempty"`

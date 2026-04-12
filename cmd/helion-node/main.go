@@ -160,7 +160,7 @@ func main() {
 	log.Info("registered", slog.Duration("heartbeat_interval", heartbeatInterval))
 
 	// ── gRPC server (NodeService) ─────────────────────────────────────────────
-	nodeSrv := nodeserver.New(rt, client, nodeID, log)
+	nodeSrv := nodeserver.New(rt, client, nodeID, runtimeBackend, log)
 
 	serverCreds, err := bundle.ServerCredentials()
 	if err != nil {

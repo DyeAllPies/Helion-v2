@@ -118,6 +118,7 @@ type TransitionOptions struct {
 	NodeID   string // set when dispatching to record which node received the job
 	ExitCode int32  // set on completed / failed
 	ErrMsg   string // human-readable error, set on failed / timeout / lost
+	Runtime  string // "go" or "rust" — set when result is reported by node
 }
 
 // ── JobStore ──────────────────────────────────────────────────────────────────

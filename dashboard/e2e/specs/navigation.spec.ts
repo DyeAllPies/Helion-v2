@@ -37,37 +37,37 @@ test.describe('Sidebar Navigation', () => {
 
   test('clicking Jobs navigates to /jobs', async ({ authedPage: page }) => {
     await page.click('a.nav-link >> text=Jobs');
-    await expect(page).toHaveURL(/\/jobs/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/jobs/, );
     await expect(page.locator('h1.page-title')).toContainText('JOBS');
   });
 
   test('clicking Metrics navigates to /metrics', async ({ authedPage: page }) => {
     await page.click('a.nav-link >> text=Metrics');
-    await expect(page).toHaveURL(/\/metrics/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/metrics/, );
     await expect(page.locator('h1.page-title')).toContainText('METRICS');
   });
 
   test('clicking Audit navigates to /audit', async ({ authedPage: page }) => {
     await page.click('a.nav-link >> text=Audit');
-    await expect(page).toHaveURL(/\/audit/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/audit/, );
     await expect(page.locator('h1.page-title')).toContainText('AUDIT LOG');
   });
 
   test('clicking Nodes navigates back to /nodes', async ({ authedPage: page }) => {
     // Go somewhere else first
     await page.click('a.nav-link >> text=Jobs');
-    await expect(page).toHaveURL(/\/jobs/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/jobs/, );
 
     // Now back to Nodes
     await page.click('a.nav-link >> text=Nodes');
-    await expect(page).toHaveURL(/\/nodes/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/nodes/, );
     await expect(page.locator('h1.page-title')).toContainText('NODES');
   });
 
   test('active link updates on navigation', async ({ authedPage: page }) => {
     // Navigate to Metrics
     await page.click('a.nav-link >> text=Metrics');
-    await expect(page).toHaveURL(/\/metrics/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/metrics/, );
 
     // Metrics link should be active
     const activeLink = page.locator('a.nav-link--active');

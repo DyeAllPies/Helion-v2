@@ -47,6 +47,7 @@ func jobToResponse(j *cpb.Job) JobResponse {
 		},
 		Status:      j.Status.String(),
 		NodeID:      j.NodeID,
+		Runtime:     j.Runtime,
 		CreatedAt:   j.CreatedAt,
 		Error:       j.Error,
 		SubmittedBy: j.SubmittedBy, // AUDIT L1

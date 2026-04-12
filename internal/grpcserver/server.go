@@ -421,6 +421,7 @@ func (s *Server) ReportResult(
 	var opts cluster.TransitionOptions
 	opts.NodeID = result.NodeId
 	opts.ExitCode = result.ExitCode
+	opts.Runtime = result.Runtime
 
 	// If job is in dispatching state, transition to running first
 	// (required by the state machine: dispatching → running → completed)

@@ -20,6 +20,7 @@ export interface Job {
   command:       string;
   args:          string[];
   status:        JobStatus;
+  runtime?:      string;   // "go" or "rust"
   created_at:    string;   // ISO 8601
   dispatched_at?: string;
   finished_at?:  string;
