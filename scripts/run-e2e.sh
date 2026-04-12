@@ -40,6 +40,8 @@ trap cleanup EXIT
 
 log "Starting cluster..."
 mkdir -p "$ROOT_DIR/state" "$ROOT_DIR/logs"
+# Container runs as non-root user 'helion' — ensure mounted dirs are writable
+chmod 777 "$ROOT_DIR/state" "$ROOT_DIR/logs"
 docker compose $COMPOSE_FILES up -d --build
 
 # ── 2. Wait for coordinator healthy ─────────────────────────────────────────

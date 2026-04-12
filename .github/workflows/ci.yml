@@ -230,38 +230,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build coordinator image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.coordinator
-          push: false
-          load: true
-          tags: helion-coordinator:e2e
-          cache-from: type=gha
-
-      - name: Build node image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.node
-          push: false
-          load: true
-          tags: helion-node:e2e
-          cache-from: type=gha
-
       - name: Start cluster (coordinator + 2 nodes)
         run: |
-          # Tag images to match what compose expects
-          docker tag helion-coordinator:e2e helion-v2-coordinator:latest
-          docker tag helion-node:e2e helion-v2-node1:latest
-          docker tag helion-node:e2e helion-v2-node2:latest
-
+          # Create writable dirs for the non-root container user (uid=helion)
           mkdir -p state logs
-          docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d
+          chmod 777 state logs
+
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build
 
       - name: Wait for coordinator healthy
         run: |
