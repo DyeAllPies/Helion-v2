@@ -3,7 +3,7 @@ PROTO_FILES := coordinator.proto node.proto runtime.proto
 
 .PHONY: proto build build-rust build-all test test-short lint clean \
         test-dashboard lint-dashboard coverage-go test-all lint-all \
-        test-e2e test-e2e-headed test-e2e-ui bench
+        test-e2e test-e2e-headed test-e2e-ui bench check
 
 # ── protobuf ──────────────────────────────────────────────────────────────────
 
@@ -29,6 +29,7 @@ test-short:
 
 lint:
 	go vet ./...
+	$$(go env GOPATH)/bin/golangci-lint run --timeout=5m
 
 # ── Rust ──────────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,15 @@ bench:
 	./scripts/run-bench.sh
 
 # ── combined ──────────────────────────────────────────────────────────────────
+
+# check: local pre-push validation (no Docker, no Rust, no E2E).
+# Runs Go lint + tests + coverage, then Angular lint + tests.
+# Calls ng directly to avoid sub-make path issues on Windows.
+check: lint test coverage-go
+	cd dashboard && npx ng lint
+	cd dashboard && npx ng test --watch=false --browsers=ChromeHeadless --code-coverage
+	@echo ""
+	@echo "==> All local checks passed (Go lint + test + coverage, Angular lint + test)."
 
 build-all: build build-rust
 
