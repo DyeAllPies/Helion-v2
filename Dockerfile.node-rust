@@ -19,9 +19,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /helion-node ./cmd/helion-node
 FROM rust:1-alpine AS rust-builder
 RUN apk add --no-cache musl-dev protobuf-dev
 WORKDIR /build
-# Copy proto files (build.rs references ../proto/runtime.proto)
-COPY proto/ /proto/
-# Copy Rust source
+# build.rs references ../proto/runtime.proto relative to runtime-rust/
+COPY proto/ ./proto/
 COPY runtime-rust/ ./runtime-rust/
 WORKDIR /build/runtime-rust
 RUN cargo build --release
