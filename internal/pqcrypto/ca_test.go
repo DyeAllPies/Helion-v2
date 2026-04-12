@@ -90,8 +90,8 @@ func TestTLSConfig_ReturnsConfig(t *testing.T) {
 	if cfg.MinVersion != tls.VersionTLS13 {
 		t.Errorf("want MinVersion TLS 1.3, got %d", cfg.MinVersion)
 	}
-	if cfg.ClientAuth != tls.RequireAndVerifyClientCert {
-		t.Errorf("want RequireAndVerifyClientCert, got %v", cfg.ClientAuth)
+	if cfg.ClientAuth != tls.RequireAnyClientCert {
+		t.Errorf("want RequireAnyClientCert, got %v", cfg.ClientAuth)
 	}
 }
 

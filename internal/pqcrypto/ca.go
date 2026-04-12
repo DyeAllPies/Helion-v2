@@ -172,7 +172,12 @@ func (ca *CA) TLSConfig(certPEM, keyPEM []byte) (*tls.Config, error) {
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		ClientCAs:    pool,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
+		// RequireAnyClientCert demands a client certificate but does NOT verify
+		// it against the CA at the TLS layer.  This allows nodes to connect with
+		// a self-signed bootstrap cert for initial registration.  Application-level
+		// verification (cert pinning, ML-DSA signature check) happens in the
+		// Register RPC handler after the handshake completes.
+		ClientAuth:   tls.RequireAnyClientCert,
 		MinVersion:   tls.VersionTLS13,
 	}, nil
 }
