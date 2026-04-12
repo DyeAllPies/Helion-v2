@@ -126,4 +126,103 @@ type Job struct {
 	// Runtime records which backend executed the job ("go" or "rust").
 	// Set when the node reports the result.
 	Runtime string `json:"runtime,omitempty"`
+
+	// WorkflowID links this job to a workflow. Empty for standalone jobs.
+	WorkflowID string `json:"workflow_id,omitempty"`
+}
+
+// ── WorkflowStatus ───────────────────────────────────────────────────────────
+
+// WorkflowStatus is the lifecycle state of a workflow.
+type WorkflowStatus int32
+
+const (
+	WorkflowStatusPending   WorkflowStatus = 0
+	WorkflowStatusRunning   WorkflowStatus = 1
+	WorkflowStatusCompleted WorkflowStatus = 2
+	WorkflowStatusFailed    WorkflowStatus = 3
+	WorkflowStatusCancelled WorkflowStatus = 4
+)
+
+func (s WorkflowStatus) String() string {
+	switch s {
+	case WorkflowStatusPending:
+		return "pending"
+	case WorkflowStatusRunning:
+		return "running"
+	case WorkflowStatusCompleted:
+		return "completed"
+	case WorkflowStatusFailed:
+		return "failed"
+	case WorkflowStatusCancelled:
+		return "cancelled"
+	default:
+		return "unknown"
+	}
+}
+
+// IsTerminal returns true for statuses from which a workflow will never transition.
+func (s WorkflowStatus) IsTerminal() bool {
+	switch s {
+	case WorkflowStatusCompleted, WorkflowStatusFailed, WorkflowStatusCancelled:
+		return true
+	}
+	return false
+}
+
+// ── DependencyCondition ──────────────────────────────────────────────────────
+
+// DependencyCondition controls when a downstream job becomes eligible.
+type DependencyCondition int32
+
+const (
+	// DependencyOnSuccess runs the downstream job only if the upstream succeeded.
+	DependencyOnSuccess DependencyCondition = 0
+	// DependencyOnFailure runs the downstream job only if the upstream failed.
+	DependencyOnFailure DependencyCondition = 1
+	// DependencyOnComplete runs the downstream job regardless of upstream result.
+	DependencyOnComplete DependencyCondition = 2
+)
+
+func (c DependencyCondition) String() string {
+	switch c {
+	case DependencyOnSuccess:
+		return "on_success"
+	case DependencyOnFailure:
+		return "on_failure"
+	case DependencyOnComplete:
+		return "on_complete"
+	default:
+		return "unknown"
+	}
+}
+
+// ── WorkflowJob ──────────────────────────────────────────────────────────────
+
+// WorkflowJob defines a single job within a workflow DAG.
+type WorkflowJob struct {
+	Name           string              `json:"name"`                     // unique within the workflow
+	Command        string              `json:"command"`
+	Args           []string            `json:"args,omitempty"`
+	Env            map[string]string   `json:"env,omitempty"`
+	TimeoutSeconds int64               `json:"timeout_seconds,omitempty"`
+	Runtime        string              `json:"runtime,omitempty"`
+	DependsOn      []string            `json:"depends_on,omitempty"`     // names of upstream jobs
+	Condition      DependencyCondition `json:"condition,omitempty"`      // when to run (default: on_success)
+	JobID          string              `json:"job_id,omitempty"`         // set after job is created in JobStore
+}
+
+// ── Workflow ─────────────────────────────────────────────────────────────────
+
+// Workflow is the coordinator's persisted record for a multi-job DAG.
+// Serialised as JSON by BadgerJSONPersister under workflows/{id}.
+type Workflow struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Jobs      []WorkflowJob  `json:"jobs"`
+	Status    WorkflowStatus `json:"status"`
+	CreatedAt time.Time      `json:"created_at"`
+	StartedAt time.Time      `json:"started_at,omitempty"`
+	FinishedAt time.Time     `json:"finished_at,omitempty"`
+	Error     string         `json:"error,omitempty"`
 }

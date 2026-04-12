@@ -79,6 +79,11 @@ type AuditLoggerIface interface {
 	LogSecurityViolation(ctx context.Context, nodeID, jobID, violation string) error
 }
 
+// JobCompletionCallback is called after a job reaches a terminal state.
+// Used by the workflow system to check dependency eligibility and cascade
+// failures. The callback receives the job ID and its final status.
+type JobCompletionCallback func(ctx context.Context, jobID string, status cpb.JobStatus)
+
 // ── Server ───────────────────────────────────────────────────────────────────
 
 // Server is the coordinator's gRPC server.
@@ -89,7 +94,8 @@ type Server struct {
 	jobs              JobStoreIface    // nil if not injected
 	rateLimiter       RateLimiterIface
 	audit             AuditLoggerIface
-	revocationChecker RevocationChecker // nil means no revocation enforcement
+	revocationChecker RevocationChecker     // nil means no revocation enforcement
+	onJobCompleted    JobCompletionCallback // nil means no workflow integration
 	log               *slog.Logger
 
 	// Active heartbeat streams: nodeID → done channel.
@@ -130,6 +136,12 @@ func WithAuditLogger(audit AuditLoggerIface) Option {
 // the node has been revoked it returns codes.Unauthenticated immediately.
 func WithRevocationChecker(rc RevocationChecker) Option {
 	return func(s *Server) { s.revocationChecker = rc }
+}
+
+// WithJobCompletionCallback injects a callback invoked after any job reaches a
+// terminal state. Used to trigger workflow dependency evaluation.
+func WithJobCompletionCallback(cb JobCompletionCallback) Option {
+	return func(s *Server) { s.onJobCompleted = cb }
 }
 
 // WithLogger injects a structured logger.

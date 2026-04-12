@@ -1,8 +1,8 @@
 # Feature: Workflow / DAG Support
 
 **Priority:** P0
-**Status:** Missing entirely
-**Affected files:** `proto/coordinator.proto`, `internal/cluster/`, `internal/api/handlers_jobs.go`
+**Status:** Implemented
+**Affected files:** `internal/proto/coordinatorpb/types.go`, `internal/cluster/workflow*.go`, `internal/cluster/dag.go`, `internal/api/handlers_workflows.go`, `internal/cluster/dispatch.go`
 
 ## Problem
 
@@ -157,5 +157,19 @@ enum DependencyCondition {
 ## Open questions
 
 - Should workflows support parameters/templating? (Defer — adds complexity without core value)
-- Should a workflow be re-runnable (re-trigger from a failed step)? (Yes, but defer to v2)
-- Max workflow size? (Start with 100 jobs per workflow, configurable)
+- Should a workflow be re-runnable (re-trigger from a failed step)? (Yes, deferred)
+- Max workflow size? 100 jobs per workflow (enforced in API validation)
+
+## Implementation status
+
+All items from the implementation order have been completed:
+
+1. **Types + DAG validation** — `internal/proto/coordinatorpb/types.go` (Workflow, WorkflowJob, WorkflowStatus, DependencyCondition), `internal/cluster/dag.go` (ValidateDAG, TopologicalSort, Descendants, RootJobs)
+2. **WorkflowStore** — `internal/cluster/workflow.go`, `workflow_submit.go`, `workflow_lifecycle.go`, `workflow_read.go`
+3. **Persistence** — `BadgerJSONPersister.SaveWorkflow/LoadAllWorkflows` in `internal/cluster/persistence.go`
+4. **API endpoints** — `internal/api/handlers_workflows.go` (POST/GET/DELETE /workflows)
+5. **Dispatch loop integration** — `internal/cluster/dispatch.go` (dependency eligibility gating)
+6. **Cascading failure** — `WorkflowStore.OnJobCompleted` with `Descendants()` traversal
+7. **gRPC callback** — `grpcserver.WithJobCompletionCallback` for workflow notification
+8. **Dashboard** — `WorkflowListComponent`, `WorkflowDetailComponent`, API service methods, routing, nav
+9. **Tests** — 15 DAG unit tests, 16 workflow lifecycle tests, 6 E2E integration tests

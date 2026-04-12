@@ -24,6 +24,7 @@ type NodeDispatcher interface {
 // DispatchLoop periodically polls for pending jobs and dispatches them.
 type DispatchLoop struct {
 	jobs       *JobStore
+	workflows  *WorkflowStore // nil if workflow support is not enabled
 	scheduler  *Scheduler
 	dispatcher NodeDispatcher
 	interval   time.Duration
@@ -47,6 +48,12 @@ func NewDispatchLoop(
 	}
 }
 
+// SetWorkflowStore attaches a WorkflowStore to the dispatch loop, enabling
+// dependency-aware dispatch for workflow jobs.
+func (d *DispatchLoop) SetWorkflowStore(ws *WorkflowStore) {
+	d.workflows = ws
+}
+
 // Run starts the dispatch loop. It blocks until ctx is cancelled.
 func (d *DispatchLoop) Run(ctx context.Context) {
 	ticker := time.NewTicker(d.interval)
@@ -65,10 +72,34 @@ func (d *DispatchLoop) Run(ctx context.Context) {
 	}
 }
 
+// buildEligibleSet returns the set of workflow job IDs that are eligible for
+// dispatch (all dependencies satisfied). Standalone jobs (no workflow) are not
+// included — they are always eligible and checked separately.
+func (d *DispatchLoop) buildEligibleSet() map[string]bool {
+	if d.workflows == nil {
+		return nil
+	}
+	eligible := make(map[string]bool)
+	for _, wfID := range d.workflows.RunningWorkflowIDs() {
+		for _, jobID := range d.workflows.EligibleJobs(wfID, d.jobs) {
+			eligible[jobID] = true
+		}
+	}
+	return eligible
+}
+
 func (d *DispatchLoop) dispatchPending(ctx context.Context) {
+	// Build set of workflow-eligible job IDs so we can skip blocked jobs.
+	eligible := d.buildEligibleSet()
+
 	jobs := d.jobs.List()
 	for _, job := range jobs {
 		if job.Status != cpb.JobStatusPending {
+			continue
+		}
+
+		// If this job belongs to a workflow, check dependency eligibility.
+		if job.WorkflowID != "" && !eligible[job.ID] {
 			continue
 		}
 

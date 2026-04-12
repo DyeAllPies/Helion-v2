@@ -106,6 +106,66 @@ export interface AuditPage {
   size:   number;
 }
 
+// ── Workflow ─────────────────────────────────────────────────────────────────
+
+export type WorkflowStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type DependencyCondition =
+  | 'on_success'
+  | 'on_failure'
+  | 'on_complete';
+
+export interface WorkflowJob {
+  name:            string;
+  command:         string;
+  args?:           string[];
+  env?:            Record<string, string>;
+  timeout_seconds?: number;
+  depends_on?:     string[];
+  condition:       DependencyCondition;
+  job_id?:         string;
+  job_status?:     string;
+}
+
+export interface Workflow {
+  id:          string;
+  name:        string;
+  status:      WorkflowStatus;
+  jobs:        WorkflowJob[];
+  created_at:  string;
+  started_at?: string;
+  finished_at?: string;
+  error?:      string;
+}
+
+export interface WorkflowsPage {
+  workflows: Workflow[];
+  total:     number;
+  page:      number;
+  size:      number;
+}
+
+export interface SubmitWorkflowJobRequest {
+  name:            string;
+  command:         string;
+  args?:           string[];
+  env?:            Record<string, string>;
+  timeout_seconds?: number;
+  depends_on?:     string[];
+  condition?:      string;
+}
+
+export interface SubmitWorkflowRequest {
+  id:   string;
+  name: string;
+  jobs: SubmitWorkflowJobRequest[];
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export interface LoginRequest {

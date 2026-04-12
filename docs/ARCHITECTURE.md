@@ -139,6 +139,32 @@ the next heartbeat timeout.
 **Crash recovery.** On startup, reads BadgerDB, identifies non-terminal jobs, waits 15 s
 (configurable grace period) for nodes to re-register, then dispatches recovered jobs.
 
+**Workflow / DAG engine.** Supports multi-job workflows with dependency-driven execution.
+
+- **DAG validation.** On submission, validates the job graph using Kahn's algorithm for
+  cycle detection. Rejects duplicate names, unknown references, and self-dependencies.
+- **Job materialisation.** `WorkflowStore.Start()` creates a real `Job` in the `JobStore`
+  for each workflow step (ID = `{workflow_id}/{job_name}`). Root jobs (no `depends_on`)
+  enter the pending queue immediately.
+- **Dependency gating.** The dispatch loop builds an eligible set each tick by checking
+  whether all upstream dependencies have reached a satisfying terminal state. Three
+  conditions control eligibility: `on_success` (default), `on_failure`, `on_complete`.
+- **Cascading failure.** When a job fails and downstream dependents require `on_success`,
+  they are automatically marked `lost` with a descriptive reason.
+- **Workflow completion.** When all jobs in a workflow reach a terminal state, the workflow
+  is marked `completed` (all succeeded) or `failed` (any failed/timed out/lost).
+- **Cancellation.** `DELETE /workflows/{id}` marks all non-terminal jobs as `lost` and
+  transitions the workflow to `cancelled`.
+
+File layout:
+```
+workflow.go           — errors, interfaces, WorkflowStore type
+workflow_submit.go    — Submit, Start
+workflow_lifecycle.go — EligibleJobs, OnJobCompleted, Cancel
+workflow_read.go      — Get, List, RunningWorkflowIDs, Restore
+dag.go                — ValidateDAG, TopologicalSort, Descendants, RootJobs
+```
+
 ### 3.2 Node agent
 
 Each node agent is a long-lived process on a worker host.
@@ -289,6 +315,9 @@ AppComponent  (shell: nav sidebar + router outlet)
 ├── JobsModule (lazy)
 │   ├── JobListComponent         # Paginated, filterable, sortable table
 │   └── JobDetailComponent       # Metadata + live log viewer (WebSocket)
+├── WorkflowsModule (lazy)
+│   ├── WorkflowListComponent    # Paginated workflow table with status badges
+│   └── WorkflowDetailComponent  # DAG job cards with statuses, cancel action
 ├── MetricsModule (lazy)
 │   └── ClusterMetricsComponent  # Chart.js time-series, summary cards
 └── AuditModule (lazy)
@@ -436,6 +465,8 @@ path. The relative difference narrows as job count increases.
 
 - **Single coordinator replica.** HA (active-passive or Raft) is architecturally possible
   via the BadgerDB → etcd swap but not in v2 scope.
+- **Workflows are single-coordinator.** DAG execution runs on one coordinator instance.
+  HA would require distributed locking for workflow state transitions.
 - **No multi-tenancy.** All jobs share a single namespace. Per-tenant RBAC is a v3 concern.
 - **No GPU scheduling.** Requires Kubernetes device plugin integration.
 - **No MapReduce demo.** Deferred to keep v2 focused on infrastructure correctness.

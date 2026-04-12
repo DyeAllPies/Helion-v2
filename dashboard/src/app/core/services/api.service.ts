@@ -10,7 +10,8 @@ import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import {
-  Job, JobsPage, Node, ClusterMetrics, AuditPage, SubmitJobRequest
+  Job, JobsPage, Node, ClusterMetrics, AuditPage, SubmitJobRequest,
+  Workflow, WorkflowsPage, SubmitWorkflowRequest
 } from '../../shared/models';
 
 // Raw API response shapes (may differ from dashboard models)
@@ -77,6 +78,27 @@ export class ApiService {
     return this.http.get<any>(`${this.base}/metrics`).pipe(
       map(m => mapMetrics(m))
     );
+  }
+
+  // ── Workflows ───────────────────────────────────────────────────────────────
+
+  getWorkflows(page = 0, size = 20): Observable<WorkflowsPage> {
+    const params = new HttpParams()
+      .set('page', page + 1)
+      .set('size', size);
+    return this.http.get<WorkflowsPage>(`${this.base}/workflows`, { params });
+  }
+
+  getWorkflow(id: string): Observable<Workflow> {
+    return this.http.get<Workflow>(`${this.base}/workflows/${id}`);
+  }
+
+  submitWorkflow(req: SubmitWorkflowRequest): Observable<Workflow> {
+    return this.http.post<Workflow>(`${this.base}/workflows`, req);
+  }
+
+  cancelWorkflow(id: string): Observable<any> {
+    return this.http.delete(`${this.base}/workflows/${id}`);
   }
 
   // ── Audit ────────────────────────────────────────────────────────────────────

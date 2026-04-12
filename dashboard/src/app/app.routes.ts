@@ -31,6 +31,16 @@ export const routes: Routes = [
           import('./features/jobs/job-detail.component').then(m => m.JobDetailComponent),
       },
       {
+        path: 'workflows',
+        loadComponent: () =>
+          import('./features/workflows/workflow-list.component').then(m => m.WorkflowListComponent),
+      },
+      {
+        path: 'workflows/:id',
+        loadComponent: () =>
+          import('./features/workflows/workflow-detail.component').then(m => m.WorkflowDetailComponent),
+      },
+      {
         path: 'metrics',
         loadComponent: () =>
           import('./features/metrics/cluster-metrics.component').then(m => m.ClusterMetricsComponent),

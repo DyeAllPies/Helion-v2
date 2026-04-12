@@ -138,6 +138,44 @@ func (p *BadgerJSONPersister) LoadAllJobs(_ context.Context) ([]*cpb.Job, error)
 	return jobs, err
 }
 
+// ── Workflow methods (satisfies WorkflowPersister) ──────────────────────────
+
+// SaveWorkflow writes a Workflow record under workflows/{id}.
+// Workflow entries have no TTL — they persist until explicitly deleted.
+func (p *BadgerJSONPersister) SaveWorkflow(_ context.Context, w *cpb.Workflow) error {
+	data, err := json.Marshal(w)
+	if err != nil {
+		return fmt.Errorf("SaveWorkflow marshal: %w", err)
+	}
+	key := []byte("workflows/" + w.ID)
+	return p.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(key, data)
+	})
+}
+
+// LoadAllWorkflows reads all workflows/ entries for crash-recovery on startup.
+func (p *BadgerJSONPersister) LoadAllWorkflows(_ context.Context) ([]*cpb.Workflow, error) {
+	var workflows []*cpb.Workflow
+	prefix := []byte("workflows/")
+	err := p.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = prefix
+		it := txn.NewIterator(opts)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			var w cpb.Workflow
+			if err := it.Item().Value(func(v []byte) error {
+				return json.Unmarshal(v, &w)
+			}); err != nil {
+				return fmt.Errorf("LoadAllWorkflows unmarshal %q: %w", it.Item().Key(), err)
+			}
+			workflows = append(workflows, &w)
+		}
+		return nil
+	})
+	return workflows, err
+}
+
 // ── Shared audit method (satisfies both Persister and JobPersister) ───────────
 
 // AppendAudit writes an audit entry under audit/{nano}-{target}.
@@ -171,6 +209,8 @@ func (NopPersister) SaveNode(_ context.Context, _ *cpb.Node) error              
 func (NopPersister) LoadAllNodes(_ context.Context) ([]*cpb.Node, error)          { return nil, nil }
 func (NopPersister) SaveJob(_ context.Context, _ *cpb.Job) error                  { return nil }
 func (NopPersister) LoadAllJobs(_ context.Context) ([]*cpb.Job, error)            { return nil, nil }
+func (NopPersister) SaveWorkflow(_ context.Context, _ *cpb.Workflow) error        { return nil }
+func (NopPersister) LoadAllWorkflows(_ context.Context) ([]*cpb.Workflow, error)  { return nil, nil }
 func (NopPersister) AppendAudit(_ context.Context, _, _, _, _ string) error       { return nil }
 
 // ── MemPersister ──────────────────────────────────────────────────────────────
@@ -181,14 +221,18 @@ func (NopPersister) AppendAudit(_ context.Context, _, _, _, _ string) error     
 // For the job side, use MemJobPersister (defined in job.go).  Keeping them
 // separate means each test helper stays focused and independently inspectable.
 type MemPersister struct {
-	mu     sync.Mutex
-	Nodes  map[string]*cpb.Node
-	Audits []map[string]string
+	mu        sync.Mutex
+	Nodes     map[string]*cpb.Node
+	Workflows map[string]*cpb.Workflow
+	Audits    []map[string]string
 }
 
 // NewMemPersister returns an initialised MemPersister.
 func NewMemPersister() *MemPersister {
-	return &MemPersister{Nodes: make(map[string]*cpb.Node)}
+	return &MemPersister{
+		Nodes:     make(map[string]*cpb.Node),
+		Workflows: make(map[string]*cpb.Workflow),
+	}
 }
 
 // Mu locks the MemPersister for direct field inspection in tests.
@@ -214,6 +258,31 @@ func (m *MemPersister) LoadAllNodes(_ context.Context) ([]*cpb.Node, error) {
 	}
 	m.mu.Unlock()
 	return nodes, nil
+}
+
+func (m *MemPersister) SaveWorkflow(_ context.Context, w *cpb.Workflow) error {
+	cp := *w
+	cpJobs := make([]cpb.WorkflowJob, len(w.Jobs))
+	copy(cpJobs, w.Jobs)
+	cp.Jobs = cpJobs
+	m.mu.Lock()
+	m.Workflows[w.ID] = &cp
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *MemPersister) LoadAllWorkflows(_ context.Context) ([]*cpb.Workflow, error) {
+	m.mu.Lock()
+	workflows := make([]*cpb.Workflow, 0, len(m.Workflows))
+	for _, w := range m.Workflows {
+		cp := *w
+		cpJobs := make([]cpb.WorkflowJob, len(w.Jobs))
+		copy(cpJobs, w.Jobs)
+		cp.Jobs = cpJobs
+		workflows = append(workflows, &cp)
+	}
+	m.mu.Unlock()
+	return workflows, nil
 }
 
 func (m *MemPersister) AppendAudit(_ context.Context, eventType, actor, target, detail string) error {

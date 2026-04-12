@@ -185,7 +185,8 @@ interface NavItem {
 export class ShellComponent {
   readonly navItems: NavItem[] = [
     { path: '/nodes',   label: 'Nodes',   icon: 'dns'           },
-    { path: '/jobs',    label: 'Jobs',    icon: 'work_outline'  },
+    { path: '/jobs',      label: 'Jobs',      icon: 'work_outline'  },
+    { path: '/workflows', label: 'Workflows', icon: 'account_tree'  },
     { path: '/metrics', label: 'Metrics', icon: 'show_chart'    },
     { path: '/audit',   label: 'Audit',   icon: 'receipt_long'  },
   ];

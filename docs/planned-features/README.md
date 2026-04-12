@@ -6,7 +6,7 @@ Feature plans for evolving Helion v2 into a minimal production orchestrator.
 
 | Feature | Current Status | Priority | Doc |
 |---------|---------------|----------|-----|
-| Workflow / DAG support | Missing | P0 | [01-workflow-dag.md](01-workflow-dag.md) |
+| Workflow / DAG support | **Implemented** | P0 | [01-workflow-dag.md](01-workflow-dag.md) |
 | Retry + failure policies | Partial | P0 | [02-retry-failure-policies.md](02-retry-failure-policies.md) |
 | Resource-aware scheduling | Partial | P1 | [03-resource-aware-scheduling.md](03-resource-aware-scheduling.md) |
 | Job state machine improvements | Partial | P1 | [04-job-state-machine.md](04-job-state-machine.md) |

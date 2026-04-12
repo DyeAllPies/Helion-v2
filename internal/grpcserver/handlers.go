@@ -195,5 +195,11 @@ func (s *Server) ReportResult(
 		}
 	}
 
+	// Notify workflow system of job completion so it can evaluate downstream
+	// dependency eligibility and cascade failures.
+	if s.onJobCompleted != nil {
+		s.onJobCompleted(ctx, result.JobId, targetStatus)
+	}
+
 	return &pb.Ack{Ok: true}, nil
 }

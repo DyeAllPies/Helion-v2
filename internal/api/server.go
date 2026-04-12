@@ -56,6 +56,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
 )
 
@@ -70,8 +71,10 @@ type Server struct {
 	tokenManager   *auth.TokenManager
 	rateLimiter    *ratelimit.NodeLimiter
 	readiness      ReadinessChecker
-	promHandler    http.Handler // Prometheus /metrics handler; nil disables
-	mux            *http.ServeMux
+	workflowStore    *cluster.WorkflowStore // nil if workflow support not enabled
+	workflowJobStore *cluster.JobStore      // needed to look up individual job statuses
+	promHandler      http.Handler           // Prometheus /metrics handler; nil disables
+	mux              *http.ServeMux
 	httpSrvMu      sync.Mutex
 	httpSrv        *http.Server
 	upgrader       websocket.Upgrader
@@ -94,6 +97,18 @@ type Server struct {
 // compile-time safety that AUDIT H2 restored.
 func (s *Server) DisableAuth() {
 	s.disableAuth = true
+}
+
+// SetWorkflowStore enables workflow support by injecting the WorkflowStore
+// and the JobStore used to look up individual job statuses. Must be called
+// before Serve. Registers the workflow routes on the mux.
+func (s *Server) SetWorkflowStore(ws *cluster.WorkflowStore, jobs *cluster.JobStore) {
+	s.workflowStore = ws
+	s.workflowJobStore = jobs
+	s.mux.HandleFunc("POST /workflows", s.authMiddleware(s.handleSubmitWorkflow))
+	s.mux.HandleFunc("GET /workflows/{id}", s.authMiddleware(s.handleGetWorkflow))
+	s.mux.HandleFunc("GET /workflows", s.authMiddleware(s.handleListWorkflows))
+	s.mux.HandleFunc("DELETE /workflows/{id}", s.authMiddleware(s.handleCancelWorkflow))
 }
 
 // NewServer creates an HTTP API server with all Phase 3/4 components.
