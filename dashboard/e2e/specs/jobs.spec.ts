@@ -226,6 +226,7 @@ test.describe('Jobs List', () => {
     await navigateTo(page, '/jobs');
     await expect(page.locator('.error-banner')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.error-banner')).toContainText('Failed to load jobs');
+    await page.unroute('**/api/jobs?*');
   });
 
   test('empty state when no jobs match filter', async ({ authedPage: page }) => {
@@ -241,6 +242,9 @@ test.describe('Jobs List', () => {
     await navigateTo(page, '/jobs');
     await expect(page.locator('.empty-state')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.empty-state')).toContainText('No jobs found');
+
+    // Clean up route intercept so subsequent tests see real data.
+    await page.unroute('**/api/jobs?*');
   });
 });
 
@@ -261,13 +265,22 @@ test.describe('Job Detail', () => {
       expect(['completed', 'failed', 'timeout', 'lost']).toContain(job.status);
     }).toPass({timeout: 15_000, intervals: [2_000] });
 
-    // Navigate to job detail via jobs list
+    // Navigate to job detail via jobs list.
+    // Reset status filter in case a prior test left one active.
     await navigateTo(page, '/jobs');
+    await expect(page.locator('table[mat-table]')).toBeVisible({ timeout: 10_000 });
+    const statusSelect = page.locator('select.status-select');
+    if (await statusSelect.isVisible()) {
+      await statusSelect.selectOption('');
+    }
     await expect(async () => {
       await page.click('button.refresh-btn');
       await expect(page.locator(`text=${jobId}`)).toBeVisible();
     }).toPass({ timeout: 15_000, intervals: [2_000] });
-    await page.click(`a.job-link:has-text("${jobId}")`);
+
+    const jobLink = page.locator(`a.job-link:has-text("${jobId}")`);
+    await expect(jobLink).toBeVisible();
+    await jobLink.click();
 
     await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
 
@@ -476,9 +489,38 @@ test.describe('Jobs Retry Policy', () => {
 
   test('retrying filter option is present in dropdown', async ({ authedPage: page }) => {
     await navigateTo(page, '/jobs');
-    const options = page.locator('select.status-select option');
-    const texts = (await options.allTextContents()).map(t => t.trim().toLowerCase());
-    expect(texts).toContain('retrying');
+    // Wait for the dropdown to be fully populated by Angular (not just visible).
+    await expect(async () => {
+      const texts = (await page.locator('select.status-select option').allTextContents())
+        .map(t => t.trim().toLowerCase());
+      expect(texts.length).toBeGreaterThan(1);
+      expect(texts).toContain('retrying');
+    }).toPass({ timeout: 5_000 });
+  });
+});
+
+test.describe('Job Cancellation', () => {
+
+  test('cancelled job shows cancelled status in list', async ({ authedPage: page }) => {
+    const token = getRootToken();
+    const jobId = `e2e-cancel-ui-${Date.now()}`;
+
+    await submitJob(token, { id: jobId, command: 'sleep', args: ['3600'] });
+
+    // Cancel via API.
+    await fetch(`${API_URL}/jobs/${jobId}/cancel`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    await navigateTo(page, '/jobs');
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
+
+    const row = page.locator(`tr:has-text("${jobId}")`);
+    await expect(row.locator('.badge').first()).toContainText('CANCELLED');
   });
 });
 

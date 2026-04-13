@@ -278,6 +278,33 @@ test.describe('Workflow Detail', () => {
     await expect(page).toHaveURL(/\/workflows$/);
   });
 
+  test('workflow with on_failure condition shows condition label', async ({ authedPage: page }) => {
+    const token = getRootToken();
+    const wfId = `e2e-wf-cond-${Date.now()}`;
+
+    await submitWorkflow(token, {
+      id: wfId,
+      name: 'condition test',
+      jobs: [
+        { name: 'risky', command: 'echo' },
+        { name: 'cleanup', command: 'echo', depends_on: ['risky'], condition: 'on_failure' },
+      ],
+    });
+
+    await navigateTo(page, '/workflows');
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${wfId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
+
+    await page.click(`a.wf-link >> text=${wfId}`);
+    await expect(page).toHaveURL(new RegExp(`/workflows/${wfId}`));
+
+    // The cleanup job card should show the on_failure condition badge.
+    await expect(page.locator('.condition-badge')).toBeVisible();
+    await expect(page.locator('.condition-badge')).toContainText('on_failure');
+  });
+
   test('job card links to job detail page', async ({ authedPage: page }) => {
     const token = getRootToken();
     const wfId = `e2e-wf-joblink-${Date.now()}`;

@@ -14,6 +14,7 @@ WORKDIR /app
 RUN addgroup -S helion && adduser -S -G helion helion
 COPY --from=builder /helion-node /usr/local/bin/helion-node
 
+RUN mkdir -p /app/state && chown helion:helion /app/state
 USER helion
 EXPOSE 8080
 # Container-level liveness for non-k8s deployers (Compose, Swarm, Nomad).

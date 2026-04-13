@@ -1,3 +1,6 @@
+# NOTE: ./state is a host bind mount — it survives `docker compose down -v`.
+# To get a truly clean cluster (no jobs/workflows from prior runs), delete it:
+#   rm -rf state/
 name: helion-v2
 
 services:

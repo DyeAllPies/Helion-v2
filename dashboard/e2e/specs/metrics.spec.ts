@@ -142,6 +142,7 @@ test.describe('Metrics Page', () => {
     // The waiting spinner should appear since WS never connects
     await expect(page.locator('.waiting')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.waiting')).toContainText('Waiting for first metrics snapshot');
+    await page.unroute('**/ws/metrics**');
   });
 
   test.skip('WS error shows error banner', async () => {

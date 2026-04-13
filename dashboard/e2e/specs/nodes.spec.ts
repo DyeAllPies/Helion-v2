@@ -150,6 +150,7 @@ test.describe('Nodes Page', () => {
     // Wait for the next poll cycle to fail and show error banner
     await expect(page.locator('.error-banner')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.error-banner')).toContainText('Failed to load nodes');
+    await page.unroute('**/api/nodes');
   });
 
   test('empty state shows when no nodes are registered', async ({ authedPage: page }) => {
@@ -166,5 +167,6 @@ test.describe('Nodes Page', () => {
 
     await expect(page.locator('.empty-state')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.empty-state')).toContainText('No nodes registered yet');
+    await page.unroute('**/api/nodes');
   });
 });

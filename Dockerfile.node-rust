@@ -38,7 +38,7 @@ COPY scripts/entrypoint-node-rust.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Create socket directory writable by helion user
-RUN mkdir -p /run/helion && chown helion:helion /run/helion
+RUN mkdir -p /run/helion /app/state && chown helion:helion /run/helion /app/state
 
 USER helion
 EXPOSE 8080

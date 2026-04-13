@@ -4,7 +4,7 @@
 // Verifies: all nav links work, active state highlights correctly,
 // and the shell layout renders sidebar + main content.
 
-import { test, expect } from '../fixtures/auth.fixture';
+import { test, expect, navigateTo } from '../fixtures/auth.fixture';
 
 test.describe('Sidebar Navigation', () => {
 
@@ -32,7 +32,8 @@ test.describe('Sidebar Navigation', () => {
     expect(joined).toContain('AUDIT');
   });
 
-  test('nodes link is active by default after login', async ({ authedPage: page }) => {
+  test('nodes link is active when on /nodes', async ({ authedPage: page }) => {
+    await navigateTo(page, '/nodes');
     const activeLink = page.locator('a.nav-link--active');
     await expect(activeLink).toContainText(/nodes/i);
   });

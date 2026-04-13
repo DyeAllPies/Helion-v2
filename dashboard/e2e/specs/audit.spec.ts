@@ -130,6 +130,10 @@ test.describe('Audit Log Page', () => {
 
   test('filter dropdown contains ALL EVENTS plus all 9 event types', async ({ authedPage: page }) => {
     await navigateTo(page, '/audit');
+    await expect(page.locator('select.status-select')).toBeVisible({ timeout: 5_000 });
+    // Reset filter to ALL to ensure all options are rendered.
+    await page.selectOption('select.status-select', '');
+    await page.waitForTimeout(300);
 
     const options = page.locator('select.status-select option');
     const optionTexts = (await options.allTextContents()).map(t => t.trim().toLowerCase());
@@ -202,6 +206,7 @@ test.describe('Audit Log Page', () => {
     await navigateTo(page, '/audit');
     await expect(page.locator('.error-banner')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.error-banner')).toContainText('Failed to load audit log');
+    await page.unroute('**/api/audit?*');
   });
 
   test('empty state displays when no events match filter', async ({ authedPage: page }) => {
@@ -215,6 +220,7 @@ test.describe('Audit Log Page', () => {
 
     await navigateTo(page, '/audit');
     await expect(page.locator('.empty-state')).toBeVisible({ timeout: 15_000 });
+    await page.unroute('**/api/audit?*');
     await expect(page.locator('.empty-state')).toContainText('No audit events found');
   });
 });

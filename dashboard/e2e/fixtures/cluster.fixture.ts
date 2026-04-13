@@ -10,6 +10,7 @@
 //   E2E_TOKEN      — override: supply the JWT directly (skips file read)
 //   E2E_API_URL    — coordinator HTTP base URL (default: http://localhost:8080)
 
+import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -17,28 +18,46 @@ import * as path from 'node:path';
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
 
 /**
- * Read the root JWT that the coordinator wrote to disk.
- * Throws if the file doesn't exist — the cluster must be running first.
+ * Read the root JWT that the coordinator wrote at startup.
+ *
+ * Resolution order:
+ *   1. E2E_TOKEN env var (CI injects this directly)
+ *   2. Host file at E2E_TOKEN_FILE or ./state/root-token (bind mount)
+ *   3. docker exec into the coordinator container (named volume — E2E overlay)
  */
 export function getRootToken(): string {
-  // Direct override — useful in CI where the token is injected as a secret.
+  // 1. Direct override.
   if (process.env['E2E_TOKEN']) {
     return process.env['E2E_TOKEN'].trim();
   }
 
+  // 2. Host file (works when ./state is a bind mount).
   const tokenPath = process.env['E2E_TOKEN_FILE']
     || path.join(PROJECT_ROOT, 'state', 'root-token');
 
-  if (!fs.existsSync(tokenPath)) {
-    throw new Error(
-      `Root token not found at ${tokenPath}.\n` +
-      'Start the cluster first:\n' +
-      '  docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d\n' +
-      'Or set E2E_TOKEN env var directly.'
-    );
+  if (fs.existsSync(tokenPath)) {
+    return fs.readFileSync(tokenPath, 'utf-8').trim();
   }
 
-  return fs.readFileSync(tokenPath, 'utf-8').trim();
+  // 3. Named volume — read from inside the coordinator container.
+  // The E2E overlay uses a Docker volume instead of a host bind mount,
+  // so the token file is only accessible inside the container.
+  try {
+    const token = execSync(
+      'docker exec helion-coordinator cat //app/state/root-token',
+      { encoding: 'utf-8', timeout: 5000 },
+    ).trim();
+    if (token) return token;
+  } catch {
+    // container not running or command failed
+  }
+
+  throw new Error(
+    `Root token not found at ${tokenPath} or via docker exec.\n` +
+    'Start the cluster first:\n' +
+    '  docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d\n' +
+    'Or set E2E_TOKEN env var directly.'
+  );
 }
 
 /** Coordinator REST API base URL. */

@@ -39,11 +39,10 @@ trap cleanup EXIT
 # ── 1. Start cluster ────────────────────────────────────────────────────────
 
 log "Starting cluster..."
-# Clean state from previous runs to avoid stale data accumulation
-rm -rf "$ROOT_DIR/state" "$ROOT_DIR/logs"
-mkdir -p "$ROOT_DIR/state" "$ROOT_DIR/logs"
-# Container runs as non-root user 'helion' — ensure mounted dirs are writable
-chmod 777 "$ROOT_DIR/state" "$ROOT_DIR/logs"
+# E2E overlay uses a named Docker volume (e2e-state) instead of the host
+# bind mount (./state), so E2E tests never read or pollute user data.
+# `docker compose down -v` removes the volume, giving each run a clean DB.
+mkdir -p "$ROOT_DIR/logs"
 docker compose $COMPOSE_FILES up -d --build
 
 # ── 2. Wait for coordinator healthy ─────────────────────────────────────────

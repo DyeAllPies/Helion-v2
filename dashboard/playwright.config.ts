@@ -6,15 +6,28 @@
 //   1. Cluster running: docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d
 //   2. Dashboard dev server: ng serve  (port 4200)
 //
-// IMPORTANT: Tests submit jobs/workflows that persist in BadgerDB. If rerunning
-// against an existing cluster, accumulated data may push new items off page 1
-// and cause "element not found" failures. Always tear down with -v to reset:
+// The E2E overlay uses a named Docker volume (e2e-state) instead of the host
+// bind mount (./state), so tests use isolated storage and never pollute
+// the user's local BadgerDB. Tear down with -v to reset:
 //   docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
+//
+// Video recording: set E2E_VIDEO=1 to record all tests. Videos are saved
+// per-test in test-results/ and can be combined into a single MP4:
+//   find test-results -name "*.webm" | sort | sed 's/^/file /' > concat.txt
+//   ffmpeg -f concat -safe 0 -i concat.txt -c:v libx264 docs/e2e-full-run.mp4
 //
 // Run:  npx playwright test
 // UI:   npx playwright test --ui
 
 import { defineConfig, devices } from '@playwright/test';
+
+// Allow up to 10% of tests to fail before aborting the run.
+// This balances catching regressions early vs. seeing the full picture.
+// Some downstream tests depend on earlier ones (e.g. job detail tests
+// need the job list to work), so cascading failures are expected when
+// a core feature breaks.
+const totalSpecs = 122;
+const maxFailures = Math.ceil(totalSpecs * 0.1); // ~10 failures
 
 export default defineConfig({
   testDir: './e2e/specs',
@@ -22,6 +35,7 @@ export default defineConfig({
   forbidOnly: !!process.env['CI'],
   retries: 0,
   workers: 1,
+  maxFailures,
   reporter: process.env['CI']
     ? [['list'], ['html', { open: 'never' }], ['github']]
     : [['list'], ['html', { open: 'on-failure' }]],

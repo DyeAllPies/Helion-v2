@@ -3,11 +3,20 @@
 # E2E test overlay — exposes the coordinator HTTP API on host port 8080
 # and writes the root token to a mounted volume so Playwright can read it.
 #
+# IMPORTANT: This overlay replaces the host bind mount (./state) with a
+# named Docker volume (e2e-state) so E2E tests use isolated storage and
+# never read or pollute the user's local BadgerDB data. The volume is
+# removed by `docker compose down -v`, giving each test run a clean DB.
+#
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d
 #   # wait for healthy, then run:  npx playwright test
+#   docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
 
 name: helion-v2-e2e
+
+volumes:
+  e2e-state: {}
 
 services:
   coordinator:
@@ -25,7 +34,7 @@ services:
       - HELION_EXTRA_SANS=coordinator
       - HELION_CA_FILE=/app/state/ca.pem
     volumes:
-      - ./state:/app/state
+      - e2e-state:/app/state
       - ./logs:/app/logs
 
   node1:
@@ -36,7 +45,7 @@ services:
       - HELION_ALLOW_ISOLATION=false
       - HELION_CA_CERT=/app/state/ca.pem
     volumes:
-      - ./state:/app/state
+      - e2e-state:/app/state
 
   node2:
     # Override: use Rust runtime image so E2E tests exercise both runtimes.
@@ -54,4 +63,4 @@ services:
       - HELION_RUNTIME_SOCKET=/run/helion/runtime.sock
       - RUST_LOG=info
     volumes:
-      - ./state:/app/state
+      - e2e-state:/app/state
