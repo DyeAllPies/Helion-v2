@@ -10,7 +10,7 @@ import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import {
-  Job, JobsPage, Node, ClusterMetrics, AuditPage, SubmitJobRequest,
+  Job, JobsPage, JobLogsResponse, Node, ClusterMetrics, AuditPage, SubmitJobRequest,
   Workflow, WorkflowsPage, SubmitWorkflowRequest
 } from '../../shared/models';
 
@@ -76,6 +76,12 @@ export class ApiService {
 
   submitJob(req: SubmitJobRequest): Observable<Job> {
     return this.http.post<Job>(`${this.base}/jobs`, req);
+  }
+
+  getJobLogs(id: string, tail?: number): Observable<JobLogsResponse> {
+    let params = new HttpParams();
+    if (tail) params = params.set('tail', tail);
+    return this.http.get<JobLogsResponse>(`${this.base}/jobs/${id}/logs`, { params });
   }
 
   // ── Metrics ──────────────────────────────────────────────────────────────────

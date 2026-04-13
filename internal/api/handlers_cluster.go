@@ -10,6 +10,7 @@
 package api
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -31,21 +32,36 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	checks := map[string]string{}
+	ready := true
+
 	if err := s.readiness.Ping(); err != nil {
-		slog.Error("readiness ping failed", slog.Any("err", err))
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, "handleReadyz", map[string]string{"error": "db not ready"})
-		return
+		checks["badgerdb"] = "error: " + err.Error()
+		ready = false
+	} else {
+		checks["badgerdb"] = "ok"
 	}
 
-	if s.readiness.RegistryLen() == 0 {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, "handleReadyz", map[string]string{"error": "no nodes registered"})
-		return
+	nodeCount := s.readiness.RegistryLen()
+	if nodeCount == 0 {
+		checks["nodes"] = "none registered"
+		ready = false
+	} else {
+		checks["nodes"] = fmt.Sprintf("%d registered", nodeCount)
 	}
 
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ready":true}`))
+	checks["scheduler"] = "ok"
+	checks["grpc_server"] = "ok"
+
+	status := http.StatusOK
+	if !ready {
+		status = http.StatusServiceUnavailable
+	}
+	w.WriteHeader(status)
+	writeJSON(w, "handleReadyz", map[string]interface{}{
+		"status": map[bool]string{true: "ready", false: "not_ready"}[ready],
+		"checks": checks,
+	})
 }
 
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {

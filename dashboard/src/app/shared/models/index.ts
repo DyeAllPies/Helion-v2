@@ -33,6 +33,19 @@ export interface Job {
   error?:        string;
 }
 
+export interface JobLogEntry {
+  job_id:    string;
+  seq:       number;
+  data:      string;
+  timestamp: string;
+}
+
+export interface JobLogsResponse {
+  job_id:  string;
+  entries: JobLogEntry[];
+  total:   number;
+}
+
 export interface JobsPage {
   jobs:  Job[];
   total: number;

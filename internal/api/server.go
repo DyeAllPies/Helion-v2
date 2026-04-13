@@ -58,6 +58,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
+	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
 )
 
@@ -75,6 +76,7 @@ type Server struct {
 	workflowStore    *cluster.WorkflowStore // nil if workflow support not enabled
 	workflowJobStore *cluster.JobStore      // needed to look up individual job statuses
 	eventBus         *events.Bus            // nil if event system not enabled
+	logStore         logstore.Store         // nil if log storage not enabled
 	promHandler      http.Handler           // Prometheus /metrics handler; nil disables
 	mux              *http.ServeMux
 	httpSrvMu      sync.Mutex
@@ -99,6 +101,12 @@ type Server struct {
 // compile-time safety that AUDIT H2 restored.
 func (s *Server) DisableAuth() {
 	s.disableAuth = true
+}
+
+// SetLogStore enables job log retrieval via GET /jobs/{id}/logs.
+func (s *Server) SetLogStore(ls logstore.Store) {
+	s.logStore = ls
+	s.mux.HandleFunc("GET /jobs/{id}/logs", s.authMiddleware(s.handleGetJobLogs))
 }
 
 // SetEventBus enables the real-time event stream endpoint /ws/events.

@@ -45,6 +45,8 @@ type Collector struct {
 	descHealthyNodes       *prometheus.Desc
 	descTotalNodes         *prometheus.Desc
 	descJobDurationSeconds *prometheus.Desc
+	descRetryingJobs       *prometheus.Desc
+	descScheduledJobs      *prometheus.Desc
 }
 
 // NewCollector creates a Collector backed by the given counters and duration source.
@@ -83,6 +85,16 @@ func NewCollector(jobs JobCounter, nodes NodeCounter, dur DurationSource) *Colle
 			"Histogram of completed/failed job durations in seconds.",
 			nil, nil,
 		),
+		descRetryingJobs: prometheus.NewDesc(
+			"helion_retrying_jobs",
+			"Number of jobs currently in retrying state.",
+			nil, nil,
+		),
+		descScheduledJobs: prometheus.NewDesc(
+			"helion_scheduled_jobs",
+			"Number of jobs currently in scheduled state.",
+			nil, nil,
+		),
 	}
 }
 
@@ -94,6 +106,8 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.descHealthyNodes
 	ch <- c.descTotalNodes
 	ch <- c.descJobDurationSeconds
+	ch <- c.descRetryingJobs
+	ch <- c.descScheduledJobs
 }
 
 // Collect computes current metric values and sends them to ch.
@@ -102,7 +116,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	defer cancel()
 
 	// Terminal job counts (counter semantics — monotonically increasing totals).
-	for _, status := range []string{"COMPLETED", "FAILED", "TIMEOUT", "LOST"} {
+	for _, status := range []string{"COMPLETED", "FAILED", "TIMEOUT", "LOST", "CANCELLED", "SKIPPED"} {
 		if n, err := c.jobs.CountByStatus(ctx, status); err == nil {
 			ch <- prometheus.MustNewConstMetric(
 				c.descJobsTotal, prometheus.CounterValue, float64(n), status,
@@ -116,6 +130,12 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 	if n, err := c.jobs.CountByStatus(ctx, "PENDING"); err == nil {
 		ch <- prometheus.MustNewConstMetric(c.descPendingJobs, prometheus.GaugeValue, float64(n))
+	}
+	if n, err := c.jobs.CountByStatus(ctx, "RETRYING"); err == nil {
+		ch <- prometheus.MustNewConstMetric(c.descRetryingJobs, prometheus.GaugeValue, float64(n))
+	}
+	if n, err := c.jobs.CountByStatus(ctx, "SCHEDULED"); err == nil {
+		ch <- prometheus.MustNewConstMetric(c.descScheduledJobs, prometheus.GaugeValue, float64(n))
 	}
 
 	// Node counts.

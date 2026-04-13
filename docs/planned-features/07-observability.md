@@ -1,8 +1,8 @@
 # Feature: Observability Improvements
 
 **Priority:** P2
-**Status:** Partial — Prometheus metrics + audit logs exist, no distributed tracing
-**Affected files:** `internal/metrics/`, `internal/api/`, `internal/grpcserver/`, `cmd/`
+**Status:** Implemented (logs, metrics, readyz; OpenTelemetry tracing deferred)
+**Affected files:** `internal/logstore/`, `internal/metrics/prometheus.go`, `internal/api/handlers_logs.go`, `internal/api/handlers_cluster.go`, `internal/grpcserver/handlers.go`
 
 ## Problem
 
@@ -184,6 +184,23 @@ logstore/
 
 ## Open questions
 
-- Should logs be stored in BadgerDB or on filesystem? (BadgerDB for consistency with existing persistence, filesystem if logs are large)
+- Should logs be stored in BadgerDB or on filesystem? (BadgerDB chosen for consistency)
 - Metrics cardinality: per-job-id metrics would explode. Only use bounded labels (status, node_id, priority tier).
 - Grafana dashboard templates? (Defer — users bring their own dashboards, we provide the metrics)
+
+## Implementation status
+
+Core observability improvements implemented. OpenTelemetry tracing deferred (adds external deps).
+
+1. **Job log storage** — `internal/logstore/store.go`: BadgerDB-backed log persistence under `log:{job_id}:{seq}` keys with configurable TTL (default 7 days). In-memory `MemLogStore` for tests.
+2. **GET /jobs/{id}/logs** — `internal/api/handlers_logs.go`: returns stored job output with optional `?tail=N` parameter. Wired via `SetLogStore()`.
+3. **StreamLogs handler** — `internal/grpcserver/handlers.go`: now stores incoming log chunks from nodes into the logstore (was previously unimplemented/no-op).
+4. **Dashboard API** — `getJobLogs(id, tail?)` method added to ApiService. `JobLogEntry` and `JobLogsResponse` types added to models.
+5. **New Prometheus metrics** — `helion_retrying_jobs` (gauge), `helion_scheduled_jobs` (gauge), `CANCELLED`/`SKIPPED` added to `helion_jobs_total` counter.
+6. **Enhanced /readyz** — returns JSON with subsystem checks: `badgerdb`, `nodes`, `scheduler`, `grpc_server`. Returns 503 with specific check failures instead of generic error.
+7. **Coordinator wiring** — logstore created at startup, injected into gRPC server (for StreamLogs) and API server (for GET /jobs/{id}/logs).
+
+Deferred:
+- OpenTelemetry distributed tracing (trace IDs in logs/responses)
+- Per-job resource utilization tracking
+- Alerting rules / SLO definitions

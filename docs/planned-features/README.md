@@ -43,7 +43,7 @@ Decisions deferred or needing input.
 | Job state machine improvements | **Implemented** | P1 | [04-job-state-machine.md](04-job-state-machine.md) |
 | Priority queues | **Implemented** | P1 | [05-priority-queues.md](05-priority-queues.md) |
 | Event system | **Implemented** | P2 | [06-event-system.md](06-event-system.md) |
-| Observability improvements | Partial | P2 | [07-observability.md](07-observability.md) |
+| Observability improvements | **Implemented** | P2 | [07-observability.md](07-observability.md) |
 
 ### Priority definitions
 

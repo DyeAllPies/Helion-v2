@@ -43,6 +43,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/DyeAllPies/Helion-v2/internal/grpcserver"
+	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	"github.com/DyeAllPies/Helion-v2/internal/metrics"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
@@ -78,6 +79,10 @@ func main() {
 	}()
 
 	// ── Business logic ────────────────────────────────────────────────────
+	// ── Job log storage ───────────────────────────────────────────────────
+	logStore := logstore.NewBadgerLogStore(persister, 7*24*time.Hour)
+	log.Info("job log store initialized", slog.Duration("retention", 7*24*time.Hour))
+
 	// ── Event bus ─────────────────────────────────────────────────────────
 	eventBus := events.NewBus(256, log)
 	log.Info("event bus initialized")
@@ -226,6 +231,7 @@ func main() {
 			workflows.OnJobCompleted(cbCtx, jobID, status, jobs)
 		}),
 		grpcserver.WithRetryChecker(jobs),
+		grpcserver.WithLogStore(logStore),
 	)
 	if err != nil {
 		log.Error("create gRPC server", slog.Any("err", err))
@@ -283,6 +289,7 @@ func main() {
 	readiness := &coordinatorReadiness{db: persister, reg: registry}
 	apiSrv := api.NewServer(jobsAdapter, nodeRegistry, metricsProvider, auditLogger, tokenManager, rateLimiter, readiness, promHandler)
 	apiSrv.SetWorkflowStore(workflows, jobs)
+	apiSrv.SetLogStore(logStore)
 	apiSrv.SetEventBus(eventBus)
 	go func() {
 		log.Info("HTTP API listening", slog.String("addr", httpAddr))

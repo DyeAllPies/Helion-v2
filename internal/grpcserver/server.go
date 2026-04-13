@@ -38,6 +38,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
 	"google.golang.org/grpc"
@@ -103,6 +104,7 @@ type Server struct {
 	revocationChecker RevocationChecker     // nil means no revocation enforcement
 	onJobCompleted    JobCompletionCallback // nil means no workflow integration
 	retryChecker      RetryChecker          // nil means no retry support
+	logStore          logstore.Store        // nil means logs are discarded
 	log               *slog.Logger
 
 	// Active heartbeat streams: nodeID → done channel.
@@ -155,6 +157,11 @@ func WithJobCompletionCallback(cb JobCompletionCallback) Option {
 // failed/timed-out job should be retried based on its retry policy.
 func WithRetryChecker(rc RetryChecker) Option {
 	return func(s *Server) { s.retryChecker = rc }
+}
+
+// WithLogStore injects a log store for persisting job stdout/stderr.
+func WithLogStore(ls logstore.Store) Option {
+	return func(s *Server) { s.logStore = ls }
 }
 
 // WithLogger injects a structured logger.

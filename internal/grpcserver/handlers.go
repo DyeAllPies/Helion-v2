@@ -9,6 +9,8 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/DyeAllPies/Helion-v2/internal/logstore"
+
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
@@ -211,4 +213,31 @@ func (s *Server) ReportResult(
 	}
 
 	return &pb.Ack{Ok: true}, nil
+}
+
+// StreamLogs receives log chunks from nodes and stores them for later
+// retrieval via GET /jobs/{id}/logs.
+func (s *Server) StreamLogs(stream grpc.ClientStreamingServer[pb.LogChunk, pb.Ack]) error {
+	for {
+		chunk, err := stream.Recv()
+		if err == io.EOF {
+			return stream.SendAndClose(&pb.Ack{Ok: true})
+		}
+		if err != nil {
+			return err
+		}
+
+		if s.logStore != nil && len(chunk.Data) > 0 {
+			entry := logstore.LogEntry{
+				JobID: chunk.JobId,
+				Seq:   chunk.Seq,
+				Data:  string(chunk.Data),
+			}
+			if err := s.logStore.Append(stream.Context(), entry); err != nil {
+				s.log.Warn("failed to store log chunk",
+					slog.String("job_id", chunk.JobId),
+					slog.Any("err", err))
+			}
+		}
+	}
 }
