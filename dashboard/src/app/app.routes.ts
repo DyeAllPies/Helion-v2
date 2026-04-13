@@ -41,6 +41,11 @@ export const routes: Routes = [
           import('./features/workflows/workflow-detail.component').then(m => m.WorkflowDetailComponent),
       },
       {
+        path: 'events',
+        loadComponent: () =>
+          import('./features/events/event-feed.component').then(m => m.EventFeedComponent),
+      },
+      {
         path: 'metrics',
         loadComponent: () =>
           import('./features/metrics/cluster-metrics.component').then(m => m.ClusterMetricsComponent),

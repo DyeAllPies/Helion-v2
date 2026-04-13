@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/DyeAllPies/Helion-v2/internal/events"
+
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -101,6 +103,16 @@ func (s *JobStore) Transition(ctx context.Context, jobID string, to cpb.JobStatu
 		detail += " error=" + snap.Error
 	}
 	s.appendAuditAsync("job.transition", "coordinator", jobID, detail)
+
+	// Publish real-time event.
+	s.publishEvent(events.JobTransition(jobID, from.String(), to.String(), snap.NodeID))
+	switch to {
+	case cpb.JobStatusCompleted:
+		dur := snap.FinishedAt.Sub(snap.CreatedAt).Milliseconds()
+		s.publishEvent(events.JobCompleted(jobID, snap.NodeID, dur))
+	case cpb.JobStatusFailed:
+		s.publishEvent(events.JobFailed(jobID, snap.Error, snap.ExitCode, snap.Attempt))
+	}
 
 	return nil
 }

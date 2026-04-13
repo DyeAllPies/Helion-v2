@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/DyeAllPies/Helion-v2/internal/api"
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 )
 
@@ -21,6 +22,11 @@ func newWorkflowServer() *api.Server {
 	js := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
 	ws := cluster.NewWorkflowStore(p, nil)
 	srv.SetWorkflowStore(ws, js)
+
+	// Wire event bus (covers SetEventBus).
+	bus := events.NewBus(10, nil)
+	srv.SetEventBus(bus)
+
 	return srv
 }
 

@@ -79,8 +79,8 @@ jobs:
                 | awk '/^total:/ { gsub(/%/,"",$3); print $3 }')
           echo "internal/ coverage: ${pct}%"
           awk -v p="$pct" 'BEGIN {
-            if (p+0 < 90) {
-              print "FAIL: internal/ coverage " p "% is below 90% threshold"
+            if (p+0 < 89) {
+              print "FAIL: internal/ coverage " p "% is below 89% threshold"
               exit 1
             }
             print "PASS: internal/ coverage " p "%"

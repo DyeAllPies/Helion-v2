@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/DyeAllPies/Helion-v2/internal/events"
+
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -50,6 +52,8 @@ func (s *JobStore) Submit(ctx context.Context, j *cpb.Job) error {
 
 	s.appendAuditAsync("job.submitted", "coordinator", j.ID,
 		fmt.Sprintf("command=%q", j.Command))
+
+	s.publishEvent(events.JobSubmitted(j.ID, j.Command, j.Priority))
 
 	return nil
 }

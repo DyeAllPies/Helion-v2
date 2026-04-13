@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -110,6 +111,82 @@ func TestPendingByPriority_ExcludesNonPending(t *testing.T) {
 	}
 	if pending[0].ID != "pending-job" {
 		t.Errorf("expected pending-job, got %q", pending[0].ID)
+	}
+}
+
+// ── Event emission ───────────────────────────────────────────────────────────
+
+func TestJobStore_EventBus_EmitsOnSubmit(t *testing.T) {
+	bus := events.NewBus(10, nil)
+	js := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+	js.SetEventBus(bus)
+
+	sub := bus.Subscribe("job.submitted")
+	defer sub.Cancel()
+
+	_ = js.Submit(context.Background(), &cpb.Job{ID: "evt-1", Command: "echo"})
+
+	select {
+	case e := <-sub.C:
+		if e.Type != events.TopicJobSubmitted {
+			t.Errorf("type = %q, want job.submitted", e.Type)
+		}
+		if e.Data["job_id"] != "evt-1" {
+			t.Errorf("job_id = %v, want evt-1", e.Data["job_id"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for submit event")
+	}
+}
+
+func TestJobStore_EventBus_EmitsOnTransition(t *testing.T) {
+	bus := events.NewBus(10, nil)
+	js := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+	js.SetEventBus(bus)
+
+	sub := bus.Subscribe("job.*")
+	defer sub.Cancel()
+
+	ctx := context.Background()
+	_ = js.Submit(ctx, &cpb.Job{ID: "evt-2", Command: "echo"})
+
+	// Drain the submit event.
+	<-sub.C
+
+	_ = js.Transition(ctx, "evt-2", cpb.JobStatusScheduled, cluster.TransitionOptions{})
+
+	select {
+	case e := <-sub.C:
+		if e.Type != events.TopicJobTransition {
+			t.Errorf("type = %q, want job.transition", e.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for transition event")
+	}
+}
+
+func TestJobStore_EventBus_EmitsCompletedOnSuccess(t *testing.T) {
+	bus := events.NewBus(10, nil)
+	js := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+	js.SetEventBus(bus)
+
+	sub := bus.Subscribe("job.completed")
+	defer sub.Cancel()
+
+	ctx := context.Background()
+	_ = js.Submit(ctx, &cpb.Job{ID: "evt-3", Command: "echo"})
+	_ = js.Transition(ctx, "evt-3", cpb.JobStatusScheduled, cluster.TransitionOptions{})
+	_ = js.Transition(ctx, "evt-3", cpb.JobStatusDispatching, cluster.TransitionOptions{})
+	_ = js.Transition(ctx, "evt-3", cpb.JobStatusRunning, cluster.TransitionOptions{})
+	_ = js.Transition(ctx, "evt-3", cpb.JobStatusCompleted, cluster.TransitionOptions{})
+
+	select {
+	case e := <-sub.C:
+		if e.Data["job_id"] != "evt-3" {
+			t.Errorf("job_id = %v, want evt-3", e.Data["job_id"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for completed event")
 	}
 }
 

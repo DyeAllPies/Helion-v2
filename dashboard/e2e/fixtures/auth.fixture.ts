@@ -37,6 +37,7 @@ const NAV_LINKS: Record<string, string> = {
   '/nodes':     'Nodes',
   '/jobs':      'Jobs',
   '/workflows': 'Workflows',
+  '/events':    'Events',
   '/metrics':   'Metrics',
   '/audit':     'Audit',
 };

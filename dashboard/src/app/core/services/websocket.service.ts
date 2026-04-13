@@ -16,7 +16,7 @@ import { map } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import { AuthService } from './auth.service';
 import { mapMetrics } from './api.service';
-import { LogChunk, MetricsFrame } from '../../shared/models';
+import { LogChunk, MetricsFrame, EventFrame } from '../../shared/models';
 
 @Injectable({ providedIn: 'root' })
 export class WebSocketService {
@@ -32,7 +32,61 @@ export class WebSocketService {
 
   metrics(): Observable<MetricsFrame> {
     const url = `${environment.wsUrl}/ws/metrics`;
-    return this._connect<any>(url).pipe(map(m => mapMetrics(m)));
+    return this._connect<Record<string, unknown>>(url).pipe(map(m => mapMetrics(m)));
+  }
+
+  /**
+   * Connect to /ws/events and subscribe to the given topic patterns.
+   * Emits parsed Event frames.
+   */
+  events(topics: string[]): Observable<EventFrame> {
+    const url = `${environment.wsUrl}/ws/events`;
+    return new Observable<EventFrame>(observer => {
+      let ws: WebSocket | null = new WebSocket(url);
+      let authed = false;
+
+      ws.onopen = () => {
+        const token = this.auth.token;
+        if (token && ws) {
+          ws.send(JSON.stringify({ type: 'auth', token }));
+        }
+      };
+
+      ws.onmessage = ({ data }) => {
+        try {
+          const msg = JSON.parse(data as string);
+          if (msg.type === 'auth_ok') {
+            // Auth succeeded — send subscription.
+            if (ws) {
+              ws.send(JSON.stringify({ subscribe: topics }));
+            }
+            return;
+          }
+          if (msg.type === 'auth_error') {
+            observer.error(new Error('Event stream authentication failed'));
+            return;
+          }
+          if (msg.type === 'subscribed') {
+            authed = true;
+            return;
+          }
+          if (authed) {
+            observer.next(msg as EventFrame);
+          }
+        } catch { /* skip malformed */ }
+      };
+
+      ws.onerror = () => observer.error(new Error('Event stream error'));
+      ws.onclose = ({ code, reason }) => {
+        if (code === 1000) observer.complete();
+        else observer.error(new Error(`Event stream closed ${code}: ${reason}`));
+      };
+
+      return () => {
+        if (ws && ws.readyState !== WebSocket.CLOSED) ws.close(1000, 'unsubscribed');
+        ws = null;
+      };
+    });
   }
 
   // ── Private factory ───────────────────────────────────────────────────────────

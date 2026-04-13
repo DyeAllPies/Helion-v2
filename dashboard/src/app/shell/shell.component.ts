@@ -187,6 +187,7 @@ export class ShellComponent {
     { path: '/nodes',   label: 'Nodes',   icon: 'dns'           },
     { path: '/jobs',      label: 'Jobs',      icon: 'work_outline'  },
     { path: '/workflows', label: 'Workflows', icon: 'account_tree'  },
+    { path: '/events',  label: 'Events',  icon: 'bolt'          },
     { path: '/metrics', label: 'Metrics', icon: 'show_chart'    },
     { path: '/audit',   label: 'Audit',   icon: 'receipt_long'  },
   ];

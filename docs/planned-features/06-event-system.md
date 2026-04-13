@@ -1,8 +1,8 @@
 # Feature: Event System
 
 **Priority:** P2
-**Status:** Missing — audit logs are append-only/read-only, no live streaming or pub/sub
-**Affected files:** `internal/audit/logger.go`, `internal/api/handlers_ws.go`, `internal/cluster/job_transition.go`
+**Status:** Implemented (core bus + WS stream; webhooks deferred)
+**Affected files:** `internal/events/bus.go`, `internal/events/topics.go`, `internal/cluster/job.go`, `internal/cluster/job_transition.go`, `internal/api/handlers_ws.go`, `internal/api/server.go`
 
 ## Problem
 
@@ -159,3 +159,19 @@ events/
 - If Helion ever supports multiple coordinators, replace with Redis pub/sub or NATS
 - Webhook delivery runs in a goroutine pool (default: 10 workers) to avoid blocking the event bus
 - Channel buffer size: 256 events per subscriber (drops oldest on overflow, logs warning)
+
+## Implementation status
+
+Core event system implemented. Webhooks deferred as a standalone add-on.
+
+1. **Event bus** — `internal/events/bus.go`: in-memory pub/sub with glob topic matching. Non-blocking publish, 256-event channel buffer per subscriber, drops on overflow.
+2. **Event topics** — `internal/events/topics.go`: 10 topic constants + typed constructors (JobSubmitted, JobTransition, JobCompleted, JobFailed, JobRetrying, NodeRegistered, NodeStale, NodeRevoked, WorkflowCompleted, WorkflowFailed).
+3. **Emission** — `JobStore.Submit` emits `job.submitted`, `Transition` emits `job.transition` + `job.completed`/`job.failed` for terminal states. Bus wired via `SetEventBus()`.
+4. **WebSocket endpoint** — `GET /ws/events`: first-message JWT auth, then client sends `{"subscribe":["job.*"]}`, server streams matching events as JSON frames.
+5. **Dashboard** — Events page at `/events` with live feed, color-coded by category (job/node/workflow), clear button, LIVE/DISCONNECTED indicator.
+6. **Coordinator wiring** — Bus created at startup, injected into JobStore and API server.
+7. **Tests** — 9 bus unit tests (pub/sub, filtering, wildcard, cancel, subscriber count), 3 event emission integration tests, 10 topic constructor tests. Events package at 95.7% coverage.
+
+Deferred:
+- Webhook registration + delivery (POST /webhooks API)
+- Event-driven DAG evaluation (replacing poll-based dispatch for workflows)

@@ -56,6 +56,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -140,6 +141,7 @@ type JobStore struct {
 	jobs      map[string]*cpb.Job // keyed by job ID
 	persister JobPersister
 	log       *slog.Logger
+	eventBus  *events.Bus // nil if events not enabled
 
 	// auditWG tracks fire-and-forget background goroutines so Close can
 	// wait for them during graceful shutdown. See AUDIT 2026-04-11/M1
@@ -161,6 +163,18 @@ func NewJobStore(p JobPersister, log *slog.Logger) *JobStore {
 		jobs:      make(map[string]*cpb.Job),
 		persister: p,
 		log:       log,
+	}
+}
+
+// SetEventBus attaches an event bus to the JobStore for real-time event emission.
+func (s *JobStore) SetEventBus(bus *events.Bus) {
+	s.eventBus = bus
+}
+
+// publishEvent publishes an event if the bus is configured. Non-blocking.
+func (s *JobStore) publishEvent(e events.Event) {
+	if s.eventBus != nil {
+		s.eventBus.Publish(e)
 	}
 }
 

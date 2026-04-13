@@ -41,6 +41,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/DyeAllPies/Helion-v2/internal/grpcserver"
 	"github.com/DyeAllPies/Helion-v2/internal/metrics"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
@@ -77,8 +78,13 @@ func main() {
 	}()
 
 	// ── Business logic ────────────────────────────────────────────────────
+	// ── Event bus ─────────────────────────────────────────────────────────
+	eventBus := events.NewBus(256, log)
+	log.Info("event bus initialized")
+
 	registry := cluster.NewRegistry(persister, heartbeatInterval, log)
 	jobs := cluster.NewJobStore(persister, log)
+	jobs.SetEventBus(eventBus)
 	workflows := cluster.NewWorkflowStore(persister, log)
 
 	ctx, cancel := signal.NotifyContext(context.Background(),
@@ -277,6 +283,7 @@ func main() {
 	readiness := &coordinatorReadiness{db: persister, reg: registry}
 	apiSrv := api.NewServer(jobsAdapter, nodeRegistry, metricsProvider, auditLogger, tokenManager, rateLimiter, readiness, promHandler)
 	apiSrv.SetWorkflowStore(workflows, jobs)
+	apiSrv.SetEventBus(eventBus)
 	go func() {
 		log.Info("HTTP API listening", slog.String("addr", httpAddr))
 		if err := apiSrv.Serve(httpAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {

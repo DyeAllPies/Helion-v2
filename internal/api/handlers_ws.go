@@ -120,6 +120,63 @@ func (s *Server) handleJobLogStream(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
+// wsSubscribeMsg is a subscription request from the client on /ws/events.
+type wsSubscribeMsg struct {
+	Subscribe []string `json:"subscribe"` // topic patterns (e.g. "job.*", "node.stale")
+}
+
+func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if s.eventBus == nil {
+		http.Error(w, "event system not enabled", http.StatusNotImplemented)
+		return
+	}
+
+	conn, err := s.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	if err := s.wsAuthenticateConn(ctx, conn); err != nil {
+		return
+	}
+
+	// Read the subscription message from the client.
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		return
+	}
+	var subMsg wsSubscribeMsg
+	if err := json.Unmarshal(raw, &subMsg); err != nil || len(subMsg.Subscribe) == 0 {
+		_ = conn.WriteJSON(map[string]string{"type": "error", "message": "send {\"subscribe\":[\"topic.*\"]}"})
+		return
+	}
+
+	// Subscribe to the requested topics.
+	sub := s.eventBus.Subscribe(subMsg.Subscribe...)
+	defer sub.Cancel()
+
+	// Send confirmation.
+	_ = conn.WriteJSON(map[string]string{"type": "subscribed"})
+
+	// Stream events to the client until disconnect or context cancel.
+	for {
+		select {
+		case event, ok := <-sub.C:
+			if !ok {
+				return
+			}
+			if err := conn.WriteJSON(event); err != nil {
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func (s *Server) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

@@ -195,3 +195,10 @@ export interface LogChunk {
 }
 
 export type MetricsFrame = ClusterMetrics;
+
+export interface EventFrame {
+  id:        string;
+  type:      string;
+  timestamp: string;
+  data?:     Record<string, unknown>;
+}

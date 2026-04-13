@@ -18,15 +18,16 @@ test.describe('Sidebar Navigation', () => {
     await expect(page.locator('.brand-version')).toContainText('v2');
   });
 
-  test('all five nav items are present', async ({ authedPage: page }) => {
+  test('all six nav items are present', async ({ authedPage: page }) => {
     const navLinks = page.locator('a.nav-link');
-    await expect(navLinks).toHaveCount(5);
+    await expect(navLinks).toHaveCount(6);
 
     const labels = await navLinks.allTextContents();
     const joined = labels.map(l => l.trim().toUpperCase()).join(' ');
     expect(joined).toContain('NODES');
     expect(joined).toContain('JOBS');
     expect(joined).toContain('WORKFLOWS');
+    expect(joined).toContain('EVENTS');
     expect(joined).toContain('METRICS');
     expect(joined).toContain('AUDIT');
   });
