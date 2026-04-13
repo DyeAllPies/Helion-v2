@@ -24,6 +24,9 @@ func (s *JobStore) Submit(ctx context.Context, j *cpb.Job) error {
 	if j.Attempt == 0 {
 		j.Attempt = 1
 	}
+	if j.Priority == 0 {
+		j.Priority = 50 // default: normal priority
+	}
 
 	s.mu.Lock()
 	if _, exists := s.jobs[j.ID]; exists {

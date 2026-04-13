@@ -1,8 +1,8 @@
 # Feature: Priority Queues
 
 **Priority:** P1
-**Status:** Missing — all jobs treated equally, no priority field
-**Affected files:** `proto/coordinator.proto`, `internal/cluster/dispatch.go`, `internal/cluster/job_submit.go`
+**Status:** Implemented
+**Affected files:** `internal/proto/coordinatorpb/types.go`, `internal/cluster/priority.go`, `internal/cluster/dispatch.go`, `internal/cluster/job_submit.go`, `internal/api/handlers_jobs.go`
 
 ## Problem
 
@@ -134,6 +134,17 @@ True preemption (killing a low-priority running job to free capacity for a high-
 
 ## Open questions
 
-- Should priority be mutable after submission? (Yes — allow `PATCH /jobs/{id}` to update priority of pending jobs only)
-- Per-user priority limits? (Defer — requires user/tenant model)
-- Priority inheritance in DAGs? (Jobs inherit workflow priority unless overridden — simple, ship it)
+- Should priority be mutable after submission? (Deferred — `PATCH /jobs/{id}`)
+- Per-user priority limits? (Deferred — requires user/tenant model)
+- Minimum dispatch ratio / starvation reserve? (Deferred — age boost is sufficient for now)
+
+## Implementation status
+
+1. **Job priority field** — `Priority uint32` on Job (0-100, default 50 set in Submit).
+2. **EffectivePriority** — `priority.go`: age-based boost (+1/min pending, capped at 100).
+3. **PendingByPriority** — sorted descending by effective priority, FIFO within same priority.
+4. **Dispatch loop** — uses `PendingByPriority()` instead of `List()` (random map order).
+5. **API** — `POST /jobs` accepts optional `priority` (0-100, validated). `GET /jobs/{id}` returns priority in response.
+6. **Workflow priority** — `Workflow.Priority` sets default for all jobs. `WorkflowJob.Priority` overrides per-job. Inherited in `WorkflowStore.Start()`.
+7. **Dashboard** — PRI column in job list with color coding (red >=70, dim <30).
+8. **Tests** — 7 priority unit tests, 3 API tests, 1 E2E integration test.

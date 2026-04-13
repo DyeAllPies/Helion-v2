@@ -56,6 +56,7 @@ func jobToResponse(j *cpb.Job) JobResponse {
 		t := j.FinishedAt
 		resp.FinishedAt = &t
 	}
+	resp.Priority = j.Priority
 	if j.Attempt > 0 {
 		resp.Attempt = j.Attempt
 	}

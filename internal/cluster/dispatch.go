@@ -93,11 +93,8 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 	eligible := d.buildEligibleSet()
 
 	now := time.Now()
-	jobs := d.jobs.List()
+	jobs := d.jobs.PendingByPriority()
 	for _, job := range jobs {
-		if job.Status != cpb.JobStatusPending {
-			continue
-		}
 
 		// Skip jobs in backoff window (waiting for retry delay to expire).
 		if !job.RetryAfter.IsZero() && now.Before(job.RetryAfter) {

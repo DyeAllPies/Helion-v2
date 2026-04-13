@@ -58,6 +58,7 @@ type SubmitRequest struct {
 	TimeoutSeconds int64               `json:"timeout_seconds"` // optional; 0 means no limit
 	Limits         ResourceLimits      `json:"limits,omitempty"` // optional cgroup v2 resource limits
 	Resources      *ResourceRequestAPI `json:"resources,omitempty"` // optional scheduling reservation
+	Priority       *uint32             `json:"priority,omitempty"` // 0-100, default 50
 	RetryPolicy    *RetryPolicyRequest `json:"retry_policy,omitempty"` // optional retry configuration
 }
 
@@ -76,6 +77,7 @@ type JobResponse struct {
 	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
 	Error          string            `json:"error,omitempty"`
 	SubmittedBy    string            `json:"submitted_by,omitempty"` // AUDIT L1
+	Priority       uint32            `json:"priority,omitempty"`
 	Attempt        uint32            `json:"attempt,omitempty"`
 	RetryAfter     *time.Time        `json:"retry_after,omitempty"`
 }

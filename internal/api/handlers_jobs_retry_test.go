@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/DyeAllPies/Helion-v2/internal/api"
 )
 
 func TestSubmitJob_WithRetryPolicy_Returns201(t *testing.T) {
@@ -134,6 +136,42 @@ func TestCancelJobAPI_NotFound_Returns404(t *testing.T) {
 		t.Errorf("status = %d, want 404", rr.Code)
 	}
 }
+
+// ── Priority ─────────────────────────────────────────────────────────────────
+
+func TestSubmitJob_WithPriority_Returns201(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{"id":"pri-1","command":"echo","priority":90}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp api.JobResponse
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	if resp.Priority != 90 {
+		t.Errorf("priority = %d, want 90", resp.Priority)
+	}
+}
+
+func TestSubmitJob_PriorityTooHigh_Returns400(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{"id":"pri-bad","command":"echo","priority":101}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for priority > 100", rr.Code)
+	}
+}
+
+func TestSubmitJob_NoPriority_Accepted(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{"id":"pri-default","command":"echo"}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rr.Code)
+	}
+}
+
+// ── Resources ────────────────────────────────────────────────────────────────
 
 func TestSubmitJob_WithResources_Returns201(t *testing.T) {
 	srv := newServer(newMockJobStore(), nil, nil)

@@ -153,6 +153,15 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	// Parse optional priority.
+	if req.Priority != nil {
+		if *req.Priority > 100 {
+			writeError(w, http.StatusBadRequest, "priority must be between 0 and 100")
+			return
+		}
+		job.Priority = *req.Priority
+	}
+
 	// Parse optional resource request.
 	if req.Resources != nil {
 		job.Resources = cpb.ResourceRequest{

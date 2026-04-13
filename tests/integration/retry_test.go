@@ -215,6 +215,45 @@ func TestJob_SubmitWithResources(t *testing.T) {
 	t.Log("job with resources submitted successfully")
 }
 
+// ── TestJob_SubmitWithPriority ────────────────────────────────────────────────
+
+func TestJob_SubmitWithPriority(t *testing.T) {
+	dbPath := t.TempDir()
+	persister, err := cluster.NewBadgerJSONPersister(dbPath, 10*time.Second)
+	if err != nil {
+		t.Fatalf("open BadgerDB: %v", err)
+	}
+	t.Cleanup(func() { _ = persister.Close() })
+
+	jobs := cluster.NewJobStore(persister, nil)
+	addr := startRetryAPIServer(t, jobs)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"id":       "priority-job-1",
+		"command":  "echo",
+		"priority": 95,
+	})
+
+	resp, err := http.Post("http://"+addr+"/jobs", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /jobs: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+
+	var result api.JobResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.Priority != 95 {
+		t.Errorf("priority = %d, want 95", result.Priority)
+	}
+	t.Logf("job %s submitted with priority=%d", result.ID, result.Priority)
+}
+
 // ── TestRetry_NoPolicy_DefaultBehavior ───────────────────────────────────────
 
 func TestRetry_NoPolicy_DefaultBehavior(t *testing.T) {

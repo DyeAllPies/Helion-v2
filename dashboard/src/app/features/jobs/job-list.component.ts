@@ -73,6 +73,14 @@ import { Job, JobStatus } from '../../shared/models';
         </td>
       </ng-container>
 
+      <ng-container matColumnDef="priority">
+        <th mat-header-cell *matHeaderCellDef>PRI</th>
+        <td mat-cell *matCellDef="let j">
+          <span class="priority-cell" [class.priority-high]="(j.priority ?? 50) >= 70"
+                [class.priority-low]="(j.priority ?? 50) < 30">{{ j.priority ?? 50 }}</span>
+        </td>
+      </ng-container>
+
       <ng-container matColumnDef="node_id">
         <th mat-header-cell *matHeaderCellDef>NODE</th>
         <td mat-cell *matCellDef="let j">
@@ -212,6 +220,13 @@ import { Job, JobStatus } from '../../shared/models';
       &:hover { text-decoration: underline; }
     }
 
+    .priority-cell {
+      font-size: 11px;
+      color: var(--color-muted);
+    }
+    .priority-high { color: var(--color-error); font-weight: 600; }
+    .priority-low  { color: var(--color-accent-dim); }
+
     .cmd-cell {
       font-size: 12px;
       color: #c8d0dc;
@@ -251,7 +266,7 @@ export class JobListComponent implements OnInit {
   pageSize     = 25;
   statusFilter = '';
 
-  readonly cols     = ['status','id','command','node_id','runtime','created_at','finished_at','exit_code','actions'];
+  readonly cols     = ['status','id','command','priority','node_id','runtime','created_at','finished_at','exit_code','actions'];
   readonly statuses: JobStatus[] = ['pending','scheduled','dispatching','running','completed','failed','timeout','lost','retrying','cancelled','skipped'];
 
   constructor(private api: ApiService) {}

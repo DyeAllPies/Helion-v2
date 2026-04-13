@@ -481,3 +481,68 @@ test.describe('Jobs Retry Policy', () => {
     expect(texts).toContain('retrying');
   });
 });
+
+test.describe('Jobs Priority', () => {
+
+  test('PRI column header is present', async ({ authedPage: page }) => {
+    const token = getRootToken();
+    await submitJob(token, { id: `e2e-pri-col-${Date.now()}`, command: 'echo' });
+
+    await navigateTo(page, '/jobs');
+    await expect(page.locator('table[mat-table] tr.mat-mdc-row').first())
+      .toBeVisible({ timeout: 15_000 });
+
+    const headers = page.locator('table[mat-table] th');
+    const headerTexts = (await headers.allTextContents()).map(h => h.trim());
+    expect(headerTexts).toContain('PRI');
+  });
+
+  test('job with high priority shows priority value', async ({ authedPage: page }) => {
+    const token = getRootToken();
+    const jobId = `e2e-pri-high-${Date.now()}`;
+
+    await submitJob(token, { id: jobId, command: 'echo', args: ['urgent'], priority: 95 });
+
+    await navigateTo(page, '/jobs');
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
+
+    // The row containing our job should show "95" in the priority cell.
+    const row = page.locator(`tr:has-text("${jobId}")`);
+    await expect(row.locator('.priority-cell')).toContainText('95');
+  });
+
+  test('job with default priority shows 50', async ({ authedPage: page }) => {
+    const token = getRootToken();
+    const jobId = `e2e-pri-default-${Date.now()}`;
+
+    await submitJob(token, { id: jobId, command: 'echo' });
+
+    await navigateTo(page, '/jobs');
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
+
+    const row = page.locator(`tr:has-text("${jobId}")`);
+    await expect(row.locator('.priority-cell')).toContainText('50');
+  });
+
+  test('high priority job has priority-high styling', async ({ authedPage: page }) => {
+    const token = getRootToken();
+    const jobId = `e2e-pri-style-${Date.now()}`;
+
+    await submitJob(token, { id: jobId, command: 'echo', priority: 85 });
+
+    await navigateTo(page, '/jobs');
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
+
+    const row = page.locator(`tr:has-text("${jobId}")`);
+    await expect(row.locator('.priority-high')).toBeVisible();
+  });
+});

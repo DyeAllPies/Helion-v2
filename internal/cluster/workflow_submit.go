@@ -72,12 +72,19 @@ func (s *WorkflowStore) Start(ctx context.Context, workflowID string, jobs *JobS
 		jobID := fmt.Sprintf("%s/%s", workflowID, wj.Name)
 		wj.JobID = jobID
 
+		// Job priority: use per-job override, fall back to workflow default.
+		priority := w.Priority
+		if wj.Priority > 0 {
+			priority = wj.Priority
+		}
+
 		job := &cpb.Job{
 			ID:             jobID,
 			Command:        wj.Command,
 			Args:           wj.Args,
 			Env:            wj.Env,
 			TimeoutSeconds: wj.TimeoutSeconds,
+			Priority:       priority,
 			WorkflowID:     workflowID,
 		}
 

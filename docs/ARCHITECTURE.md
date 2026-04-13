@@ -220,7 +220,7 @@ security contract (JWT in-memory only, first-message WebSocket auth, CSP).
 | Every push / PR | `build` | `go vet` · `golangci-lint` · `go test -race ./...` · `go test ./internal/...` with ≥ 90% coverage gate |
 | Every push / PR | `test-rust` | `cargo clippy -D warnings` · `cargo llvm-cov` with ≥ 85% coverage gate |
 | Every push / PR | `test-dashboard` | `npm ci` · `ng lint` · `ng test --browsers=ChromeHeadless` with coverage thresholds |
-| After unit suites pass | `e2e` | Build Docker images · boot cluster · wait for healthy nodes · run 97 Playwright E2E tests · tear down |
+| After unit suites pass | `e2e` | Build Docker images · boot cluster · wait for healthy nodes · run 103 Playwright E2E tests · tear down |
 | After all suites pass | `snyk` | `snyk test --severity-threshold=high` (Go deps) · `snyk container test` (coordinator image) |
 | After all suites pass | `docker` | `docker buildx build` for coordinator and node images (cache to GHA) |
 
@@ -240,7 +240,7 @@ artifacts for debugging.
   node certificate, rate limit enforcement, audit log completeness.
 - **Angular unit tests.** Karma + Jasmine for component unit tests. Coverage thresholds enforced
   in `karma.conf.js` (98% stmt/lines, 96% fn, 95% branch).
-- **E2E tests.** In `dashboard/e2e/`. 97 Playwright specs covering the full path from
+- **E2E tests.** In `dashboard/e2e/`. 103 Playwright specs covering the full path from
   coordinator + nodes (gRPC registration, job dispatch) through the Angular dashboard
   (login, nodes, jobs, metrics, audit). Tests run against a real cluster — no mocks.
 - **Benchmarks.** In `tests/bench/`. Measure Go vs Rust runtime latency and throughput.

@@ -169,6 +169,10 @@ type Job struct {
 	// WorkflowID links this job to a workflow. Empty for standalone jobs.
 	WorkflowID string `json:"workflow_id,omitempty"`
 
+	// Priority controls dispatch ordering. 0 (lowest) to 100 (highest).
+	// Default: 50 (normal). Higher-priority jobs are dispatched first.
+	Priority uint32 `json:"priority,omitempty"`
+
 	// Resources declares the resource reservation for scheduling.
 	// Zero value means use DefaultResourceRequest().
 	Resources ResourceRequest `json:"resources,omitempty"`
@@ -314,6 +318,7 @@ type WorkflowJob struct {
 	Runtime        string              `json:"runtime,omitempty"`
 	DependsOn      []string            `json:"depends_on,omitempty"`     // names of upstream jobs
 	Condition      DependencyCondition `json:"condition,omitempty"`      // when to run (default: on_success)
+	Priority       uint32              `json:"priority,omitempty"`       // overrides workflow priority; 0 = inherit
 	JobID          string              `json:"job_id,omitempty"`         // set after job is created in JobStore
 }
 
@@ -324,6 +329,7 @@ type WorkflowJob struct {
 type Workflow struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`
+	Priority  uint32         `json:"priority,omitempty"` // default priority for all jobs; 0 = 50
 	Jobs      []WorkflowJob  `json:"jobs"`
 	Status    WorkflowStatus `json:"status"`
 	CreatedAt time.Time      `json:"created_at"`

@@ -24,6 +24,7 @@ export interface Job {
   command:       string;
   args:          string[];
   status:        JobStatus;
+  priority?:     number;   // 0-100, default 50
   runtime?:      string;   // "go" or "rust"
   created_at:    string;   // ISO 8601
   dispatched_at?: string;

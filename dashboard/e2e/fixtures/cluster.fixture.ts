@@ -101,8 +101,8 @@ export async function waitForNodes(
  */
 export async function submitJob(
   token: string,
-  payload: { id: string; command: string; args?: string[] },
-): Promise<{ id: string; status: string }> {
+  payload: { id: string; command: string; args?: string[]; priority?: number },
+): Promise<{ id: string; status: string; priority?: number }> {
   const res = await fetch(`${API_URL}/jobs`, {
     method: 'POST',
     headers: {

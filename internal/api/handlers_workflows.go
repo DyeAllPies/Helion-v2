@@ -38,13 +38,15 @@ type WorkflowJobRequest struct {
 	Runtime        string            `json:"runtime,omitempty"`
 	DependsOn      []string          `json:"depends_on,omitempty"`
 	Condition      string            `json:"condition,omitempty"` // "on_success" (default), "on_failure", "on_complete"
+	Priority       *uint32           `json:"priority,omitempty"` // overrides workflow priority; 0-100
 }
 
 // SubmitWorkflowRequest is the JSON body for POST /workflows.
 type SubmitWorkflowRequest struct {
-	ID   string               `json:"id"`
-	Name string               `json:"name"`
-	Jobs []WorkflowJobRequest `json:"jobs"`
+	ID       string               `json:"id"`
+	Name     string               `json:"name"`
+	Priority *uint32              `json:"priority,omitempty"` // default priority for all jobs; 0-100
+	Jobs     []WorkflowJobRequest `json:"jobs"`
 }
 
 // WorkflowJobResponse is a single job in the workflow response.
@@ -126,7 +128,7 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 	// Convert request to internal types.
 	wfJobs := make([]cpb.WorkflowJob, len(req.Jobs))
 	for i, j := range req.Jobs {
-		wfJobs[i] = cpb.WorkflowJob{
+		wj := cpb.WorkflowJob{
 			Name:           j.Name,
 			Command:        j.Command,
 			Args:           j.Args,
@@ -136,12 +138,19 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 			DependsOn:      j.DependsOn,
 			Condition:      parseCondition(j.Condition),
 		}
+		if j.Priority != nil {
+			wj.Priority = *j.Priority
+		}
+		wfJobs[i] = wj
 	}
 
 	wf := &cpb.Workflow{
 		ID:   req.ID,
 		Name: req.Name,
 		Jobs: wfJobs,
+	}
+	if req.Priority != nil {
+		wf.Priority = *req.Priority
 	}
 
 	// Submit validates DAG and persists.
