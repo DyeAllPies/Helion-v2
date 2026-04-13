@@ -22,6 +22,7 @@ type JobStoreAdapter struct {
 		Get(jobID string) (*cpb.Job, error)
 		List() []*cpb.Job
 		GetJobsByStatus(ctx context.Context, status string) ([]*cpb.Job, error)
+		CancelJob(ctx context.Context, jobID, reason string) error
 	}
 }
 
@@ -33,6 +34,7 @@ func NewJobStoreAdapter(store interface {
 	Get(jobID string) (*cpb.Job, error)
 	List() []*cpb.Job
 	GetJobsByStatus(ctx context.Context, status string) ([]*cpb.Job, error)
+	CancelJob(ctx context.Context, jobID, reason string) error
 }) *JobStoreAdapter {
 	return &JobStoreAdapter{store: store}
 }
@@ -47,6 +49,10 @@ func (a *JobStoreAdapter) Get(jobID string) (*cpb.Job, error) {
 
 func (a *JobStoreAdapter) GetJobsByStatus(ctx context.Context, status string) ([]*cpb.Job, error) {
 	return a.store.GetJobsByStatus(ctx, status)
+}
+
+func (a *JobStoreAdapter) CancelJob(ctx context.Context, jobID, reason string) error {
+	return a.store.CancelJob(ctx, jobID, reason)
 }
 
 // List implements paginated list with filtering.

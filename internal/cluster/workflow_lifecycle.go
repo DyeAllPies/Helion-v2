@@ -138,8 +138,10 @@ func (s *WorkflowStore) OnJobCompleted(ctx context.Context, jobID string, jobSta
 				if wj.Name == descName && wj.JobID != "" {
 					// Only cascade-skip jobs whose condition requires success.
 					if wj.Condition == cpb.DependencyOnSuccess {
-						_ = jobs.MarkLost(ctx, wj.JobID,
-							fmt.Sprintf("upstream job %q %s", targetJobName, jobStatus))
+						// Use skipped state for DAG cascade (not lost).
+						_ = jobs.Transition(ctx, wj.JobID, cpb.JobStatusSkipped, TransitionOptions{
+							ErrMsg: fmt.Sprintf("upstream job %q %s", targetJobName, jobStatus),
+						})
 					}
 				}
 			}
@@ -162,7 +164,7 @@ func (s *WorkflowStore) OnJobCompleted(ctx context.Context, jobID string, jobSta
 			allTerminal = false
 			break
 		}
-		if j.Status == cpb.JobStatusFailed || j.Status == cpb.JobStatusTimeout || j.Status == cpb.JobStatusLost {
+		if j.Status == cpb.JobStatusFailed || j.Status == cpb.JobStatusTimeout || j.Status == cpb.JobStatusLost || j.Status == cpb.JobStatusSkipped {
 			anyFailed = true
 		}
 	}

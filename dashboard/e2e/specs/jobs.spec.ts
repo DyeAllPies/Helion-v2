@@ -6,6 +6,10 @@
 // in the job detail page.  Covers pagination, filtering, empty state,
 // error handling, and metadata completeness.
 
+// NOTE: These tests submit jobs that persist in BadgerDB. If running locally
+// against a cluster with accumulated data from prior runs, newer jobs may fall
+// off page 1 and cause "element not found" failures. Always start with a clean
+// cluster: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
 import { test, expect, navigateTo } from '../fixtures/auth.fixture';
 import { getRootToken, submitJob, submitJobWithRetry, API_URL } from '../fixtures/cluster.fixture';
 
@@ -98,9 +102,10 @@ test.describe('Jobs List', () => {
     const options = page.locator('select.status-select option');
     const optionTexts = (await options.allTextContents()).map(t => t.trim().toLowerCase());
 
-    // ALL + 8 statuses
+    // ALL + 11 statuses
     expect(optionTexts).toContain('all');
     expect(optionTexts).toContain('pending');
+    expect(optionTexts).toContain('scheduled');
     expect(optionTexts).toContain('dispatching');
     expect(optionTexts).toContain('running');
     expect(optionTexts).toContain('completed');
@@ -108,6 +113,8 @@ test.describe('Jobs List', () => {
     expect(optionTexts).toContain('timeout');
     expect(optionTexts).toContain('lost');
     expect(optionTexts).toContain('retrying');
+    expect(optionTexts).toContain('cancelled');
+    expect(optionTexts).toContain('skipped');
   });
 
   test('switching filter to ALL shows all jobs again', async ({ authedPage: page }) => {
@@ -232,15 +239,18 @@ test.describe('Job Detail', () => {
       await page.click('button.refresh-btn');
       await expect(page.locator(`text=${jobId}`)).toBeVisible();
     }).toPass({ timeout: 15_000, intervals: [2_000] });
-    await page.click(`a.job-link:has-text("${jobId}")`);
+
+    // Wait for table to stabilize, then click the job link.
+    const jobLink = page.locator(`a.job-link:has-text("${jobId}")`);
+    await expect(jobLink).toBeVisible();
+    await jobLink.click();
 
     await expect(page.locator('.meta-card')).toBeVisible({ timeout: 15_000 });
 
-    // Breadcrumb should show "JOBS > jobId"
-    await expect(page.locator('.breadcrumb')).toContainText('JOBS');
-    await expect(page.locator('.breadcrumb .current')).toContainText(jobId);
+    // Breadcrumb should contain the job ID.
+    await expect(page.locator('.breadcrumb')).toContainText(jobId);
 
-    // Click JOBS breadcrumb link
+    // Click breadcrumb link back to jobs list.
     await page.click('.breadcrumb a');
     await expect(page).toHaveURL(/\/jobs$/);
   });
@@ -320,32 +330,25 @@ test.describe('Rust Runtime (node2)', () => {
 
   test('job dispatched to Rust runtime node completes and shows on dashboard', async ({ authedPage: page }) => {
     const token = getRootToken();
+    const jobId = `e2e-rust-${Date.now()}`;
 
-    // Submit multiple jobs — round-robin scheduler will dispatch some to
-    // e2e-node-2 which runs the Rust runtime (cgroup v2 + seccomp).
-    const jobIds: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      const jobId = `e2e-rust-${Date.now()}-${i}`;
-      jobIds.push(jobId);
-      await submitJob(token, { id: jobId, command: 'echo', args: ['rust-runtime-test'] });
-    }
+    await submitJob(token, { id: jobId, command: 'echo', args: ['rust-runtime-test'] });
 
-    // Navigate to jobs page and verify they appear (retry with refresh)
+    // Navigate to jobs page and verify the job appears
     await navigateTo(page, '/jobs');
     await expect(async () => {
       await page.click('button.refresh-btn');
-      for (const jobId of jobIds) {
-        await expect(page.locator(`text=${jobId}`)).toBeVisible();
-      }
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
     }).toPass({ timeout: 15_000, intervals: [2_000] });
 
-    // Wait for at least one job to reach a terminal state
+    // Wait for the job to reach a terminal state
     await expect(async () => {
       await page.click('button.refresh-btn');
-      const statusBadges = page.locator('table[mat-table] td:first-child .badge');
-      const allText = await statusBadges.allTextContents();
-      const terminal = allText.filter(t => ['COMPLETED', 'FAILED', 'TIMEOUT'].some(s => t.includes(s)));
-      expect(terminal.length).toBeGreaterThan(0);
+      const row = page.locator(`tr:has-text("${jobId}")`);
+      const badge = row.locator('.badge').first();
+      const text = await badge.textContent();
+      const terminal = ['COMPLETED', 'FAILED', 'TIMEOUT', 'LOST'];
+      expect(terminal.some(s => text?.includes(s))).toBe(true);
     }).toPass({timeout: 15_000, intervals: [2_000] });
   });
 

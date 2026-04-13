@@ -52,11 +52,6 @@ export async function navigateTo(page: Page, path: string): Promise<void> {
   if (linkText) {
     await page.click(`a.nav-link >> text=${linkText}`);
     await page.waitForURL(`**${path}`, { timeout: 5_000 });
-  } else if (path.startsWith('/jobs/')) {
-    // Job detail — navigate via jobs list link or direct URL with re-auth
-    await authenticate(page);
-    await page.click(`a.nav-link >> text=Jobs`);
-    await page.waitForURL('**/jobs', { timeout: 5_000 });
   } else {
     // Unknown route — re-authenticate and goto
     await authenticate(page);

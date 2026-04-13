@@ -6,6 +6,11 @@
 //   1. Cluster running: docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d
 //   2. Dashboard dev server: ng serve  (port 4200)
 //
+// IMPORTANT: Tests submit jobs/workflows that persist in BadgerDB. If rerunning
+// against an existing cluster, accumulated data may push new items off page 1
+// and cause "element not found" failures. Always tear down with -v to reset:
+//   docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
+//
 // Run:  npx playwright test
 // UI:   npx playwright test --ui
 

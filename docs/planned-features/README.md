@@ -40,7 +40,7 @@ Decisions deferred or needing input.
 | Workflow / DAG support | **Implemented** | P0 | [01-workflow-dag.md](01-workflow-dag.md) |
 | Retry + failure policies | **Implemented** | P0 | [02-retry-failure-policies.md](02-retry-failure-policies.md) |
 | Resource-aware scheduling | **Implemented** | P1 | [03-resource-aware-scheduling.md](03-resource-aware-scheduling.md) |
-| Job state machine improvements | Partial | P1 | [04-job-state-machine.md](04-job-state-machine.md) |
+| Job state machine improvements | **Implemented** | P1 | [04-job-state-machine.md](04-job-state-machine.md) |
 | Priority queues | Missing | P1 | [05-priority-queues.md](05-priority-queues.md) |
 | Event system | Missing | P2 | [06-event-system.md](06-event-system.md) |
 | Observability improvements | Partial | P2 | [07-observability.md](07-observability.md) |

@@ -22,6 +22,9 @@ func TestJobStatus_String_AllValues(t *testing.T) {
 		{cpb.JobStatusTimeout, "timeout"},
 		{cpb.JobStatusLost, "lost"},
 		{cpb.JobStatusRetrying, "retrying"},
+		{cpb.JobStatusScheduled, "scheduled"},
+		{cpb.JobStatusCancelled, "cancelled"},
+		{cpb.JobStatusSkipped, "skipped"},
 		{cpb.JobStatus(99), "unknown"}, // out-of-range → "unknown"
 	}
 	for _, tc := range cases {
@@ -40,6 +43,8 @@ func TestJobStatus_IsTerminal_TerminalStatuses(t *testing.T) {
 		cpb.JobStatusFailed,
 		cpb.JobStatusTimeout,
 		cpb.JobStatusLost,
+		cpb.JobStatusCancelled,
+		cpb.JobStatusSkipped,
 	}
 	for _, s := range terminals {
 		if !s.IsTerminal() {
@@ -55,6 +60,7 @@ func TestJobStatus_IsTerminal_NonTerminalStatuses(t *testing.T) {
 		cpb.JobStatusDispatching,
 		cpb.JobStatusRunning,
 		cpb.JobStatusRetrying,
+		cpb.JobStatusScheduled,
 	}
 	for _, s := range nonTerminals {
 		if s.IsTerminal() {

@@ -96,9 +96,10 @@ type JobPersister interface {
 // allowedTransitions lists the valid (from → to) pairs for normal transitions.
 // The "lost" terminal is applied directly by MarkLost and bypasses this table.
 var allowedTransitions = map[cpb.JobStatus][]cpb.JobStatus{
-	cpb.JobStatusPending:     {cpb.JobStatusDispatching},
+	cpb.JobStatusPending:     {cpb.JobStatusScheduled, cpb.JobStatusDispatching, cpb.JobStatusCancelled, cpb.JobStatusSkipped},
+	cpb.JobStatusScheduled:   {cpb.JobStatusDispatching, cpb.JobStatusCancelled, cpb.JobStatusPending},
 	cpb.JobStatusDispatching: {cpb.JobStatusRunning, cpb.JobStatusFailed},
-	cpb.JobStatusRunning:     {cpb.JobStatusCompleted, cpb.JobStatusFailed, cpb.JobStatusTimeout},
+	cpb.JobStatusRunning:     {cpb.JobStatusCompleted, cpb.JobStatusFailed, cpb.JobStatusTimeout, cpb.JobStatusCancelled},
 	cpb.JobStatusFailed:      {cpb.JobStatusRetrying},
 	cpb.JobStatusTimeout:     {cpb.JobStatusRetrying},
 	cpb.JobStatusRetrying:    {cpb.JobStatusPending},

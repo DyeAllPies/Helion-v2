@@ -8,6 +8,7 @@ package api_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/api"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -60,6 +62,18 @@ func (m *mockJobStore) List(_ context.Context, _ string, _, _ int) ([]*cpb.Job, 
 		jobs = append(jobs, j)
 	}
 	return jobs, len(jobs), nil
+}
+
+func (m *mockJobStore) CancelJob(_ context.Context, jobID, _ string) error {
+	j, ok := m.jobs[jobID]
+	if !ok {
+		return fmt.Errorf("%w: %s", cluster.ErrJobNotFound, jobID)
+	}
+	if j.Status.IsTerminal() {
+		return fmt.Errorf("%w: %s is %s", cluster.ErrJobAlreadyTerminal, jobID, j.Status)
+	}
+	j.Status = cpb.JobStatusCancelled
+	return nil
 }
 
 func (m *mockJobStore) GetJobsByStatus(_ context.Context, status string) ([]*cpb.Job, error) {

@@ -252,7 +252,7 @@ export class JobListComponent implements OnInit {
   statusFilter = '';
 
   readonly cols     = ['status','id','command','node_id','runtime','created_at','finished_at','exit_code','actions'];
-  readonly statuses: JobStatus[] = ['pending','dispatching','running','completed','failed','timeout','lost','retrying'];
+  readonly statuses: JobStatus[] = ['pending','scheduled','dispatching','running','completed','failed','timeout','lost','retrying','cancelled','skipped'];
 
   constructor(private api: ApiService) {}
 

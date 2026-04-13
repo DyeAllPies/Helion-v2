@@ -178,6 +178,7 @@ type JobStoreIface interface {
 	Get(jobID string) (*cpb.Job, error)
 	List(ctx context.Context, statusFilter string, page, size int) ([]*cpb.Job, int, error)
 	GetJobsByStatus(ctx context.Context, status string) ([]*cpb.Job, error)
+	CancelJob(ctx context.Context, jobID, reason string) error
 }
 
 // NodeRegistryIface is the interface for node operations.

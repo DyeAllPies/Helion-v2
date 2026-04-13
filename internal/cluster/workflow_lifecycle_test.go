@@ -140,8 +140,8 @@ func TestWorkflowStore_OnJobCompleted_WorkflowFails(t *testing.T) {
 	ws.OnJobCompleted(ctx, "wf-fail/build", cpb.JobStatusFailed, js)
 
 	testJob, _ := js.Get("wf-fail/test")
-	if testJob.Status != cpb.JobStatusLost {
-		t.Fatalf("expected test to be lost (cascading), got %s", testJob.Status)
+	if testJob.Status != cpb.JobStatusSkipped {
+		t.Fatalf("expected test to be skipped (cascading), got %s", testJob.Status)
 	}
 
 	got, _ := ws.Get("wf-fail")

@@ -21,10 +21,13 @@ an interface:
 **Job lifecycle.** Tracks every job through a strict state machine:
 
 ```
-pending → dispatching → running → completed
-                                → failed → retrying → pending (with backoff)
-                                → timeout → retrying → pending (with backoff)
-                                → lost
+pending → scheduled → dispatching → running → completed
+                                            → failed → retrying → pending (with backoff)
+                                            → timeout → retrying → pending (with backoff)
+                                            → cancelled
+pending → cancelled
+pending → skipped (DAG: upstream failed)
+any non-terminal → lost (crash recovery)
 ```
 
 All transitions are persisted atomically and written to the audit log.

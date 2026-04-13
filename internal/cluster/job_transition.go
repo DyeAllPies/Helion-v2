@@ -50,6 +50,10 @@ func (s *JobStore) Transition(ctx context.Context, jobID string, to cpb.JobStatu
 		if opts.NodeID != "" {
 			j.NodeID = opts.NodeID
 		}
+	case cpb.JobStatusScheduled:
+		if opts.NodeID != "" {
+			j.NodeID = opts.NodeID
+		}
 	case cpb.JobStatusCompleted, cpb.JobStatusFailed, cpb.JobStatusTimeout:
 		j.FinishedAt = now
 		j.ExitCode = opts.ExitCode
@@ -58,6 +62,16 @@ func (s *JobStore) Transition(ctx context.Context, jobID string, to cpb.JobStatu
 		}
 		if opts.Runtime != "" {
 			j.Runtime = opts.Runtime
+		}
+	case cpb.JobStatusCancelled:
+		j.FinishedAt = now
+		if opts.ErrMsg != "" {
+			j.Error = opts.ErrMsg
+		}
+	case cpb.JobStatusSkipped:
+		j.FinishedAt = now
+		if opts.ErrMsg != "" {
+			j.Error = opts.ErrMsg
 		}
 	}
 

@@ -36,6 +36,9 @@ const (
 	JobStatusTimeout     JobStatus = 6
 	JobStatusLost        JobStatus = 7
 	JobStatusRetrying    JobStatus = 8
+	JobStatusScheduled   JobStatus = 9
+	JobStatusCancelled   JobStatus = 10
+	JobStatusSkipped     JobStatus = 11
 )
 
 func (s JobStatus) String() string {
@@ -56,6 +59,12 @@ func (s JobStatus) String() string {
 		return "lost"
 	case JobStatusRetrying:
 		return "retrying"
+	case JobStatusScheduled:
+		return "scheduled"
+	case JobStatusCancelled:
+		return "cancelled"
+	case JobStatusSkipped:
+		return "skipped"
 	default:
 		return "unknown"
 	}
@@ -65,7 +74,7 @@ func (s JobStatus) String() string {
 // Used by crash recovery to skip already-finished jobs.
 func (s JobStatus) IsTerminal() bool {
 	switch s {
-	case JobStatusCompleted, JobStatusFailed, JobStatusTimeout, JobStatusLost:
+	case JobStatusCompleted, JobStatusFailed, JobStatusTimeout, JobStatusLost, JobStatusCancelled, JobStatusSkipped:
 		return true
 	}
 	return false

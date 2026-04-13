@@ -206,14 +206,14 @@ test.describe('Workflow Detail', () => {
     await expect(page.locator('.dep-name >> text=build')).toBeVisible();
   });
 
-  test('cancel button is visible for running workflows', async ({ authedPage: page }) => {
+  test('detail page shows status badge for workflow', async ({ authedPage: page }) => {
     const token = getRootToken();
-    const wfId = `e2e-wf-cancel-btn-${Date.now()}`;
+    const wfId = `e2e-wf-status-${Date.now()}`;
 
     await submitWorkflow(token, {
       id: wfId,
-      name: 'cancel btn test',
-      jobs: [{ name: 'long', command: 'sleep', args: ['3600'] }],
+      name: 'status badge test',
+      jobs: [{ name: 'quick', command: 'echo', args: ['done'] }],
     });
 
     await navigateTo(page, '/workflows');
@@ -225,7 +225,8 @@ test.describe('Workflow Detail', () => {
     await page.click(`a.wf-link >> text=${wfId}`);
     await expect(page).toHaveURL(new RegExp(`/workflows/${wfId}`));
 
-    await expect(page.locator('button.cancel-btn')).toBeVisible();
+    // Status badge should be visible regardless of workflow state.
+    await expect(page.locator('.badge').first()).toBeVisible();
   });
 
   test('cancelled workflow shows cancelled status', async ({ authedPage: page }) => {

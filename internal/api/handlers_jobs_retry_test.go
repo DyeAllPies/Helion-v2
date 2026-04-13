@@ -5,6 +5,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 )
@@ -105,5 +106,63 @@ func TestSubmitJob_RetryPolicy_NoneBackoff_Returns201(t *testing.T) {
 	rr := do(srv, "POST", "/jobs", body)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", rr.Code)
+	}
+}
+
+// ── POST /jobs/{id}/cancel ──────────────────────────────────────────────────
+
+func TestCancelJobAPI_Pending_Returns200(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	do(srv, "POST", "/jobs", `{"id":"can-1","command":"echo"}`)
+
+	rr := do(srv, "POST", "/jobs/can-1/cancel", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	if resp["status"] != "cancelled" {
+		t.Errorf("status = %v, want cancelled", resp["status"])
+	}
+}
+
+func TestCancelJobAPI_NotFound_Returns404(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	rr := do(srv, "POST", "/jobs/nonexistent/cancel", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+func TestSubmitJob_WithResources_Returns201(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{
+		"id": "resource-job",
+		"command": "echo",
+		"resources": {
+			"cpu_millicores": 500,
+			"memory_bytes": 134217728,
+			"slots": 2
+		}
+	}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCancelJobAPI_AlreadyTerminal_Returns409(t *testing.T) {
+	store := newMockJobStore()
+	srv := newServer(store, nil, nil)
+	do(srv, "POST", "/jobs", `{"id":"can-done","command":"echo"}`)
+
+	// Cancel once.
+	do(srv, "POST", "/jobs/can-done/cancel", "")
+
+	// Cancel again — already terminal.
+	rr := do(srv, "POST", "/jobs/can-done/cancel", "")
+	if rr.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", rr.Code)
 	}
 }

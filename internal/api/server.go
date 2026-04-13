@@ -167,6 +167,7 @@ func (s *Server) registerRoutes() {
 	// Authenticated endpoints
 	s.mux.HandleFunc("POST /jobs", s.authMiddleware(s.handleSubmitJob))
 	s.mux.HandleFunc("GET /jobs/{id}", s.authMiddleware(s.handleGetJob))
+	s.mux.HandleFunc("POST /jobs/{id}/cancel", s.authMiddleware(s.handleCancelJob))
 	s.mux.HandleFunc("GET /jobs", s.authMiddleware(s.handleListJobs))
 	s.mux.HandleFunc("GET /nodes", s.authMiddleware(s.handleListNodes))
 	// /metrics serves Prometheus text format — no auth so scrapers work without tokens.

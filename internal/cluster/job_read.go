@@ -104,6 +104,12 @@ func (s *JobStore) GetJobsByStatus(ctx context.Context, status string) ([]*cpb.J
 		targetStatus = cpb.JobStatusLost
 	case "RETRYING":
 		targetStatus = cpb.JobStatusRetrying
+	case "SCHEDULED":
+		targetStatus = cpb.JobStatusScheduled
+	case "CANCELLED":
+		targetStatus = cpb.JobStatusCancelled
+	case "SKIPPED":
+		targetStatus = cpb.JobStatusSkipped
 	default:
 		return nil, fmt.Errorf("unknown job status: %s", status)
 	}

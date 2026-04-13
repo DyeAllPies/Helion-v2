@@ -271,12 +271,37 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, "handleGetJob", jobToResponse(job))
 }
 
+func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	if err := s.jobs.CancelJob(r.Context(), id, "cancelled via API"); err != nil {
+		if errors.Is(err, cluster.ErrJobNotFound) {
+			writeError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		if errors.Is(err, cluster.ErrJobAlreadyTerminal) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		slog.Error("cancel job failed", slog.String("job_id", id), slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "job cancellation failed")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, "handleCancelJob", map[string]interface{}{
+		"id":      id,
+		"status":  "cancelled",
+		"message": "job cancelled successfully",
+	})
+}
+
 // validJobStatuses is the set of status strings accepted by the ?status= query
 // parameter. Values are uppercase to match the underlying store convention.
 var validJobStatuses = map[string]bool{
 	"UNKNOWN": true, "PENDING": true, "DISPATCHING": true, "RUNNING": true,
 	"COMPLETED": true, "FAILED": true, "TIMEOUT": true, "LOST": true,
-	"RETRYING": true,
+	"RETRYING": true, "SCHEDULED": true, "CANCELLED": true, "SKIPPED": true,
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {

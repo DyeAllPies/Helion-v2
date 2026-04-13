@@ -117,10 +117,17 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 			return
 		}
 
-		// Transition to dispatching before sending to node
+		// Transition pending → scheduled (node picked, RPC not yet sent).
 		opts := TransitionOptions{NodeID: node.NodeID}
+		if err := d.jobs.Transition(ctx, job.ID, cpb.JobStatusScheduled, opts); err != nil {
+			d.log.Warn("dispatch: schedule transition failed",
+				slog.String("job_id", job.ID), slog.Any("err", err))
+			continue
+		}
+
+		// Transition scheduled → dispatching (RPC in flight).
 		if err := d.jobs.Transition(ctx, job.ID, cpb.JobStatusDispatching, opts); err != nil {
-			d.log.Warn("dispatch: transition failed",
+			d.log.Warn("dispatch: dispatching transition failed",
 				slog.String("job_id", job.ID), slog.Any("err", err))
 			continue
 		}
