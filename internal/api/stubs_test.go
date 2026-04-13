@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/api"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
@@ -113,6 +114,79 @@ func TestJobStoreAdapter_TerminalJobDurations_WithCompletedJob(t *testing.T) {
 	}
 	if len(durs) != 1 {
 		t.Errorf("want 1 duration for completed job, got %d", len(durs))
+	}
+}
+
+func TestJobStoreAdapter_List_SortedNewestFirst(t *testing.T) {
+	inner := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+	adapter := api.NewJobStoreAdapter(inner)
+	ctx := context.Background()
+
+	// Submit jobs with short delays so CreatedAt differs.
+	_ = inner.Submit(ctx, &cpb.Job{ID: "old", Command: "echo"})
+	time.Sleep(2 * time.Millisecond)
+	_ = inner.Submit(ctx, &cpb.Job{ID: "mid", Command: "echo"})
+	time.Sleep(2 * time.Millisecond)
+	_ = inner.Submit(ctx, &cpb.Job{ID: "new", Command: "echo"})
+
+	jobs, _, err := adapter.List(ctx, "", 1, 10)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(jobs) != 3 {
+		t.Fatalf("want 3, got %d", len(jobs))
+	}
+	// Newest job must be first.
+	if jobs[0].ID != "new" {
+		t.Errorf("page 1 first job = %q, want 'new' (newest first)", jobs[0].ID)
+	}
+	if jobs[2].ID != "old" {
+		t.Errorf("page 1 last job = %q, want 'old'", jobs[2].ID)
+	}
+}
+
+func TestJobStoreAdapter_List_NewestOnPage1_OldOnPage2(t *testing.T) {
+	inner := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+	adapter := api.NewJobStoreAdapter(inner)
+	ctx := context.Background()
+
+	// Create 5 jobs with distinct timestamps.
+	for _, id := range []string{"j1", "j2", "j3", "j4", "j5"} {
+		_ = inner.Submit(ctx, &cpb.Job{ID: id, Command: "echo"})
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// Page 1 (size=2) should have j5, j4 (newest).
+	page1, total, _ := adapter.List(ctx, "", 1, 2)
+	if total != 5 {
+		t.Fatalf("total = %d, want 5", total)
+	}
+	if len(page1) != 2 {
+		t.Fatalf("page 1 len = %d, want 2", len(page1))
+	}
+	if page1[0].ID != "j5" {
+		t.Errorf("page 1 first = %q, want j5", page1[0].ID)
+	}
+	if page1[1].ID != "j4" {
+		t.Errorf("page 1 second = %q, want j4", page1[1].ID)
+	}
+
+	// Page 2 should have j3, j2.
+	page2, _, _ := adapter.List(ctx, "", 2, 2)
+	if len(page2) != 2 {
+		t.Fatalf("page 2 len = %d, want 2", len(page2))
+	}
+	if page2[0].ID != "j3" {
+		t.Errorf("page 2 first = %q, want j3", page2[0].ID)
+	}
+
+	// Page 3 should have j1 (oldest).
+	page3, _, _ := adapter.List(ctx, "", 3, 2)
+	if len(page3) != 1 {
+		t.Fatalf("page 3 len = %d, want 1", len(page3))
+	}
+	if page3[0].ID != "j1" {
+		t.Errorf("page 3 first = %q, want j1 (oldest)", page3[0].ID)
 	}
 }
 

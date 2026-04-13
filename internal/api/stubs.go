@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
@@ -71,6 +72,11 @@ func (a *JobStoreAdapter) List(ctx context.Context, statusFilter string, page, s
 		// Get all jobs
 		allJobs = a.store.List()
 	}
+
+	// Sort newest first so recently submitted jobs always appear on page 1.
+	sort.Slice(allJobs, func(i, j int) bool {
+		return allJobs[i].CreatedAt.After(allJobs[j].CreatedAt)
+	})
 
 	total := len(allJobs)
 

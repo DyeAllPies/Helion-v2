@@ -139,6 +139,69 @@ test.describe('Jobs List', () => {
     await expect(page.locator('mat-paginator')).toBeVisible({ timeout: 15_000 });
   });
 
+  test('newest submitted job appears on page 1', async ({ authedPage: page }) => {
+    const token = getRootToken();
+    const jobId = `e2e-newest-${Date.now()}`;
+
+    await submitJob(token, { id: jobId, command: 'echo', args: ['newest'] });
+
+    await navigateTo(page, '/jobs');
+    // Even with accumulated data, newest-first sort means our job is on page 1.
+    await expect(async () => {
+      await page.click('button.refresh-btn');
+      await expect(page.locator(`text=${jobId}`)).toBeVisible();
+    }).toPass({ timeout: 15_000, intervals: [2_000] });
+  });
+
+  test('paginator next/previous buttons navigate between pages', async ({ authedPage: page }) => {
+    const token = getRootToken();
+
+    // Submit enough jobs to guarantee multiple pages (default size=25).
+    // With accumulated data from other tests, this should already exceed 1 page.
+    // Submit a few more to be safe.
+    for (let i = 0; i < 3; i++) {
+      await submitJob(token, { id: `e2e-page-${Date.now()}-${i}`, command: 'echo' });
+    }
+
+    await navigateTo(page, '/jobs');
+    await expect(page.locator('table[mat-table]')).toBeVisible({ timeout: 15_000 });
+
+    // Check if next-page button exists and total > page size.
+    const paginator = page.locator('mat-paginator');
+    await expect(paginator).toBeVisible();
+
+    const rangeLabel = paginator.locator('.mat-mdc-paginator-range-label');
+    const rangeText = await rangeLabel.textContent();
+
+    // If there are multiple pages, test navigation.
+    if (rangeText && rangeText.includes('of')) {
+      const total = parseInt(rangeText.split('of')[1].trim(), 10);
+      if (total > 25) {
+        // Click next page button.
+        const nextBtn = paginator.locator('button.mat-mdc-paginator-navigation-next');
+        await expect(nextBtn).toBeEnabled();
+        await nextBtn.click();
+
+        // Range label should change (e.g., "26 – 50 of N").
+        await expect(async () => {
+          const newRange = await rangeLabel.textContent();
+          expect(newRange).not.toBe(rangeText);
+        }).toPass({ timeout: 5_000 });
+
+        // Click previous page button to go back.
+        const prevBtn = paginator.locator('button.mat-mdc-paginator-navigation-previous');
+        await expect(prevBtn).toBeEnabled();
+        await prevBtn.click();
+
+        // Should be back on page 1.
+        await expect(async () => {
+          const backRange = await rangeLabel.textContent();
+          expect(backRange).toContain('1 –');
+        }).toPass({ timeout: 5_000 });
+      }
+    }
+  });
+
   test('clicking a job link navigates to detail', async ({ authedPage: page }) => {
     const token = getRootToken();
     const jobId = `e2e-click-${Date.now()}`;
