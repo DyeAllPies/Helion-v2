@@ -2,9 +2,11 @@
 
 [![CI](https://github.com/DyeAllPies/Helion-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/DyeAllPies/Helion-v2/actions/workflows/ci.yml)
 
-A from-scratch distributed job scheduler written in Go — built as a vehicle for studying systems programming, distributed systems theory, container orchestration, and production security practices.
+A minimal distributed orchestrator written in Go — built as a vehicle for studying systems programming, distributed systems theory, container orchestration, and production security practices.
 
 v1 (4th semester) demonstrated the core lifecycle: job submission, node registration, heartbeat health checking, crash recovery, and Docker Compose packaging. v2 is a clean-room redesign with a production-grade stack: gRPC, BadgerDB, mTLS, post-quantum cryptography, an Angular dashboard, and Kubernetes-ready deployment (Helm chart + manifests included).
+
+v2 has reached **minimal orchestrator** status with the implementation of all 7 planned features: workflow/DAG support, retry policies, resource-aware scheduling, a full job state machine, priority queues, a real-time event system, and observability improvements (job logs, enhanced metrics, subsystem health checks).
 
 ---
 

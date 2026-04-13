@@ -1,8 +1,9 @@
 # Helion v2 — Architecture Reference
 
-This document is the technical companion to the [README](README.md). It covers
-component internals, protocol contracts, persistence design, the CI/CD pipeline, runtime
-benchmarks, and the key decisions behind every major choice.
+Helion v2 is a minimal distributed orchestrator. This document is the technical
+companion to the [README](README.md). It covers component internals, protocol
+contracts, persistence design, the CI/CD pipeline, runtime benchmarks, and the
+key decisions behind every major choice.
 
 ---
 
@@ -83,7 +84,7 @@ etcd (for multi-coordinator HA) is a one-file change.
 
 ### Dashboard — Angular 21
 
-React and Vue were already covered. Angular fills the enterprise-framework gap. The
+Angular fills the enterprise-framework gap. The
 dashboard is not a UI exercise — it consumes real WebSocket streams, renders live metrics,
 and handles JWT authentication with automatic session management.
 
@@ -156,11 +157,17 @@ runtime. Resource limits are enforced only when `HELION_RUNTIME=rust`.
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/healthz` | none | Liveness probe |
-| `GET` | `/readyz` | none | Readiness probe (BadgerDB ping + node count) |
-| `POST` | `/jobs` | Bearer | Submit job; body: `{id, command, args, env, timeout_seconds, limits}` |
-| `GET` | `/jobs` | Bearer | List jobs (paginated, filterable by status) |
+| `GET` | `/readyz` | none | Readiness probe with subsystem checks |
+| `POST` | `/jobs` | Bearer | Submit job `{id, command, args, env, timeout_seconds, limits, priority, resources, retry_policy}` |
+| `GET` | `/jobs` | Bearer | List jobs (paginated, sorted newest-first, filterable by status) |
 | `GET` | `/jobs/{id}` | Bearer | Get single job |
-| `GET` | `/nodes` | Bearer | List registered nodes |
+| `POST` | `/jobs/{id}/cancel` | Bearer | Cancel a non-terminal job |
+| `GET` | `/jobs/{id}/logs` | Bearer | Retrieve stored job stdout/stderr (`?tail=N`) |
+| `POST` | `/workflows` | Bearer | Submit workflow DAG `{id, name, priority, jobs}` |
+| `GET` | `/workflows` | Bearer | List workflows (paginated, sorted newest-first) |
+| `GET` | `/workflows/{id}` | Bearer | Get workflow with job statuses |
+| `DELETE` | `/workflows/{id}` | Bearer | Cancel a running workflow |
+| `GET` | `/nodes` | Bearer | List registered nodes with capacity |
 | `GET` | `/audit` | Bearer | Paginated audit log |
 | `GET` | `/metrics` | none (Prometheus) | Prometheus text metrics |
 | `POST` | `/admin/nodes/{id}/revoke` | Bearer (admin) | Revoke node registration |
@@ -168,6 +175,7 @@ runtime. Resource limits are enforced only when `HELION_RUNTIME=rust`.
 | `DELETE` | `/admin/tokens/{jti}` | Bearer (admin) | Immediately revoke a token by JTI |
 | `GET` | `/ws/jobs/{id}/logs` | First-message | WebSocket live log stream |
 | `GET` | `/ws/metrics` | First-message | WebSocket live cluster metrics |
+| `GET` | `/ws/events` | First-message | WebSocket event stream (subscribe with topic patterns) |
 
 ---
 
@@ -300,7 +308,7 @@ instructions, cgroup v2 overhead measurements, and seccomp filtering latency.
 | Runtime language | Rust | Memory safety matters for namespace/cgroup/seccomp code; isolated behind a clean Unix socket interface. |
 | Inter-node protocol | gRPC + Protobuf | Typed contracts, streaming, mTLS-native, language-agnostic (enables Rust node later). |
 | Persistence | BadgerDB | Embedded, no external process, ACID, pure Go. Swap path to etcd for HA. |
-| Frontend | Angular 21 | React + Vue already covered. Enterprise framework with real WebSocket + auth complexity. |
+| Frontend | Angular 21 | Enterprise framework with real WebSocket + auth complexity. |
 | Key exchange | ML-KEM hybrid | NIST FIPS 203. Hybrid maintains classical compatibility while adding quantum resistance. Low cost at design time. |
 | Signatures | ML-DSA hybrid | NIST FIPS 204. Node certificate signing, hybrid with ECDSA during transition. |
 | Deployment | Kubernetes + Helm | True cloud agnosticism. Coordinator = Deployment, Agents = DaemonSet. One chart, per-cloud values files. |

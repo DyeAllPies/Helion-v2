@@ -1,7 +1,8 @@
 # Helion v2 — Security Reference
 
-This document covers the full security model: post-quantum cryptography, JWT
-authentication, rate limiting, audit logging, and operational procedures.
+Security model for the Helion v2 minimal orchestrator: post-quantum
+cryptography, JWT authentication, rate limiting, audit logging, and
+operational procedures.
 
 ---
 

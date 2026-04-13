@@ -34,6 +34,7 @@ allow it, but the audit log must be immutable.
 | `certs/{id}`   | X.509 DER (raw)    | none (permanent)  |
 | `audit/{ts}-{id}` | AuditEvent (proto) | none (append-only) |
 | `tokens/{jti}` | JWT metadata (proto) | token expiry    |
+| `log:{job_id}:{seq}` | LogEntry (JSON) | 7 days (configurable) |
 
 ## Running tests
 

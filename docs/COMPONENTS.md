@@ -1,7 +1,7 @@
 # Helion v2 — Component Design
 
-Detailed internals for each system component. For the high-level architecture,
-see [ARCHITECTURE.md](ARCHITECTURE.md).
+Detailed internals for each component of the Helion v2 minimal orchestrator.
+For the high-level architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 

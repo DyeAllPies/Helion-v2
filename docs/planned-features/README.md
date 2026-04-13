@@ -1,6 +1,9 @@
 # Planned Features
 
-Feature specs for evolving Helion v2 into a minimal production orchestrator.
+Feature specs that evolved Helion v2 from a job scheduler into a **minimal
+orchestrator**. All 7 core features (01–07) are implemented. Feature 08
+consolidates deferred enhancements as a backlog for future work.
+
 Each file follows the template below.
 
 ## Feature template
@@ -44,6 +47,7 @@ Decisions deferred or needing input.
 | Priority queues | **Implemented** | P1 | [05-priority-queues.md](05-priority-queues.md) |
 | Event system | **Implemented** | P2 | [06-event-system.md](06-event-system.md) |
 | Observability improvements | **Implemented** | P2 | [07-observability.md](07-observability.md) |
+| Deferred enhancements | Not started | P3 | [08-deferred-enhancements.md](08-deferred-enhancements.md) |
 
 ### Priority definitions
 

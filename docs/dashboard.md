@@ -1,6 +1,6 @@
 # Helion Dashboard — Angular 21
 
-The control-plane UI for the Helion v2 distributed job scheduler.
+The control-plane UI for the Helion v2 minimal orchestrator.
 
 ## Tech stack
 
