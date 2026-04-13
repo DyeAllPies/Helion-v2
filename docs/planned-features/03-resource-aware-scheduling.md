@@ -1,8 +1,8 @@
 # Feature: Resource-Aware Scheduling
 
 **Priority:** P1
-**Status:** Partial — tracks `running_jobs` count only, no CPU/memory reservation
-**Affected files:** `proto/coordinator.proto`, `proto/node.proto`, `internal/cluster/scheduler.go`, `internal/cluster/policy.go`, `internal/cluster/registry.go`
+**Status:** Implemented
+**Affected files:** `proto/coordinator.proto`, `internal/proto/coordinatorpb/types.go`, `internal/cluster/policy_resource.go`, `internal/cluster/registry_node.go`, `internal/cluster/registry_heartbeat.go`, `internal/grpcclient/client.go`, `cmd/helion-node/main.go`
 
 ## Problem
 
@@ -157,3 +157,17 @@ If a node doesn't report capacity (old agent), the resource-aware policy skips i
 - Should overcommit be allowed? (e.g., reserve 120% of CPU). Start with no overcommit.
 - GPU/accelerator resources? Defer — model as custom resource labels later.
 - Affinity/anti-affinity? Defer — not needed for minimal orchestrator.
+
+## Implementation status
+
+All core items implemented:
+
+1. **Proto sync** — `.proto` brought in sync with hand-edited `.pb.go` (JobResult fields). Added `cpu_millicores`, `total_memory_bytes`, `max_slots` to HeartbeatMessage. Added `node_id`, `signed_certificate` to RegisterResponse. Regenerated all stubs.
+2. **Internal types** — `ResourceRequest` struct + `DefaultResourceRequest()` in `coordinatorpb/types.go`. Node struct gains `CpuMillicores`, `TotalMemBytes`, `MaxSlots`.
+3. **Node agent** — detects CPU cores via `runtime.NumCPU()` and memory via `runtime.ReadMemStats()` at startup. Reports capacity in every heartbeat via `grpcclient.NodeCapacity`.
+4. **Registry** — `nodeEntry` stores capacity atomically via `storeCapacity()`. Updated on each heartbeat. `snapshot()` includes capacity in Node.
+5. **ResourceAwarePolicy** — best-fit bin-packing in `internal/cluster/policy_resource.go`. Skips full nodes (running >= max_slots). Falls back to least-loaded when no capacity info.
+6. **API** — `POST /jobs` accepts optional `resources` (cpu_millicores, memory_bytes, slots). `GET /nodes` returns capacity fields.
+7. **Dashboard** — Node model and API service updated to expose capacity. `ApiNodeInfo` includes capacity fields.
+8. **Policy selection** — `HELION_SCHEDULER=resource-aware` selects the new policy.
+9. **Tests** — 8 policy unit tests, 1 capacity heartbeat test, DefaultResourceRequest test.

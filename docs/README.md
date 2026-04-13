@@ -246,21 +246,23 @@ All project documentation lives under `docs/`:
 | [docker-compose-dev-notes.md](docker-compose-dev-notes.md) | Local Docker Compose workflow notes |
 | [planned-features/](planned-features/) | Feature specs for orchestrator enhancements |
 
-### Packing the repo without the audit archive
+### Packing the repo without audits and planned features
 
-`docs/audits/` grows with every audit run. To bundle the source tree for
-download, an AI assistant, or offline review **without** those files:
+`docs/audits/` and `docs/planned-features/` grow over time. To bundle the
+source tree for download, an AI assistant, or offline review **without**
+those directories:
 
 ```bash
 # With repomix:
-npx repomix --ignore "docs/audits/**"
+npx repomix --ignore "docs/audits/**,docs/planned-features/**"
 
 # Or with git:
-git archive --format=tar.gz -o helion-v2.tar.gz HEAD -- ':(exclude)docs/audits'
+git archive --format=tar.gz -o helion-v2.tar.gz HEAD \
+  -- ':(exclude)docs/audits' ':(exclude)docs/planned-features'
 ```
 
-Either command keeps `docs/AUDIT.md` (the template) and drops every dated
-file under `docs/audits/`.
+This keeps `docs/AUDIT.md` (the template) and all other docs, dropping
+only the dated audit files and feature spec archive.
 
 ---
 

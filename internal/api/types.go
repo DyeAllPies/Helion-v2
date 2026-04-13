@@ -42,6 +42,13 @@ type RetryPolicyRequest struct {
 	Jitter         *bool  `json:"jitter,omitempty"`           // add 0-25% jitter (default: true)
 }
 
+// ResourceRequestAPI is the optional scheduling reservation in SubmitRequest.
+type ResourceRequestAPI struct {
+	CpuMillicores uint32 `json:"cpu_millicores,omitempty"` // CPU reservation (default: 100 = 0.1 core)
+	MemoryBytes   uint64 `json:"memory_bytes,omitempty"`   // memory reservation (default: 64MB)
+	Slots         uint32 `json:"slots,omitempty"`           // slot count (default: 1)
+}
+
 // SubmitRequest is the JSON body for POST /jobs.
 type SubmitRequest struct {
 	ID             string              `json:"id"`              // client-generated; required
@@ -50,6 +57,7 @@ type SubmitRequest struct {
 	Env            map[string]string   `json:"env,omitempty"`   // optional key-value environment variables
 	TimeoutSeconds int64               `json:"timeout_seconds"` // optional; 0 means no limit
 	Limits         ResourceLimits      `json:"limits,omitempty"` // optional cgroup v2 resource limits
+	Resources      *ResourceRequestAPI `json:"resources,omitempty"` // optional scheduling reservation
 	RetryPolicy    *RetryPolicyRequest `json:"retry_policy,omitempty"` // optional retry configuration
 }
 
@@ -85,11 +93,14 @@ type NodeListResponse struct {
 
 // NodeInfo contains information about a registered node.
 type NodeInfo struct {
-	ID          string    `json:"id"`
-	Health      string    `json:"health"` // "healthy" | "unhealthy"
-	LastSeen    time.Time `json:"last_seen"`
-	RunningJobs int       `json:"running_jobs"`
-	Address     string    `json:"address"`
+	ID            string    `json:"id"`
+	Health        string    `json:"health"` // "healthy" | "unhealthy"
+	LastSeen      time.Time `json:"last_seen"`
+	RunningJobs   int       `json:"running_jobs"`
+	Address       string    `json:"address"`
+	CpuMillicores uint32   `json:"cpu_millicores,omitempty"`
+	TotalMemBytes uint64   `json:"total_mem_bytes,omitempty"`
+	MaxSlots      uint32   `json:"max_slots,omitempty"`
 }
 
 // JobListResponse is the response for GET /jobs (paginated).

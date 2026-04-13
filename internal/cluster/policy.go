@@ -121,8 +121,12 @@ func (p *LeastLoadedPolicy) Pick(nodes []*cpb.Node) *cpb.Node {
 //
 //	HELION_SCHEDULER=least ./helion-coordinator
 func PolicyFromEnv() Policy {
-	if os.Getenv("HELION_SCHEDULER") == "least" {
+	switch os.Getenv("HELION_SCHEDULER") {
+	case "least":
 		return NewLeastLoadedPolicy()
+	case "resource-aware":
+		return NewResourceAwarePolicy()
+	default:
+		return NewRoundRobinPolicy()
 	}
-	return NewRoundRobinPolicy()
 }

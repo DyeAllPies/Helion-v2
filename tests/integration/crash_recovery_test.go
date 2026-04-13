@@ -371,7 +371,7 @@ func TestCrashRecovery_JobCompletesAfterRestart(t *testing.T) {
 	heartbeatDone1 := make(chan error, 1)
 	go func() {
 		heartbeatDone1 <- nodeClient1.SendHeartbeats(nodeCtx1, nodeID, heartbeatInterval,
-			func() int32 { return 0 }, nil)
+			func() int32 { return 0 }, nil, nil)
 	}()
 
 	// Wait for node to appear healthy.
@@ -475,7 +475,7 @@ func TestCrashRecovery_JobCompletesAfterRestart(t *testing.T) {
 	}
 	go func() {
 		if err := nodeClient2.SendHeartbeats(nodeCtx2, nodeID, heartbeatInterval,
-			func() int32 { return 0 }, nil); err != nil {
+			func() int32 { return 0 }, nil, nil); err != nil {
 			t.Logf("node2 heartbeat: %v", err)
 		}
 	}()

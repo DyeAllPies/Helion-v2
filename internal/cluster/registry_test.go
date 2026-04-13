@@ -66,12 +66,26 @@ func registerNode(t *testing.T, r *cluster.Registry, nodeID, addr string) {
 
 // sendHeartbeat sends one heartbeat using the real proto.HeartbeatMessage.
 // Note: HeartbeatMessage has no Address field and no Seq field.
+// sendHeartbeatWithCapacity sends a heartbeat with resource capacity info.
+func sendHeartbeatWithCapacity(t *testing.T, r *cluster.Registry, nodeID string, running int32, cpuMilli uint32, memBytes uint64, slots uint32) {
+	t.Helper()
+	err := r.HandleHeartbeat(context.Background(), &pb.HeartbeatMessage{
+		NodeId:           nodeID,
+		RunningJobs:      running,
+		CpuMillicores:    cpuMilli,
+		TotalMemoryBytes: memBytes,
+		MaxSlots:         slots,
+	})
+	if err != nil {
+		t.Fatalf("HandleHeartbeat %q with capacity: %v", nodeID, err)
+	}
+}
+
 // Timestamp is Unix nanoseconds (int64); 0 means "use wall clock".
 func sendHeartbeat(t *testing.T, r *cluster.Registry, nodeID string, running int32) {
 	t.Helper()
 	err := r.HandleHeartbeat(context.Background(), &pb.HeartbeatMessage{
 		NodeId:      nodeID,
-		Timestamp:   time.Now().UnixNano(),
 		RunningJobs: running,
 	})
 	if err != nil {
@@ -401,8 +415,7 @@ func TestConcurrentRegisterAndHeartbeat(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			_ = r.HandleHeartbeat(context.Background(), &pb.HeartbeatMessage{
-				NodeId:    "shared-node",
-				Timestamp: time.Now().UnixNano(),
+				NodeId: "shared-node",
 			})
 		}()
 	}
@@ -550,5 +563,38 @@ func TestSetCertVerifier_AcceptsOnVerificationSuccess(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Register with valid ML-DSA sig: %v", err)
+	}
+}
+
+// ── Heartbeat with capacity ──────────────────────────────────────────────────
+
+func TestHandleHeartbeat_CapacityStoredInSnapshot(t *testing.T) {
+	r := newRegistry(t)
+	registerNode(t, r, "cap-node", "10.0.0.1:8080")
+
+	sendHeartbeatWithCapacity(t, r, "cap-node", 3, 4000, 8<<30, 16)
+
+	snap := r.Snapshot()
+	var found *cpb.Node
+	for _, n := range snap {
+		if n.NodeID == "cap-node" {
+			found = n
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("cap-node not found in snapshot")
+	}
+	if found.CpuMillicores != 4000 {
+		t.Errorf("CpuMillicores = %d, want 4000", found.CpuMillicores)
+	}
+	if found.TotalMemBytes != 8<<30 {
+		t.Errorf("TotalMemBytes = %d, want %d", found.TotalMemBytes, uint64(8<<30))
+	}
+	if found.MaxSlots != 16 {
+		t.Errorf("MaxSlots = %d, want 16", found.MaxSlots)
+	}
+	if found.RunningJobs != 3 {
+		t.Errorf("RunningJobs = %d, want 3", found.RunningJobs)
 	}
 }

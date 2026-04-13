@@ -18,6 +18,7 @@ import (
 	pb "github.com/DyeAllPies/Helion-v2/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Server implements pb.NodeServiceServer.
@@ -131,14 +132,14 @@ func (s *Server) reportResult(
 		return
 	}
 	rr := &pb.JobResult{
-		JobId:      jobID,
-		NodeId:     s.nodeID,
-		Success:    success,
-		ExitCode:   exitCode,
-		Error:      errMsg,
-		StartedAt:  startedAt.UnixNano(),
-		FinishedAt: finishedAt.UnixNano(),
-		Runtime:    s.runtimeName,
+		JobId:     jobID,
+		NodeId:    s.nodeID,
+		Success:   success,
+		ExitCode:  exitCode,
+		Error:     errMsg,
+		StartedAt: startedAt.UnixNano(),
+		FinishedAt: timestamppb.New(finishedAt),
+		Runtime:   s.runtimeName,
 	}
 	if err := s.client.ReportResult(ctx, rr); err != nil {
 		s.log.Warn("ReportResult failed", slog.String("job_id", jobID), slog.Any("err", err))

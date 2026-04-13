@@ -56,11 +56,19 @@ func (c *Client) Register(ctx context.Context, nodeID, address string) (*pb.Regi
 	})
 }
 
+// NodeCapacity holds the resource capacity of this node, reported in heartbeats.
+type NodeCapacity struct {
+	CpuMillicores   uint32
+	TotalMemBytes   uint64
+	MaxSlots        uint32
+}
+
 // SendHeartbeats opens the Heartbeat bidi-stream and sends one message every
 // interval until ctx is cancelled or the server sends a SHUTDOWN command.
 //
 // nodeID identifies this node.
 // runningJobs is the current job count reported to the coordinator.
+// capacity is the node's total resource capacity (reported every tick).
 // onCommand is called for each NodeCommand received; may be nil.
 //
 // Returns nil on clean shutdown (ctx cancelled or SHUTDOWN received).
@@ -70,7 +78,8 @@ func (c *Client) SendHeartbeats(
 	nodeID string,
 	interval time.Duration,
 	runningJobs func() int32, // called each tick to get current count
-	onCommand func(*pb.NodeCommand), // called for each server command; may be nil
+	capacity *NodeCapacity, // node resource capacity; may be nil
+	onCommand func(*pb.HeartbeatAck), // called for each server ack; may be nil
 ) error {
 	stream, err := c.Client.Heartbeat(ctx)
 	if err != nil {
@@ -93,7 +102,7 @@ func (c *Client) SendHeartbeats(
 			if onCommand != nil {
 				onCommand(cmd)
 			}
-			if cmd.Type == pb.NodeCommand_SHUTDOWN {
+			if cmd.Command == pb.NodeCommand_NODE_COMMAND_SHUTDOWN {
 				cmdErr <- nil
 				return
 			}
@@ -120,8 +129,12 @@ func (c *Client) SendHeartbeats(
 			}
 			msg := &pb.HeartbeatMessage{
 				NodeId:      nodeID,
-				Timestamp:   time.Now().UnixNano(),
 				RunningJobs: jobs,
+			}
+			if capacity != nil {
+				msg.CpuMillicores = capacity.CpuMillicores
+				msg.TotalMemoryBytes = capacity.TotalMemBytes
+				msg.MaxSlots = capacity.MaxSlots
 			}
 			// Increment seq locally — proto field unused by coordinator for now
 			// but useful for debugging dropped messages.
@@ -152,7 +165,7 @@ func (c *Client) StreamLogs(ctx context.Context, jobID, nodeID string, stdout, s
 		return fmt.Errorf("open StreamLogs: %w", err)
 	}
 
-	var seq int64
+	var seq uint64
 	send := func(data []byte) error {
 		if len(data) == 0 {
 			return nil

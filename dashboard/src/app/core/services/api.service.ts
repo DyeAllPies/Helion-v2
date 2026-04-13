@@ -24,6 +24,9 @@ interface ApiNodeInfo {
   registered_at?: string;
   cpu_percent?: number;
   mem_percent?: number;
+  cpu_millicores?: number;
+  total_mem_bytes?: number;
+  max_slots?: number;
 }
 interface ApiNodeListResponse {
   nodes: ApiNodeInfo[];
@@ -42,14 +45,17 @@ export class ApiService {
   getNodes(): Observable<Node[]> {
     return this.http.get<ApiNodeListResponse>(`${this.base}/nodes`).pipe(
       map(resp => resp.nodes.map(n => ({
-        node_id:       n.id,
-        address:       n.address,
-        healthy:       n.health === 'healthy',
-        last_seen:     n.last_seen,
-        running_jobs:  n.running_jobs,
-        cpu_percent:   n.cpu_percent ?? 0,
-        mem_percent:   n.mem_percent ?? 0,
-        registered_at: n.registered_at ?? n.last_seen,
+        node_id:         n.id,
+        address:         n.address,
+        healthy:         n.health === 'healthy',
+        last_seen:       n.last_seen,
+        running_jobs:    n.running_jobs,
+        cpu_percent:     n.cpu_percent ?? 0,
+        mem_percent:     n.mem_percent ?? 0,
+        registered_at:   n.registered_at ?? n.last_seen,
+        cpu_millicores:  n.cpu_millicores,
+        total_mem_bytes: n.total_mem_bytes,
+        max_slots:       n.max_slots,
       })))
     );
   }

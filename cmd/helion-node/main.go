@@ -31,10 +31,12 @@ import (
 	"syscall"
 	"time"
 
+	goruntime "runtime"
+
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	grpcclient "github.com/DyeAllPies/Helion-v2/internal/grpcclient"
 	"github.com/DyeAllPies/Helion-v2/internal/nodeserver"
 	"github.com/DyeAllPies/Helion-v2/internal/runtime"
-	grpcclient "github.com/DyeAllPies/Helion-v2/internal/grpcclient"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -202,6 +204,20 @@ func main() {
 		}
 	}()
 
+	// ── detect node capacity ──────────────────────────────────────────────────
+	var memStats goruntime.MemStats
+	goruntime.ReadMemStats(&memStats)
+	nodeCapacity := &grpcclient.NodeCapacity{
+		CpuMillicores: uint32(goruntime.NumCPU()) * 1000,
+		TotalMemBytes: memStats.Sys, // approximate total memory available to Go
+		MaxSlots:      uint32(goruntime.NumCPU()) * 2,
+	}
+	log.Info("node capacity detected",
+		slog.Uint64("cpu_millicores", uint64(nodeCapacity.CpuMillicores)),
+		slog.Uint64("total_mem_bytes", nodeCapacity.TotalMemBytes),
+		slog.Uint64("max_slots", uint64(nodeCapacity.MaxSlots)),
+	)
+
 	// ── heartbeat loop ────────────────────────────────────────────────────────
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -210,9 +226,10 @@ func main() {
 		for {
 			err := client.SendHeartbeats(ctx, nodeID, heartbeatInterval,
 				nodeSrv.RunningJobs,
-				func(cmd *pb.NodeCommand) {
-					if cmd != nil {
-						log.Info("coordinator command", slog.String("type", cmd.GetType().String()))
+				nodeCapacity,
+				func(ack *pb.HeartbeatAck) {
+					if ack != nil && ack.Command != pb.NodeCommand_NODE_COMMAND_NONE {
+						log.Info("coordinator command", slog.String("command", ack.Command.String()))
 					}
 				},
 			)

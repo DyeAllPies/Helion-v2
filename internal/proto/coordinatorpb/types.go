@@ -76,8 +76,9 @@ func (s JobStatus) IsTerminal() bool {
 // Node is the coordinator's in-memory and persisted record for a worker node.
 // Not a proto message — serialised as JSON by BadgerJSONPersister.
 //
-// The proto HeartbeatMessage carries NodeId + Timestamp + RunningJobs;
-// the registry merges those into this struct on every heartbeat received.
+// The proto HeartbeatMessage carries NodeId + Timestamp + RunningJobs +
+// capacity fields; the registry merges those into this struct on every
+// heartbeat received.
 type Node struct {
 	NodeID       string    `json:"node_id"`
 	Address      string    `json:"address"`    // set at Register time; not in heartbeat
@@ -87,6 +88,32 @@ type Node struct {
 	CpuPercent   float64   `json:"cpu_percent"`
 	MemPercent   float64   `json:"mem_percent"`
 	RegisteredAt time.Time `json:"registered_at"`
+
+	// Resource capacity — reported by the node agent via heartbeat.
+	// Used by ResourceAwarePolicy for bin-packing scheduling.
+	CpuMillicores   uint32 `json:"cpu_millicores,omitempty"`    // total CPU (e.g. 4000 = 4 cores)
+	TotalMemBytes   uint64 `json:"total_mem_bytes,omitempty"`   // total memory
+	MaxSlots        uint32 `json:"max_slots,omitempty"`         // max concurrent jobs
+}
+
+// ── ResourceRequest ──────────────────────────────────────────────────────────
+
+// ResourceRequest declares the resources a job requires for scheduling.
+// The scheduler reserves these amounts on the target node.
+type ResourceRequest struct {
+	CpuMillicores uint32 `json:"cpu_millicores,omitempty"` // CPU reservation (default: 100 = 0.1 core)
+	MemoryBytes   uint64 `json:"memory_bytes,omitempty"`   // memory reservation (default: 64MB)
+	Slots         uint32 `json:"slots,omitempty"`           // slot count (default: 1)
+}
+
+// DefaultResourceRequest returns the minimum resource request used when
+// a job doesn't specify one.
+func DefaultResourceRequest() ResourceRequest {
+	return ResourceRequest{
+		CpuMillicores: 100,
+		MemoryBytes:   64 << 20, // 64 MiB
+		Slots:         1,
+	}
 }
 
 // ── Job ───────────────────────────────────────────────────────────────────────
@@ -132,6 +159,10 @@ type Job struct {
 
 	// WorkflowID links this job to a workflow. Empty for standalone jobs.
 	WorkflowID string `json:"workflow_id,omitempty"`
+
+	// Resources declares the resource reservation for scheduling.
+	// Zero value means use DefaultResourceRequest().
+	Resources ResourceRequest `json:"resources,omitempty"`
 
 	// RetryPolicy controls automatic retry behavior on failure/timeout.
 	// Zero value (nil) means no retry — job fails immediately (max_attempts=1).

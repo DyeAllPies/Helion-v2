@@ -145,7 +145,8 @@ func TestRegistryIntegration_HeartbeatStream(t *testing.T) {
 			"test-node",
 			heartbeatInterval,
 			func() int32 { return lastRunning },
-			nil, // ignore NodeCommands for this test
+			nil, // no capacity
+			nil, // ignore acks for this test
 		)
 	}()
 
@@ -282,7 +283,7 @@ func TestRegistryIntegration_TwoNodesConcurrent(t *testing.T) {
 			hbCtx, hbCancel := context.WithTimeout(ctx, testDuration())
 			defer hbCancel()
 			if err := c.SendHeartbeats(hbCtx, n.id, heartbeatInterval,
-				func() int32 { return n.jobs }, nil); err != nil {
+				func() int32 { return n.jobs }, nil, nil); err != nil {
 				// Context cancellation is expected — not an error.
 				if ctx.Err() == nil && hbCtx.Err() == nil {
 					t.Errorf("SendHeartbeats %s: %v", n.id, err)

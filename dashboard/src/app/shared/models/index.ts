@@ -45,14 +45,17 @@ export interface SubmitJobRequest {
 // ── Node ──────────────────────────────────────────────────────────────────────
 
 export interface Node {
-  node_id:       string;
-  address:       string;
-  healthy:       boolean;
-  last_seen:     string;   // ISO 8601
-  running_jobs:  number;
-  cpu_percent:   number;
-  mem_percent:   number;
-  registered_at: string;
+  node_id:         string;
+  address:         string;
+  healthy:         boolean;
+  last_seen:       string;   // ISO 8601
+  running_jobs:    number;
+  cpu_percent:     number;
+  mem_percent:     number;
+  registered_at:   string;
+  cpu_millicores?: number;   // total CPU capacity (e.g. 4000 = 4 cores)
+  total_mem_bytes?: number;  // total memory in bytes
+  max_slots?:      number;   // max concurrent jobs
 }
 
 // ── Metrics ───────────────────────────────────────────────────────────────────

@@ -50,6 +50,11 @@ type nodeEntry struct {
 	// Mutable; written atomically by HandleHeartbeat.
 	_lastSeenNano int64 // Unix nanoseconds; 0 means "never seen"
 	_runningJobs  int32
+
+	// Resource capacity — written atomically by HandleHeartbeat.
+	_cpuMillicores   uint32
+	_totalMemBytes   uint64
+	_maxSlots        uint32
 }
 
 func (e *nodeEntry) storeAddress(addr string) {
@@ -84,6 +89,16 @@ func (e *nodeEntry) loadRunning() int32 {
 	return atomic.LoadInt32(&e._runningJobs)
 }
 
+func (e *nodeEntry) storeCapacity(cpuMilli uint32, memBytes uint64, slots uint32) {
+	atomic.StoreUint32(&e._cpuMillicores, cpuMilli)
+	atomic.StoreUint64(&e._totalMemBytes, memBytes)
+	atomic.StoreUint32(&e._maxSlots, slots)
+}
+
+func (e *nodeEntry) loadCpuMillicores() uint32  { return atomic.LoadUint32(&e._cpuMillicores) }
+func (e *nodeEntry) loadTotalMemBytes() uint64  { return atomic.LoadUint64(&e._totalMemBytes) }
+func (e *nodeEntry) loadMaxSlots() uint32       { return atomic.LoadUint32(&e._maxSlots) }
+
 func (e *nodeEntry) isHealthy(staleAfter time.Duration) bool {
 	ls := e.loadLastSeen()
 	return !ls.IsZero() && time.Since(ls) < staleAfter
@@ -91,11 +106,14 @@ func (e *nodeEntry) isHealthy(staleAfter time.Duration) bool {
 
 func (e *nodeEntry) snapshot(staleAfter time.Duration) *cpb.Node {
 	return &cpb.Node{
-		NodeID:       e.nodeID,
-		Address:      e.loadAddress(),
-		Healthy:      e.isHealthy(staleAfter),
-		LastSeen:     e.loadLastSeen(),
-		RunningJobs:  e.loadRunning(),
-		RegisteredAt: e.registeredAt,
+		NodeID:        e.nodeID,
+		Address:       e.loadAddress(),
+		Healthy:       e.isHealthy(staleAfter),
+		LastSeen:      e.loadLastSeen(),
+		RunningJobs:   e.loadRunning(),
+		RegisteredAt:  e.registeredAt,
+		CpuMillicores: e.loadCpuMillicores(),
+		TotalMemBytes: e.loadTotalMemBytes(),
+		MaxSlots:      e.loadMaxSlots(),
 	}
 }

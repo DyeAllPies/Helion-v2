@@ -153,6 +153,15 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	// Parse optional resource request.
+	if req.Resources != nil {
+		job.Resources = cpb.ResourceRequest{
+			CpuMillicores: req.Resources.CpuMillicores,
+			MemoryBytes:   req.Resources.MemoryBytes,
+			Slots:         req.Resources.Slots,
+		}
+	}
+
 	// Parse optional retry policy.
 	if req.RetryPolicy != nil {
 		rp := req.RetryPolicy

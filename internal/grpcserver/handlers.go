@@ -40,7 +40,7 @@ func (s *Server) Register(
 // If no registry is injected, the server still accepts the stream and sends
 // NOOP commands — valid gRPC behaviour, useful for the mTLS test.
 func (s *Server) Heartbeat(
-	stream grpc.BidiStreamingServer[pb.HeartbeatMessage, pb.NodeCommand],
+	stream grpc.BidiStreamingServer[pb.HeartbeatMessage, pb.HeartbeatAck],
 ) error {
 	ctx := stream.Context()
 
@@ -109,7 +109,7 @@ func (s *Server) Heartbeat(
 		}
 
 		// Send NOOP command back to acknowledge the heartbeat.
-		ack := &pb.NodeCommand{Type: pb.NodeCommand_NOOP}
+		ack := &pb.HeartbeatAck{Command: pb.NodeCommand_NODE_COMMAND_NONE}
 		if err := stream.Send(ack); err != nil {
 			return status.Errorf(codes.Internal, "heartbeat send: %v", err)
 		}

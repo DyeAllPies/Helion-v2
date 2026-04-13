@@ -2,6 +2,12 @@
 //
 // Services and messages exposed by the Helion coordinator.
 //
+// IMPORTANT: The generated .pb.go files in this directory were hand-edited
+// in early phases to add fields (e.g. JobResult.Success, ExitCode) that
+// were not in the .proto. These fields have since been added to the .proto
+// to bring it back in sync. Always regenerate after editing .proto files
+// and verify the build compiles cleanly.
+//
 // Regenerate with (from repo root):
 //   protoc --go_out=proto --go_opt=paths=source_relative \
 //          --go-grpc_out=proto --go-grpc_opt=paths=source_relative \
@@ -71,6 +77,13 @@ message RegisterResponse {
   // Heartbeat interval the node should use.  The coordinator sets this
   // cluster-wide; nodes must not use a self-chosen interval.
   int64 heartbeat_interval_seconds = 3;
+
+  // Echoed node ID (used by tests and simple clients).
+  string node_id = 4;
+
+  // PEM-encoded signed certificate + private key for the node's gRPC server.
+  // Issued by the coordinator's CA so dispatchers can verify node identity.
+  bytes signed_certificate = 5;
 }
 
 // ============================================================================
@@ -89,6 +102,12 @@ message HeartbeatMessage {
   uint64 seq = 4;
 
   google.protobuf.Timestamp sent_at = 5;
+
+  // Node capacity — reported on every heartbeat so the coordinator can
+  // make resource-aware scheduling decisions.
+  uint32 cpu_millicores     = 6;  // total CPU capacity (e.g., 4000 = 4 cores)
+  uint64 total_memory_bytes = 7;  // total memory in bytes
+  uint32 max_slots          = 8;  // max concurrent job slots
 }
 
 message HeartbeatAck {
@@ -112,9 +131,11 @@ enum NodeCommand {
 message JobResult {
   string job_id   = 1;
   string node_id  = 2;
-  JobStatus status = 3;
-  string error    = 4; // populated when status == FAILED or TIMEOUT
-  google.protobuf.Timestamp finished_at = 5;
+  bool   success  = 3;  // true if exit code 0
+  int32  exit_code = 4;
+  string error    = 5;  // populated when success == false
+  int64  started_at = 6; // Unix nanoseconds
+  google.protobuf.Timestamp finished_at = 7;
 
   // runtime identifies the backend that executed the job ("go" or "rust").
   string runtime = 8;

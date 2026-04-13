@@ -52,7 +52,7 @@ func TestHeartbeat_SendAndCancel_ReturnsNil(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- client.SendHeartbeats(ctx, "hb-node", 20*time.Millisecond,
-			func() int32 { return 0 }, nil)
+			func() int32 { return 0 }, nil, nil)
 	}()
 
 	time.Sleep(60 * time.Millisecond)
@@ -98,7 +98,7 @@ func TestHeartbeat_NoRegistry_AcceptsAndResponds(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- client.SendHeartbeats(ctx, "hb-noregistry", 20*time.Millisecond,
-			func() int32 { return 0 }, nil)
+			func() int32 { return 0 }, nil, nil)
 	}()
 
 	time.Sleep(60 * time.Millisecond)
@@ -153,7 +153,7 @@ func TestHeartbeat_RateLimited_TerminatesStream(t *testing.T) {
 	defer cancel()
 
 	err = client.SendHeartbeats(ctx, "rl-hb-node", 20*time.Millisecond,
-		func() int32 { return 0 }, nil)
+		func() int32 { return 0 }, nil, nil)
 	if err == nil {
 		t.Error("expected rate-limit error from heartbeat stream, got nil")
 	}
@@ -199,7 +199,7 @@ func TestCancelStream_TerminatesActiveHeartbeat(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- client.SendHeartbeats(ctx, "cancel-node", 20*time.Millisecond,
-			func() int32 { return 0 }, nil)
+			func() int32 { return 0 }, nil, nil)
 	}()
 
 	// Let the heartbeat stream establish.
@@ -254,7 +254,7 @@ func TestHeartbeat_WithRegistry_UnregisteredNode_TerminatesStream(t *testing.T) 
 	defer cancel()
 
 	err = client.SendHeartbeats(ctx, "unreg-hb", 20*time.Millisecond,
-		func() int32 { return 0 }, nil)
+		func() int32 { return 0 }, nil, nil)
 	if err == nil {
 		t.Error("expected error from unregistered heartbeat stream, got nil")
 	}
@@ -299,7 +299,7 @@ func TestHeartbeat_SecondStreamReplaces_ClosesFirst(t *testing.T) {
 	done1 := make(chan error, 1)
 	go func() {
 		done1 <- client.SendHeartbeats(ctx1, "dual-stream", 20*time.Millisecond,
-			func() int32 { return 0 }, nil)
+			func() int32 { return 0 }, nil, nil)
 	}()
 	time.Sleep(80 * time.Millisecond)
 
@@ -309,7 +309,7 @@ func TestHeartbeat_SecondStreamReplaces_ClosesFirst(t *testing.T) {
 	done2 := make(chan error, 1)
 	go func() {
 		done2 <- client.SendHeartbeats(ctx2, "dual-stream", 20*time.Millisecond,
-			func() int32 { return 0 }, nil)
+			func() int32 { return 0 }, nil, nil)
 	}()
 	time.Sleep(80 * time.Millisecond)
 

@@ -42,11 +42,14 @@ func (a *RegistryNodeAdapter) ListNodes(_ context.Context) ([]NodeInfo, error) {
 	out := make([]NodeInfo, 0, len(snap))
 	for _, n := range snap {
 		out = append(out, NodeInfo{
-			ID:          n.NodeID,
-			Health:      healthLabel(n.Healthy),
-			LastSeen:    n.LastSeen,
-			RunningJobs: int(n.RunningJobs),
-			Address:     n.Address,
+			ID:            n.NodeID,
+			Health:        healthLabel(n.Healthy),
+			LastSeen:      n.LastSeen,
+			RunningJobs:   int(n.RunningJobs),
+			Address:       n.Address,
+			CpuMillicores: n.CpuMillicores,
+			TotalMemBytes: n.TotalMemBytes,
+			MaxSlots:      n.MaxSlots,
 		})
 	}
 	return out, nil

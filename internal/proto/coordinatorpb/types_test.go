@@ -151,6 +151,21 @@ func TestBackoffStrategy_String_AllValues(t *testing.T) {
 	}
 }
 
+// ── DefaultResourceRequest ───────────────────────────────────────────────────
+
+func TestDefaultResourceRequest(t *testing.T) {
+	r := cpb.DefaultResourceRequest()
+	if r.CpuMillicores != 100 {
+		t.Errorf("CpuMillicores = %d, want 100", r.CpuMillicores)
+	}
+	if r.MemoryBytes != 64<<20 {
+		t.Errorf("MemoryBytes = %d, want %d", r.MemoryBytes, 64<<20)
+	}
+	if r.Slots != 1 {
+		t.Errorf("Slots = %d, want 1", r.Slots)
+	}
+}
+
 // ── Job.Env and Job.TimeoutSeconds ────────────────────────────────────────────
 
 func TestJob_EnvAndTimeout_DefaultToZeroValues(t *testing.T) {

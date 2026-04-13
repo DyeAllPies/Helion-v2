@@ -179,6 +179,42 @@ func TestRetry_GetJobShowsAttempt(t *testing.T) {
 	t.Logf("GET /jobs/%s: attempt=%d status=%s", result.ID, result.Attempt, result.Status)
 }
 
+// ── TestJob_SubmitWithResources ───────────────────────────────────────────────
+
+func TestJob_SubmitWithResources(t *testing.T) {
+	dbPath := t.TempDir()
+	persister, err := cluster.NewBadgerJSONPersister(dbPath, 10*time.Second)
+	if err != nil {
+		t.Fatalf("open BadgerDB: %v", err)
+	}
+	t.Cleanup(func() { _ = persister.Close() })
+
+	jobs := cluster.NewJobStore(persister, nil)
+	addr := startRetryAPIServer(t, jobs)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"id":      "resource-job-1",
+		"command": "echo",
+		"resources": map[string]interface{}{
+			"cpu_millicores": 500,
+			"memory_bytes":   134217728,
+			"slots":          2,
+		},
+	})
+
+	resp, err := http.Post("http://"+addr+"/jobs", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /jobs: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+
+	t.Log("job with resources submitted successfully")
+}
+
 // ── TestRetry_NoPolicy_DefaultBehavior ───────────────────────────────────────
 
 func TestRetry_NoPolicy_DefaultBehavior(t *testing.T) {
