@@ -115,6 +115,11 @@ message HeartbeatMessage {
   uint32 cpu_millicores     = 6;  // total CPU capacity (e.g., 4000 = 4 cores)
   uint64 total_memory_bytes = 7;  // total memory in bytes
   uint32 max_slots          = 8;  // max concurrent job slots
+  // Whole-GPU count — no MIG slicing, no fractional sharing. Zero on
+  // CPU-only nodes; the scheduler uses this as a bin-packing
+  // dimension alongside CPU/memory/slots. Per-device attributes
+  // (memory, model) are carried via node labels, not here.
+  uint32 total_gpus         = 9;
 }
 
 message HeartbeatAck {

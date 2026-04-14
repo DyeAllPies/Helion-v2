@@ -112,18 +112,35 @@ func (s *Scheduler) Pick() (*cpb.Node, error) {
 // so a selector mismatch surfaces as a distinct `job.unschedulable` event
 // instead of the retriable "no healthy nodes" path.
 func (s *Scheduler) PickForSelector(selector map[string]string) (*cpb.Node, error) {
+	return s.PickForJob(selector, 0)
+}
+
+// PickForJob applies both label-selector filtering and GPU-capacity
+// filtering in one pass before delegating to the configured Policy.
+// A node with TotalGpus < gpusRequested is invisible to the job, same
+// semantics as a missing-label mismatch: ErrNoNodeMatchesSelector
+// surfaces to the dispatch loop as an unschedulable event rather
+// than as a retriable "no healthy nodes" backoff.
+//
+// Passing gpusRequested == 0 disables the GPU filter entirely; every
+// healthy node (CPU-only or GPU-equipped) is eligible regardless of
+// its TotalGpus. This preserves the existing CPU-job scheduling path
+// with zero behaviour change.
+func (s *Scheduler) PickForJob(selector map[string]string, gpusRequested uint32) (*cpb.Node, error) {
 	nodes := s.source.HealthyNodes()
 	if len(nodes) == 0 {
 		return nil, ErrNoHealthyNodes
 	}
-	if len(selector) == 0 {
-		chosen := s.policy.Pick(nodes)
-		if chosen == nil {
-			return nil, ErrNoHealthyNodes
-		}
-		return chosen, nil
+	candidates := nodes
+	if len(selector) > 0 {
+		candidates = filterBySelector(candidates, selector)
 	}
-	candidates := filterBySelector(nodes, selector)
+	if gpusRequested > 0 {
+		candidates = filterByGPU(candidates, gpusRequested)
+	}
+	// Keep the cheap short-circuit: when no filters apply, call the
+	// policy on the whole healthy set so the one-off "every node
+	// eligible" case doesn't allocate a copy.
 	if len(candidates) == 0 {
 		return nil, ErrNoNodeMatchesSelector
 	}
@@ -132,6 +149,25 @@ func (s *Scheduler) PickForSelector(selector map[string]string) (*cpb.Node, erro
 		return nil, ErrNoNodeMatchesSelector
 	}
 	return chosen, nil
+}
+
+// filterByGPU returns the subset of nodes whose TotalGpus is at least
+// gpusRequested. Used by PickForJob so a job needing whole-GPUs is
+// never considered against a CPU-only or under-provisioned node.
+// No remaining-GPU tracking here — the coordinator doesn't know how
+// many GPUs are actively in use on each node (the node-local
+// allocator does). Treating TotalGpus as the ceiling is slightly
+// optimistic but safe: if the node's allocator has no free devices,
+// the job will fail fast when the runtime tries to claim one, which
+// is a visible error the operator can act on.
+func filterByGPU(nodes []*cpb.Node, gpusRequested uint32) []*cpb.Node {
+	out := make([]*cpb.Node, 0, len(nodes))
+	for _, n := range nodes {
+		if n != nil && n.TotalGpus >= gpusRequested {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // filterBySelector returns the subset of nodes whose Labels satisfy every

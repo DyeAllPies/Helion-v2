@@ -50,6 +50,11 @@ message DispatchRequest {
   repeated ArtifactBinding     inputs        = 8;  // staged before run
   repeated ArtifactBinding     outputs       = 9;  // uploaded after success
   map<string, string>          node_selector = 10; // advisory; enforced by coordinator scheduler
+
+  // Whole-GPU reservation. The node-side runtime's GPU allocator
+  // claims `gpus` device indices from the free pool and sets
+  // CUDA_VISIBLE_DEVICES on the subprocess env. 0 on CPU jobs.
+  uint32                       gpus          = 11;
 }
 
 message DispatchAck {

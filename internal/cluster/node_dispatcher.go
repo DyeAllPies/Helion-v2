@@ -71,6 +71,7 @@ func (d *GRPCNodeDispatcher) DispatchToNode(ctx context.Context, nodeAddr string
 		Inputs:         bindingsToProto(job.Inputs),
 		Outputs:        bindingsToProto(job.Outputs),
 		NodeSelector:   job.NodeSelector,
+		Gpus:           job.Resources.GPUs,
 	}
 
 	ack, err := client.Dispatch(dialCtx, req)

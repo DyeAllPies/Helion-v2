@@ -45,6 +45,13 @@ type RunRequest struct {
 	// the staging layer in internal/staging) is expected to set this to
 	// a per-job directory so the job cannot see another job's files.
 	WorkingDir string
+
+	// GPUs is the whole-GPU reservation for this job. When > 0 the
+	// runtime claims that many device indices from its node-local
+	// allocator and sets CUDA_VISIBLE_DEVICES on the subprocess env.
+	// The indices are released when the subprocess exits (success,
+	// failure, timeout, or context cancel).
+	GPUs uint32
 }
 
 // ResourceLimits constrains a job's CPU and memory usage via cgroup v2.

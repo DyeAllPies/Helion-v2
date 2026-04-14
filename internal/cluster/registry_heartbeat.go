@@ -51,8 +51,8 @@ func (r *Registry) HandleHeartbeat(ctx context.Context, msg *pb.HeartbeatMessage
 	entry.storeRunning(msg.RunningJobs)
 
 	// Update resource capacity if reported by the node.
-	if msg.CpuMillicores > 0 || msg.TotalMemoryBytes > 0 || msg.MaxSlots > 0 {
-		entry.storeCapacity(msg.CpuMillicores, msg.TotalMemoryBytes, uint32(msg.MaxSlots))
+	if msg.CpuMillicores > 0 || msg.TotalMemoryBytes > 0 || msg.MaxSlots > 0 || msg.TotalGpus > 0 {
+		entry.storeCapacity(msg.CpuMillicores, msg.TotalMemoryBytes, uint32(msg.MaxSlots), msg.TotalGpus)
 	}
 
 	// Persist asynchronously. See AUDIT 2026-04-11/M1 — timeout-bounded

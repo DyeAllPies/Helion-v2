@@ -176,10 +176,14 @@ type DispatchRequest struct {
 	TimeoutSeconds int64                  `protobuf:"varint,5,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	Limits         *ResourceLimits        `protobuf:"bytes,6,opt,name=limits,proto3" json:"limits,omitempty"`
 	// Step 2 — ML pipeline fields.
-	WorkingDir    string             `protobuf:"bytes,7,opt,name=working_dir,json=workingDir,proto3" json:"working_dir,omitempty"`                                                                                  // empty = per-job temp dir
-	Inputs        []*ArtifactBinding `protobuf:"bytes,8,rep,name=inputs,proto3" json:"inputs,omitempty"`                                                                                                            // staged before run
-	Outputs       []*ArtifactBinding `protobuf:"bytes,9,rep,name=outputs,proto3" json:"outputs,omitempty"`                                                                                                          // uploaded after success
-	NodeSelector  map[string]string  `protobuf:"bytes,10,rep,name=node_selector,json=nodeSelector,proto3" json:"node_selector,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // advisory; enforced by coordinator scheduler
+	WorkingDir   string             `protobuf:"bytes,7,opt,name=working_dir,json=workingDir,proto3" json:"working_dir,omitempty"`                                                                                  // empty = per-job temp dir
+	Inputs       []*ArtifactBinding `protobuf:"bytes,8,rep,name=inputs,proto3" json:"inputs,omitempty"`                                                                                                            // staged before run
+	Outputs      []*ArtifactBinding `protobuf:"bytes,9,rep,name=outputs,proto3" json:"outputs,omitempty"`                                                                                                          // uploaded after success
+	NodeSelector map[string]string  `protobuf:"bytes,10,rep,name=node_selector,json=nodeSelector,proto3" json:"node_selector,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // advisory; enforced by coordinator scheduler
+	// Whole-GPU reservation. The node-side runtime's GPU allocator
+	// claims `gpus` device indices from the free pool and sets
+	// CUDA_VISIBLE_DEVICES on the subprocess env. 0 on CPU jobs.
+	Gpus          uint32 `protobuf:"varint,11,opt,name=gpus,proto3" json:"gpus,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -282,6 +286,13 @@ func (x *DispatchRequest) GetNodeSelector() map[string]string {
 		return x.NodeSelector
 	}
 	return nil
+}
+
+func (x *DispatchRequest) GetGpus() uint32 {
+	if x != nil {
+		return x.Gpus
+	}
+	return 0
 }
 
 type DispatchAck struct {
@@ -532,7 +543,7 @@ const file_node_proto_rawDesc = "" +
 	"\x03uri\x18\x02 \x01(\tR\x03uri\x12\x1d\n" +
 	"\n" +
 	"local_path\x18\x03 \x01(\tR\tlocalPath\x12\x16\n" +
-	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"\xb1\x04\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"\xc5\x04\n" +
 	"\x0fDispatchRequest\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x12\n" +
@@ -545,7 +556,8 @@ const file_node_proto_rawDesc = "" +
 	"\x06inputs\x18\b \x03(\v2\x17.helion.ArtifactBindingR\x06inputs\x121\n" +
 	"\aoutputs\x18\t \x03(\v2\x17.helion.ArtifactBindingR\aoutputs\x12N\n" +
 	"\rnode_selector\x18\n" +
-	" \x03(\v2).helion.DispatchRequest.NodeSelectorEntryR\fnodeSelector\x1a6\n" +
+	" \x03(\v2).helion.DispatchRequest.NodeSelectorEntryR\fnodeSelector\x12\x12\n" +
+	"\x04gpus\x18\v \x01(\rR\x04gpus\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a?\n" +

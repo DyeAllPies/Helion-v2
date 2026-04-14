@@ -76,14 +76,21 @@ func loadNodeConfig(hostname string) nodeConfig {
 // selectRuntime constructs the Runtime implementation named by backend,
 // defaulting to the Go runtime for any unknown value. Extracted so the
 // backend-selection logic can be unit-tested without wiring a full agent.
-func selectRuntime(backend, socket string, log *slog.Logger) runtime.Runtime {
+//
+// totalGPUs sizes the Go runtime's device-index allocator. Passing 0
+// disables GPU allocation (the allocator rejects any request > 0,
+// matching the scheduler's filterByGPU contract that a CPU-only node
+// never sees a GPU job). Ignored on the Rust backend — GPU allocation
+// lives in the Rust executor there.
+func selectRuntime(backend, socket string, totalGPUs uint32, log *slog.Logger) runtime.Runtime {
 	switch backend {
 	case "rust":
 		log.Info("using Rust runtime", slog.String("socket", socket))
 		return runtime.NewRustClient(socket)
 	default:
-		log.Info("using Go runtime")
-		return runtime.NewGoRuntime()
+		log.Info("using Go runtime",
+			slog.Uint64("total_gpus", uint64(totalGPUs)))
+		return runtime.NewGoRuntimeWithGPUs(totalGPUs)
 	}
 }
 
@@ -107,8 +114,15 @@ func main() {
 		slog.String("runtime", runtimeBackend),
 	)
 
+	// ── GPU probe ─────────────────────────────────────────────────────────────
+	// Count once at startup; the result feeds both the runtime's
+	// device-index allocator and the heartbeat capacity report so
+	// coordinator-side scheduling matches what the runtime can
+	// actually satisfy. 0 on CPU-only hosts (the common case on CI).
+	totalGPUs := gpuCountProbe()
+
 	// ── runtime selection ─────────────────────────────────────────────────────
-	rt := selectRuntime(runtimeBackend, runtimeSocket, log)
+	rt := selectRuntime(runtimeBackend, runtimeSocket, totalGPUs, log)
 	defer rt.Close()
 
 	// ── TLS certificate bundle (bootstrap) ────────────────────────────────────
@@ -265,11 +279,13 @@ func main() {
 		CpuMillicores: uint32(goruntime.NumCPU()) * 1000,
 		TotalMemBytes: memStats.Sys, // approximate total memory available to Go
 		MaxSlots:      uint32(goruntime.NumCPU()) * 2,
+		TotalGpus:     totalGPUs,
 	}
 	log.Info("node capacity detected",
 		slog.Uint64("cpu_millicores", uint64(nodeCapacity.CpuMillicores)),
 		slog.Uint64("total_mem_bytes", nodeCapacity.TotalMemBytes),
 		slog.Uint64("max_slots", uint64(nodeCapacity.MaxSlots)),
+		slog.Uint64("total_gpus", uint64(nodeCapacity.TotalGpus)),
 	)
 
 	// ── heartbeat loop ────────────────────────────────────────────────────────

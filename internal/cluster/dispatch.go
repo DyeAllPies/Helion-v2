@@ -176,7 +176,7 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 			job = resolvedJob
 		}
 
-		node, err := d.scheduler.PickForSelector(job.NodeSelector)
+		node, err := d.scheduler.PickForJob(job.NodeSelector, job.Resources.GPUs)
 		if err != nil {
 			switch {
 			case errors.Is(err, ErrNoNodeMatchesSelector):

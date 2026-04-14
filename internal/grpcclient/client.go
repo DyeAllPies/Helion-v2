@@ -74,6 +74,7 @@ type NodeCapacity struct {
 	CpuMillicores   uint32
 	TotalMemBytes   uint64
 	MaxSlots        uint32
+	TotalGpus       uint32 // whole-GPU count (0 on CPU-only hosts)
 }
 
 // SendHeartbeats opens the Heartbeat bidi-stream and sends one message every
@@ -148,6 +149,7 @@ func (c *Client) SendHeartbeats(
 				msg.CpuMillicores = capacity.CpuMillicores
 				msg.TotalMemoryBytes = capacity.TotalMemBytes
 				msg.MaxSlots = capacity.MaxSlots
+				msg.TotalGpus = capacity.TotalGpus
 			}
 			// Increment seq locally — proto field unused by coordinator for now
 			// but useful for debugging dropped messages.

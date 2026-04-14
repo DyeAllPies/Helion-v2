@@ -328,8 +328,13 @@ type HeartbeatMessage struct {
 	CpuMillicores    uint32 `protobuf:"varint,6,opt,name=cpu_millicores,json=cpuMillicores,proto3" json:"cpu_millicores,omitempty"`            // total CPU capacity (e.g., 4000 = 4 cores)
 	TotalMemoryBytes uint64 `protobuf:"varint,7,opt,name=total_memory_bytes,json=totalMemoryBytes,proto3" json:"total_memory_bytes,omitempty"` // total memory in bytes
 	MaxSlots         uint32 `protobuf:"varint,8,opt,name=max_slots,json=maxSlots,proto3" json:"max_slots,omitempty"`                           // max concurrent job slots
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Whole-GPU count — no MIG slicing, no fractional sharing. Zero on
+	// CPU-only nodes; the scheduler uses this as a bin-packing
+	// dimension alongside CPU/memory/slots. Per-device attributes
+	// (memory, model) are carried via node labels, not here.
+	TotalGpus     uint32 `protobuf:"varint,9,opt,name=total_gpus,json=totalGpus,proto3" json:"total_gpus,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HeartbeatMessage) Reset() {
@@ -414,6 +419,13 @@ func (x *HeartbeatMessage) GetTotalMemoryBytes() uint64 {
 func (x *HeartbeatMessage) GetMaxSlots() uint32 {
 	if x != nil {
 		return x.MaxSlots
+	}
+	return 0
+}
+
+func (x *HeartbeatMessage) GetTotalGpus() uint32 {
+	if x != nil {
+		return x.TotalGpus
 	}
 	return 0
 }
@@ -1118,7 +1130,7 @@ const file_coordinator_proto_rawDesc = "" +
 	"\vca_cert_der\x18\x02 \x01(\fR\tcaCertDer\x12<\n" +
 	"\x1aheartbeat_interval_seconds\x18\x03 \x01(\x03R\x18heartbeatIntervalSeconds\x12\x17\n" +
 	"\anode_id\x18\x04 \x01(\tR\x06nodeId\x12-\n" +
-	"\x12signed_certificate\x18\x05 \x01(\fR\x11signedCertificate\"\xa1\x02\n" +
+	"\x12signed_certificate\x18\x05 \x01(\fR\x11signedCertificate\"\xc0\x02\n" +
 	"\x10HeartbeatMessage\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12!\n" +
@@ -1127,7 +1139,9 @@ const file_coordinator_proto_rawDesc = "" +
 	"\asent_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x06sentAt\x12%\n" +
 	"\x0ecpu_millicores\x18\x06 \x01(\rR\rcpuMillicores\x12,\n" +
 	"\x12total_memory_bytes\x18\a \x01(\x04R\x10totalMemoryBytes\x12\x1b\n" +
-	"\tmax_slots\x18\b \x01(\rR\bmaxSlots\"O\n" +
+	"\tmax_slots\x18\b \x01(\rR\bmaxSlots\x12\x1d\n" +
+	"\n" +
+	"total_gpus\x18\t \x01(\rR\ttotalGpus\"O\n" +
 	"\fHeartbeatAck\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12-\n" +
 	"\acommand\x18\x02 \x01(\x0e2\x13.helion.NodeCommandR\acommand\"\xb0\x02\n" +

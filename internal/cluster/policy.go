@@ -29,6 +29,9 @@ package cluster
 
 import (
 	"os"
+	"sort"
+	"strings"
+	"sync"
 	"sync/atomic"
 
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
@@ -64,11 +67,19 @@ var ErrNoNodeMatchesSelector error = noNodeMatchesSelectorError{}
 
 // RoundRobinPolicy distributes jobs evenly across healthy nodes in rotation.
 //
-// The counter is an atomic.Int64 so concurrent Pick() calls do not race.
-// This directly fixes the v1 bug where lastIndex was incremented under RLock,
-// which is undefined behaviour (RLock permits concurrent reads, not writes).
+// Each distinct candidate *set* (identified by the sorted node-ID list)
+// has its own counter, so when the scheduler's filter layers narrow the
+// healthy pool to a selector-specific or GPU-specific subset, rotation
+// within that subset is fair. A single global counter would be biased
+// toward whichever index the shared counter happens to land on when a
+// given subset is asked.
+//
+// Counters live in a sync.Map keyed by the candidate-set signature; the
+// memory profile is O(distinct candidate sets seen during the process
+// lifetime) which in practice is bounded by the number of distinct
+// label-selector + GPU-count combinations job submissions exercise.
 type RoundRobinPolicy struct {
-	counter atomic.Int64
+	counters sync.Map // map[string]*atomic.Int64 — key = sortedNodeIDs
 }
 
 // NewRoundRobinPolicy returns a ready-to-use RoundRobinPolicy.
@@ -78,18 +89,52 @@ func NewRoundRobinPolicy() *RoundRobinPolicy {
 
 func (p *RoundRobinPolicy) Name() string { return "round-robin" }
 
-// Pick returns the next node in rotation.
+// Pick returns the next node in rotation within the candidate set.
 //
-// The counter increments unconditionally; the modulo produces a valid index
-// into whatever-length slice was passed.  If the slice shrinks between calls
-// the index wraps cleanly.
+// Each distinct candidate set gets its own counter, so selector-filtered
+// or GPU-filtered subsets rotate fairly among their own members. The
+// counter increments unconditionally; the modulo produces a valid index
+// into whatever-length slice was passed. If the slice shrinks between
+// calls the index wraps cleanly.
 func (p *RoundRobinPolicy) Pick(nodes []*cpb.Node) *cpb.Node {
 	if len(nodes) == 0 {
 		return nil
 	}
-	// Add(1) returns the new value; subtract 1 to get a zero-based index.
-	idx := int(p.counter.Add(1)-1) % len(nodes)
+	counter := p.counterFor(nodes)
+	idx := int(counter.Add(1)-1) % len(nodes)
 	return nodes[idx]
+}
+
+// counterFor returns the counter associated with this exact candidate
+// set. The key is a sorted, separator-joined list of node IDs so two
+// calls with the same set (in any order) share a counter. A rebind of
+// the policy to a different backing Registry produces the same keys
+// for the same node IDs — intentional, so a restart doesn't reset
+// rotation unnecessarily.
+func (p *RoundRobinPolicy) counterFor(nodes []*cpb.Node) *atomic.Int64 {
+	key := candidateSetKey(nodes)
+	if v, ok := p.counters.Load(key); ok {
+		return v.(*atomic.Int64)
+	}
+	fresh := &atomic.Int64{}
+	actual, _ := p.counters.LoadOrStore(key, fresh)
+	return actual.(*atomic.Int64)
+}
+
+// candidateSetKey renders a stable identifier for a node set: sorted
+// node IDs joined with '|'. Fast enough for the handful of nodes a
+// typical Helion cluster has; repeated Pick calls on the same set
+// re-hit the same sync.Map slot.
+func candidateSetKey(nodes []*cpb.Node) string {
+	if len(nodes) == 1 {
+		return nodes[0].NodeID
+	}
+	ids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		ids = append(ids, n.NodeID)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, "|")
 }
 
 // ── Least-loaded ──────────────────────────────────────────────────────────────

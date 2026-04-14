@@ -1,7 +1,7 @@
 # Feature: Minimal ML Pipeline
 
 **Priority:** P1
-**Status:** In progress (steps 1–4 implemented; 5–10 pending)
+**Status:** In progress (steps 1–5 implemented; 6–10 pending)
 **Affected files:**
 `internal/api/types.go`,
 `internal/cluster/registry_node.go`,
@@ -478,7 +478,7 @@ the feature is done.
 | 2    | Job spec: inputs/outputs/working_dir + runtime staging | 1      | Medium | Done   |
 | 3    | Workflow artifact passing (`from: job.output`)   | 2            | Medium | Done   |
 | 4    | Node labels + node_selector scheduling           | —            | Small  | Done   |
-| 5    | GPU as a scheduling resource                     | 4            | Medium | Pending |
+| 5    | GPU as a scheduling resource                     | 4            | Medium | Done   |
 | 6    | Dataset + model registries (API + storage)       | 1            | Medium | Pending |
 | 7    | Inference jobs (Service spec + readiness)        | 2            | Small  | Pending |
 | 8    | Dashboard ML module                              | 6, 7         | Medium | Pending |
@@ -1000,6 +1000,104 @@ them up without having to re-discover the context:
   [deferred/README.md § ML Pipeline / Hardware attestation of node labels](deferred/README.md#hardware-attestation-of-node-labels)
   with the mitigation operators can apply in the meantime
   (deployment-supplied labels via `HELION_LABEL_*`).
+
+### GPU as a first-class resource (done)
+
+End-to-end GPU scheduling from API submission down to the
+`CUDA_VISIBLE_DEVICES` string on the subprocess env. Label-based
+matching (step 4) handles "which node has an A100?"; this slice
+handles "reserve N whole GPUs and pin the job to those specific
+device indices."
+
+Data flow:
+
+- [`cpb.ResourceRequest.GPUs`](../../internal/proto/coordinatorpb/types.go) +
+  [`api.ResourceRequestAPI.GPUs`](../../internal/api/types.go) mirror
+  each other; API validator caps requests at `maxGPUs = 16`.
+- `pb.HeartbeatMessage.total_gpus` (new field 9) +
+  `pb.DispatchRequest.gpus` (new field 11) carry the capacity and
+  the per-job reservation on the wire.
+- Node agent ([`cmd/helion-node/labels.go`](../../cmd/helion-node/labels.go))
+  probes `nvidia-smi --list-gpus` once at startup via the `gpuCountProbe`
+  injection seam; the count feeds both the runtime's device-index
+  allocator and the heartbeat capacity report so coordinator
+  scheduling matches what the runtime can actually satisfy.
+- Coordinator
+  ([`cpb.Node.TotalGpus`](../../internal/proto/coordinatorpb/types.go),
+  [`nodeEntry._totalGpus`](../../internal/cluster/registry_node.go))
+  persists and snapshots total-GPU capacity per node.
+
+Scheduler
+([`filterByGPU`](../../internal/cluster/scheduler.go)): the new
+`PickForJob(selector, gpusRequested)` entry point layers a GPU
+filter on top of the existing label-selector filter. A node with
+`TotalGpus < gpusRequested` is invisible to the job — same semantics
+as a missing label, same `ErrNoNodeMatchesSelector` surface, same
+debounced `job.unschedulable` event. `gpusRequested == 0` disables
+the filter entirely so legacy CPU jobs see every healthy node
+regardless of GPU count.
+
+GPU allocator
+([`internal/runtime/gpu_alloc.go`](../../internal/runtime/gpu_alloc.go)):
+per-node device-index tracker, lowest-index-first allocation,
+whole-device reservations only (no MIG slicing, no memory-fraction
+tracking — deferred). `GoRuntime.Run` claims indices before exec,
+sets `CUDA_VISIBLE_DEVICES=<csv>` on `cmd.Env`, releases on exit
+(success, failure, timeout, context cancel). Oversubscription
+returns an error before the subprocess starts so the coordinator's
+filter slip (e.g. racy capacity update) never produces duplicate
+device indices on a shared host.
+
+Step-4 follow-up landed here: round-robin fairness under selector
+filtering. `RoundRobinPolicy` replaced its single global
+`atomic.Int64` with a `sync.Map` of per-candidate-set counters
+keyed by the sorted node-ID list. Each distinct selector +
+GPU-filter candidate set now rotates fairly within its own members
+instead of inheriting a biased starting index from the global
+counter.
+
+Testing:
+
+- **Pure-Go tests run on CI** (no GPU needed, 19 new):
+  [`gpu_alloc_test.go`](../../internal/runtime/gpu_alloc_test.go)
+  covers allocator happy path / oversubscription rejection / zero
+  request no-op / release-and-reuse / concurrent distinct
+  allocations / zero-total fail / env string formatting;
+  [`gpu_runtime_test.go`](../../internal/runtime/gpu_runtime_test.go)
+  end-to-end runs through a stub echo command asserting
+  `CUDA_VISIBLE_DEVICES` is set on GPU jobs and not on CPU jobs;
+  [`scheduler_gpu_test.go`](../../internal/cluster/scheduler_gpu_test.go)
+  covers filter semantics;
+  [`roundrobin_per_selector_test.go`](../../internal/cluster/roundrobin_per_selector_test.go)
+  pins the per-set fairness invariant.
+- **Real-GPU harness, local only**, under
+  [`tests/gpu/`](../../tests/gpu/) gated by `//go:build gpu` so CI
+  never compiles or runs it. Invoked via
+  [`scripts/test-gpu.sh`](../../scripts/test-gpu.sh) after a
+  developer confirms the normal e2e suite passes. Spot-checks
+  `runNvidiaSmi` / `runNvidiaSmiCount` against a real device
+  inventory — the one code path the production labels+count
+  probes take that every other test stubs out.
+
+Security (matches step-4's posture — no new crypto, inherits mTLS +
+hybrid PQ channel). A compromised node can still over-report
+`total_gpus` and win GPU jobs it can't serve; defending that needs
+hardware attestation, already captured in the
+[deferred backlog](deferred/README.md#hardware-attestation-of-node-labels).
+The per-job allocator on the node itself catches the subset of
+this failure where a *friendly-but-misconfigured* node reports
+more GPUs than it really has: the first over-commit attempt fails
+with an "insufficient devices" error before the subprocess starts.
+
+What we did **not** do here (explicit deferrals):
+
+- GPU memory tracking / fractional sharing (MIG) — capacity is
+  whole-device count only.
+- Multi-host collective training (NCCL, topology-aware placement) —
+  the scheduler treats GPUs as a count per node, not a topology.
+- Per-device metrics (SM utilisation, memory pressure, thermal
+  throttling) — node reports only the total; runtime-side
+  observability is step 7-adjacent work.
 
 ### Rust runtime (parity landed)
 

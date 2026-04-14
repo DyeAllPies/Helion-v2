@@ -174,6 +174,7 @@ type nodeEntry struct {
 	_cpuMillicores   uint32
 	_totalMemBytes   uint64
 	_maxSlots        uint32
+	_totalGpus       uint32
 }
 
 func (e *nodeEntry) storeAddress(addr string) {
@@ -208,15 +209,17 @@ func (e *nodeEntry) loadRunning() int32 {
 	return atomic.LoadInt32(&e._runningJobs)
 }
 
-func (e *nodeEntry) storeCapacity(cpuMilli uint32, memBytes uint64, slots uint32) {
+func (e *nodeEntry) storeCapacity(cpuMilli uint32, memBytes uint64, slots uint32, gpus uint32) {
 	atomic.StoreUint32(&e._cpuMillicores, cpuMilli)
 	atomic.StoreUint64(&e._totalMemBytes, memBytes)
 	atomic.StoreUint32(&e._maxSlots, slots)
+	atomic.StoreUint32(&e._totalGpus, gpus)
 }
 
 func (e *nodeEntry) loadCpuMillicores() uint32  { return atomic.LoadUint32(&e._cpuMillicores) }
 func (e *nodeEntry) loadTotalMemBytes() uint64  { return atomic.LoadUint64(&e._totalMemBytes) }
 func (e *nodeEntry) loadMaxSlots() uint32       { return atomic.LoadUint32(&e._maxSlots) }
+func (e *nodeEntry) loadTotalGpus() uint32      { return atomic.LoadUint32(&e._totalGpus) }
 
 func (e *nodeEntry) isHealthy(staleAfter time.Duration) bool {
 	ls := e.loadLastSeen()
@@ -243,6 +246,7 @@ func (e *nodeEntry) snapshot(staleAfter time.Duration) *cpb.Node {
 		CpuMillicores: e.loadCpuMillicores(),
 		TotalMemBytes: e.loadTotalMemBytes(),
 		MaxSlots:      e.loadMaxSlots(),
+		TotalGpus:     e.loadTotalGpus(),
 		Labels:        labels,
 	}
 }

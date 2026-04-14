@@ -110,6 +110,7 @@ func (s *Server) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.Dis
 		Env:            mergeEnv(req.Env, prepared),
 		TimeoutSeconds: req.TimeoutSeconds,
 		Limits:         lim,
+		GPUs:           req.Gpus,
 	}
 	if prepared != nil {
 		runReq.WorkingDir = prepared.WorkingDir

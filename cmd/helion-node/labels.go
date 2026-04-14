@@ -16,6 +16,13 @@ import (
 // small and local.
 var gpuProbe = runNvidiaSmi
 
+// gpuCountProbe is the injection seam for GPU *count* detection. The
+// heartbeat carries a total-GPU capacity that the scheduler uses as
+// a bin-packing dimension; nodes run a `nvidia-smi --list-gpus`-style
+// probe at startup and report the resulting count. Stubbed in unit
+// tests the same way gpuProbe is — no real hardware touched on CI.
+var gpuCountProbe = runNvidiaSmiCount
+
 // gatherNodeLabels returns the label set this node should report at
 // registration. Sources, in order of precedence (later wins):
 //
@@ -60,6 +67,31 @@ func gatherNodeLabels() map[string]string {
 		labels[key] = value
 	}
 	return labels
+}
+
+// runNvidiaSmiCount counts the visible GPUs by running `nvidia-smi
+// --list-gpus` and tallying output lines. Any error (command
+// missing, no device, permission denied) returns 0 — the node
+// reports 0 GPUs to the coordinator, and ResourceAwarePolicy
+// treats it as CPU-only. Kept separate from runNvidiaSmi because
+// the heartbeat needs the count regardless of whether the label
+// probe succeeded (they're different CLI invocations with slightly
+// different failure modes).
+func runNvidiaSmiCount() uint32 {
+	cmd := exec.Command("nvidia-smi", "--list-gpus")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = nil
+	if err := cmd.Run(); err != nil {
+		return 0
+	}
+	var n uint32
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // runNvidiaSmi is the production GPU probe. It runs `nvidia-smi

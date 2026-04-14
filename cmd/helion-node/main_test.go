@@ -174,7 +174,7 @@ func TestSplitCertKeyPEM_PrivateKeyType(t *testing.T) {
 // ── selectRuntime ─────────────────────────────────────────────────────────────
 
 func TestSelectRuntime_DefaultReturnsGoRuntime(t *testing.T) {
-	rt := selectRuntime("go", "/ignored", discardLogger())
+	rt := selectRuntime("go", "/ignored", 0, discardLogger())
 	defer rt.Close()
 	if _, ok := rt.(*runtime.GoRuntime); !ok {
 		t.Errorf("want *runtime.GoRuntime for 'go', got %T", rt)
@@ -184,7 +184,7 @@ func TestSelectRuntime_DefaultReturnsGoRuntime(t *testing.T) {
 func TestSelectRuntime_UnknownBackendFallsBackToGo(t *testing.T) {
 	// Any unrecognised value must default to the Go runtime rather than
 	// returning nil — a typo in HELION_RUNTIME should never crash the agent.
-	rt := selectRuntime("typo", "/ignored", discardLogger())
+	rt := selectRuntime("typo", "/ignored", 0, discardLogger())
 	defer rt.Close()
 	if _, ok := rt.(*runtime.GoRuntime); !ok {
 		t.Errorf("unknown backend: want *runtime.GoRuntime, got %T", rt)
@@ -192,7 +192,7 @@ func TestSelectRuntime_UnknownBackendFallsBackToGo(t *testing.T) {
 }
 
 func TestSelectRuntime_RustBackendReturnsRustClient(t *testing.T) {
-	rt := selectRuntime("rust", "/tmp/nonexistent.sock", discardLogger())
+	rt := selectRuntime("rust", "/tmp/nonexistent.sock", 0, discardLogger())
 	defer rt.Close()
 	// RustClient doesn't need to connect at construction time; the socket
 	// is only dialed on first Run/Cancel call.

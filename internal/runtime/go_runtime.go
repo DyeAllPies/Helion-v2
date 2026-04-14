@@ -39,16 +39,33 @@ type GoRuntime struct {
 	// rejects any command not in the set. nil means allow-all (dev mode).
 	// Populated from HELION_ALLOWED_COMMANDS at construction time.
 	allowedCommands map[string]struct{}
+
+	// gpus tracks which whole-GPU device indices are currently claimed
+	// by a running job on this node. nil means "GPU scheduling disabled"
+	// (e.g. CPU-only node, or pre-GPU-slice binary) — a job that
+	// requests GPUs on such a runtime fails fast.
+	gpus *GPUAllocator
 }
 
 // NewGoRuntime returns a GoRuntime ready to execute jobs. It reads
 // HELION_DEFAULT_TIMEOUT_SEC and HELION_ALLOWED_COMMANDS from the environment
 // once at construction; subsequent env changes do not affect the instance.
+// GPU scheduling is disabled (no allocator). Use NewGoRuntimeWithGPUs for
+// nodes that will run GPU jobs.
 func NewGoRuntime() *GoRuntime {
+	return NewGoRuntimeWithGPUs(0)
+}
+
+// NewGoRuntimeWithGPUs returns a GoRuntime wired to a GPU allocator
+// sized for totalGPUs whole devices. Pass 0 for CPU-only nodes (the
+// allocator is still installed but rejects any request > 0 devices,
+// which matches the scheduler's filterByGPU contract).
+func NewGoRuntimeWithGPUs(totalGPUs uint32) *GoRuntime {
 	return &GoRuntime{
 		running:         make(map[string]context.CancelFunc),
 		defaultTimeout:  readDefaultTimeout(),
 		allowedCommands: readAllowedCommands(),
+		gpus:            NewGPUAllocator(totalGPUs),
 	}
 }
 
@@ -106,6 +123,29 @@ func (r *GoRuntime) Run(ctx context.Context, req RunRequest) (RunResult, error) 
 		timeout = r.defaultTimeout
 	}
 
+	// Claim GPU device indices before anything else so a contention
+	// failure short-circuits the whole dispatch. Held for the full
+	// lifetime of the subprocess; released in the defer below so a
+	// panic, timeout, or context cancel still returns the devices
+	// to the free pool.
+	var gpuIndices []int
+	if req.GPUs > 0 {
+		if r.gpus == nil {
+			return RunResult{
+				ExitCode: -1,
+				Error:    "gpu: runtime has no allocator (node reported 0 GPUs)",
+			}, nil
+		}
+		indices, err := r.gpus.Allocate(req.JobID, req.GPUs)
+		if err != nil {
+			return RunResult{
+				ExitCode: -1,
+				Error:    "gpu: " + err.Error(),
+			}, nil
+		}
+		gpuIndices = indices
+	}
+
 	jctx, cancel := context.WithTimeout(ctx, timeout)
 	r.mu.Lock()
 	r.running[req.JobID] = cancel
@@ -115,11 +155,25 @@ func (r *GoRuntime) Run(ctx context.Context, req RunRequest) (RunResult, error) 
 		r.mu.Lock()
 		delete(r.running, req.JobID)
 		r.mu.Unlock()
+		if r.gpus != nil {
+			r.gpus.Release(req.JobID)
+		}
 	}()
 
 	cmd := exec.CommandContext(jctx, req.Command, req.Args...)
 	for k, v := range req.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	// Expose the allocated GPU indices to the subprocess via the
+	// CUDA runtime convention. Empty indices (non-GPU job) means we
+	// do NOT set the var at all — setting it to "" would cause the
+	// CUDA runtime to hide every device including any the parent
+	// process could see, which is the right default for CPU jobs
+	// but causes a startup error for accidental GPU code paths. The
+	// allocator only hands out indices for req.GPUs > 0, so this
+	// branch is strictly the GPU-job path.
+	if len(gpuIndices) > 0 {
+		cmd.Env = append(cmd.Env, "CUDA_VISIBLE_DEVICES="+VisibleDevicesEnv(gpuIndices))
 	}
 	// When the staging layer has prepared a per-job working directory,
 	// cd into it before exec. Empty means "inherit the node agent's cwd"

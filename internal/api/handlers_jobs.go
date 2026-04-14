@@ -54,6 +54,13 @@ const (
 // cannot claim more than 512 logical cores.
 const maxCPUCores = 512
 
+// maxGPUs bounds a single job's GPU reservation. The cluster's biggest
+// commercially-available hosts ship with 8 GPUs today; 16 gives
+// plenty of headroom for future multi-root configurations without
+// letting an oversized request slip through and starve the
+// bin-packing loop.
+const maxGPUs = 16
+
 // forbiddenCommandChars lists bytes that are never valid inside req.Command.
 // Forbidding path separators prevents absolute-path execution; forbidding
 // shell metacharacters is defense-in-depth (the runtime does not invoke a
@@ -197,6 +204,11 @@ func validateSubmitRequest(req *SubmitRequest) string {
 		if req.Limits.CPUQuotaUS > req.Limits.CPUPeriodUS*maxCPUCores {
 			return fmt.Sprintf("limits.cpu_quota_us must not exceed %d × cpu_period_us", maxCPUCores)
 		}
+	}
+	// GPU reservation cap — defended at submit so the scheduler and
+	// the per-node GPU allocator never see an unreachable request.
+	if req.Resources != nil && req.Resources.GPUs > maxGPUs {
+		return fmt.Sprintf("resources.gpus must not exceed %d", maxGPUs)
 	}
 	// Step 2 — ML pipeline fields.
 	if len(req.WorkingDir) > maxWorkingDirLen {
@@ -453,6 +465,7 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 			CpuMillicores: req.Resources.CpuMillicores,
 			MemoryBytes:   req.Resources.MemoryBytes,
 			Slots:         req.Resources.Slots,
+			GPUs:          req.Resources.GPUs,
 		}
 	}
 

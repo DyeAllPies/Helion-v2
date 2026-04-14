@@ -103,6 +103,7 @@ type Node struct {
 	CpuMillicores   uint32 `json:"cpu_millicores,omitempty"`    // total CPU (e.g. 4000 = 4 cores)
 	TotalMemBytes   uint64 `json:"total_mem_bytes,omitempty"`   // total memory
 	MaxSlots        uint32 `json:"max_slots,omitempty"`         // max concurrent jobs
+	TotalGpus       uint32 `json:"total_gpus,omitempty"`        // whole-GPU capacity (0 = CPU-only)
 
 	// Labels reported at Register time. The scheduler's node_selector
 	// filter matches a job's NodeSelector against this map using
@@ -121,6 +122,12 @@ type ResourceRequest struct {
 	CpuMillicores uint32 `json:"cpu_millicores,omitempty"` // CPU reservation (default: 100 = 0.1 core)
 	MemoryBytes   uint64 `json:"memory_bytes,omitempty"`   // memory reservation (default: 64MB)
 	Slots         uint32 `json:"slots,omitempty"`           // slot count (default: 1)
+	// GPUs is a whole-GPU reservation (no MIG slicing, no fractional
+	// sharing). A job with GPUs>0 is only dispatched to nodes whose
+	// Node.TotalGpus is at least as large, and the node-side runtime
+	// assigns a comma-separated CUDA_VISIBLE_DEVICES list to the
+	// running process.
+	GPUs uint32 `json:"gpus,omitempty"`
 }
 
 // DefaultResourceRequest returns the minimum resource request used when

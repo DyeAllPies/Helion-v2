@@ -47,6 +47,7 @@ type ResourceRequestAPI struct {
 	CpuMillicores uint32 `json:"cpu_millicores,omitempty"` // CPU reservation (default: 100 = 0.1 core)
 	MemoryBytes   uint64 `json:"memory_bytes,omitempty"`   // memory reservation (default: 64MB)
 	Slots         uint32 `json:"slots,omitempty"`           // slot count (default: 1)
+	GPUs          uint32 `json:"gpus,omitempty"`           // whole-GPU reservation (bounded by maxGPUs)
 }
 
 // ArtifactBindingRequest is the JSON shape of an input/output entry on
