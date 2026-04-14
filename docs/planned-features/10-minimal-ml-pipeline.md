@@ -1,7 +1,7 @@
 # Feature: Minimal ML Pipeline
 
 **Priority:** P1
-**Status:** Missing
+**Status:** In progress (steps 1–2 implemented; 3–10 pending)
 **Affected files:**
 `internal/api/types.go`,
 `internal/cluster/registry_node.go`,
@@ -399,22 +399,142 @@ the feature is done.
 
 ## Implementation order
 
-| Step | Description                                      | Depends on   | Effort |
-|------|--------------------------------------------------|--------------|--------|
-| 1    | Artifact store abstraction (local + S3)          | —            | Medium |
-| 2    | Job spec: inputs/outputs/working_dir + runtime staging | 1      | Medium |
-| 3    | Workflow artifact passing (`from: job.output`)   | 2            | Medium |
-| 4    | Node labels + node_selector scheduling           | —            | Small  |
-| 5    | GPU as a scheduling resource                     | 4            | Medium |
-| 6    | Dataset + model registries (API + storage)       | 1            | Medium |
-| 7    | Inference jobs (Service spec + readiness)        | 2            | Small  |
-| 8    | Dashboard ML module                              | 6, 7         | Medium |
-| 9    | Iris end-to-end example                          | 2, 3, 6, 7   | Small  |
-| 10   | Documentation                                    | All          | Small  |
+| Step | Description                                      | Depends on   | Effort | Status |
+|------|--------------------------------------------------|--------------|--------|--------|
+| 1    | Artifact store abstraction (local + S3)          | —            | Medium | Done   |
+| 2    | Job spec: inputs/outputs/working_dir + runtime staging | 1      | Medium | Done   |
+| 3    | Workflow artifact passing (`from: job.output`)   | 2            | Medium | Pending |
+| 4    | Node labels + node_selector scheduling           | —            | Small  | Pending |
+| 5    | GPU as a scheduling resource                     | 4            | Medium | Pending |
+| 6    | Dataset + model registries (API + storage)       | 1            | Medium | Pending |
+| 7    | Inference jobs (Service spec + readiness)        | 2            | Small  | Pending |
+| 8    | Dashboard ML module                              | 6, 7         | Medium | Pending |
+| 9    | Iris end-to-end example                          | 2, 3, 6, 7   | Small  | Pending |
+| 10   | Documentation                                    | All          | Small  | Pending |
 
 Roughly: steps 1-3 unlock data-flow workflows, 4-5 unlock GPU scheduling,
 6-7 unlock the registry-and-serve loop, 8-10 are surface polish + the
 acceptance test.
+
+---
+
+## Implementation notes
+
+### Step 1 — artifact store (done)
+
+Landed in [`internal/artifacts/`](../../internal/artifacts/) with two
+backends behind a single `Store` interface:
+
+- `LocalStore` — filesystem root, `file://` URIs, atomic writes
+  (tempfile → fsync → rename), streaming SHA-256 in `Stat`, context
+  cancellation on every I/O chunk.
+- `S3Store` — S3-compatible, `s3://<bucket>/<key>` URIs, via
+  `github.com/minio/minio-go/v7`. Interface-level `s3Client` abstraction
+  so unit tests run against an in-memory fake; a live integration test
+  gates on `MINIO_TEST_ENDPOINT` for real-MinIO round-trips.
+- `Open(Config)` factory driven by `HELION_ARTIFACTS_BACKEND` +
+  backend-specific env vars.
+
+Store-layer hardening (API-layer hardening deferred to the handler
+step): key length cap (`MaxKeyLength = 1024`, matches S3 ceiling),
+rejection of NUL + ASCII control bytes, rejection of absolute paths,
+backslashes, Windows drive letters, traversal via `..`, URIs that
+escape the store root, URIs that name a different bucket, and wrong
+schemes. Tests: **35 pass + 1 skipped live integration**
+([`local_test.go`](../../internal/artifacts/local_test.go),
+[`s3_test.go`](../../internal/artifacts/s3_test.go),
+[`config_test.go`](../../internal/artifacts/config_test.go)).
+
+### Step 2 — job spec + runtime staging (done)
+
+Data model:
+
+- [`proto/node.proto`](../../proto/node.proto) — new `ArtifactBinding`
+  message; `DispatchRequest` extended with `working_dir`, `inputs`,
+  `outputs`, `node_selector`. Protos regenerated.
+- [`internal/proto/coordinatorpb/types.go`](../../internal/proto/coordinatorpb/types.go) —
+  `cpb.Job` gets the same four fields plus a new `cpb.ArtifactBinding`
+  struct. JSON-serialised, so existing BadgerDB rows deserialize
+  forward-compatibly.
+- [`internal/api/types.go`](../../internal/api/types.go) — `SubmitRequest`
+  gets the same fields plus `ArtifactBindingRequest`.
+
+API validation
+([`internal/api/handlers_jobs.go`](../../internal/api/handlers_jobs.go)):
+
+- Binding name must match `[A-Z_][A-Z0-9_]*` so `HELION_INPUT_<NAME>`
+  is always a safe env var.
+- `local_path`: relative, ≤ 512 bytes, no NUL, no `\`, no `/`-prefix,
+  no empty / `.` / `..` segments.
+- `node_selector`: Kubernetes-shaped sizes (key ≤ 63 bytes, value ≤ 253,
+  ≤ 32 entries), no `=` or NUL in keys.
+- Per-direction cap: 64 bindings. URI: ≤ 2048 bytes, no NUL. Inputs
+  **must** supply a URI; outputs **must not** (the runtime assigns it).
+  Duplicate names rejected per direction.
+
+Staging ([`internal/staging/`](../../internal/staging/)):
+
+- `Stager.Prepare` — mints a 0o700 workdir under
+  `HELION_WORK_ROOT` (or `$TMPDIR/helion-jobs`), downloads each input
+  with `O_EXCL` + 0o600, enforces `MaxInputDownloadBytes`
+  (2 GiB, tunable) via `io.LimitedReader`, pre-creates output parent
+  dirs, exports `HELION_INPUT_<NAME>` and `HELION_OUTPUT_<NAME>`.
+  Rolls back the workdir on any failure.
+- `Stager.Finalize` — uploads outputs **only on success** under
+  `jobs/<job_id>/<local_path>` keys, refuses symlinks + irregular files
+  + oversize outputs via `Lstat`, always cleans up the workdir unless
+  `HELION_KEEP_WORKDIR=1`.
+
+Wiring:
+
+- [`internal/cluster/node_dispatcher.go`](../../internal/cluster/node_dispatcher.go) —
+  forwards bindings on the wire.
+- [`internal/runtime/runtime.go`](../../internal/runtime/runtime.go) +
+  [`go_runtime.go`](../../internal/runtime/go_runtime.go) — `RunRequest.WorkingDir`
+  sets `cmd.Dir`.
+- [`internal/nodeserver/server.go`](../../internal/nodeserver/server.go) —
+  calls `Prepare → rt.Run → Finalize`. Stager-less nodes **reject**
+  jobs that carry bindings rather than running blind. Env merge gives
+  stager values precedence so a caller cannot shadow `HELION_INPUT_*`.
+- [`cmd/helion-node/main.go`](../../cmd/helion-node/main.go) — opt-in:
+  stager wires up only when `HELION_ARTIFACTS_BACKEND` is set.
+
+Security matrix applied in this step:
+
+| Concern | Mitigation |
+|---|---|
+| Path traversal in `local_path` | API validator + `safeJoin` prefix-check |
+| Workdir escape via symlink outputs | `Lstat` + regular-file gate |
+| Disk fill via oversized download | `MaxInputDownloadBytes` LimitedReader |
+| Artifact-store fill via oversized upload | `MaxOutputUploadBytes` pre-flight Lstat |
+| Cross-job key collisions | `jobs/<job_id>/` prefix |
+| Cross-job workdir collisions | Per-job `Mkdir`; fail-loud on reuse |
+| Env shadowing attack | Stager wins in merge |
+| Partial workdir on failure | Prepare rollback + guaranteed Finalize cleanup |
+| Shell-unsafe artifact names | Submit-time regex check |
+| Absolute `local_path` tricks on Windows | Reject `/`, `\`, drive-letter prefix |
+| Submit-bomb via huge binding list | 64-per-direction cap |
+| Unconfigured nodes running ML jobs blind | Refuse dispatch when `stager == nil` |
+
+Deferred to later steps (HTTP handler layer when artifact upload API
+lands in step 6): per-subject rate limit on artifact upload, audit
+events (`artifact.put`, `staging.prepared`, `staging.uploaded`),
+`http.MaxBytesReader` on the upload handler, signed URLs for node→S3
+direct transfer, resolved output URIs surfaced in terminal event
+payloads (marked `TODO(step 3)` in the server).
+
+Tests: **47 new, all passing**
+([`handlers_jobs_step2_test.go`](../../internal/api/handlers_jobs_step2_test.go),
+[`staging_test.go`](../../internal/staging/staging_test.go),
+[`go_runtime_workdir_test.go`](../../internal/runtime/go_runtime_workdir_test.go)).
+
+### Parity gap: Rust runtime
+
+The Rust runtime ([`runtime-rust/`](../../runtime-rust/)) still honours
+only the legacy `RunRequest` fields. Rust-backed nodes refuse jobs
+carrying bindings (because they are not wired to a Stager yet). Parity
+is tracked as a follow-up before step 3 can promise workflow-level
+artifact passing on Rust nodes.
 
 ## Open questions
 

@@ -187,6 +187,49 @@ type Job struct {
 	// RetryAfter is the earliest time this job can be retried. Set when a job
 	// enters the retrying state. The dispatch loop skips jobs where now < RetryAfter.
 	RetryAfter time.Time `json:"retry_after,omitempty"`
+
+	// ── Step 2: ML pipeline fields ───────────────────────────────────────
+	//
+	// WorkingDir is the directory the runtime cd's into before exec. Empty
+	// means "let the node mint a per-job temp dir under HELION_WORK_ROOT".
+	WorkingDir string `json:"working_dir,omitempty"`
+
+	// Inputs are artifact-store objects the runtime downloads into the
+	// working directory before the command runs. The runtime exports
+	// HELION_INPUT_<NAME> = absolute path for each entry.
+	Inputs []ArtifactBinding `json:"inputs,omitempty"`
+
+	// Outputs are paths under the working directory that the runtime
+	// uploads to the artifact store after the command exits 0. The
+	// resolved URIs are recorded on the job's terminal event so that
+	// downstream workflow jobs and the registry can reference them.
+	Outputs []ArtifactBinding `json:"outputs,omitempty"`
+
+	// NodeSelector narrows the set of nodes eligible to run this job.
+	// Step 2 stores the selector verbatim; step 4 wires it into the
+	// scheduler. Exact-match equality on labels the node reports at
+	// registration time.
+	NodeSelector map[string]string `json:"node_selector,omitempty"`
+}
+
+// ArtifactBinding attaches an artifact-store object to a job as either
+// an input (staged before run) or an output (uploaded after success).
+// URIs are opaque; see internal/artifacts for the schemes understood
+// by the coordinator's configured store.
+type ArtifactBinding struct {
+	// Name is surfaced to the job as HELION_INPUT_<NAME> / HELION_OUTPUT_<NAME>.
+	// Must be a valid shell identifier ([A-Z_][A-Z0-9_]*), enforced at
+	// submit time so later code can trust it.
+	Name string `json:"name"`
+
+	// URI points to the artifact in the store. Required for inputs;
+	// assigned by the runtime after upload for outputs.
+	URI string `json:"uri,omitempty"`
+
+	// LocalPath is the job-relative path. Rejected at submit time if
+	// absolute or containing ".." segments so it cannot escape the
+	// working directory.
+	LocalPath string `json:"local_path"`
 }
 
 // ── BackoffStrategy ──────────────────────────────────────────────────────────

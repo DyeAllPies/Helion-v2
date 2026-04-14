@@ -14,6 +14,22 @@ message ResourceLimits {
   uint64 cpu_period_us = 3; // accounting period in microseconds (default 100000)
 }
 
+// ArtifactBinding is an artifact-store object attached to a job, either as
+// an input (downloaded before the command runs) or as an output (uploaded
+// after the command exits 0). See internal/artifacts for URI semantics.
+message ArtifactBinding {
+  // Logical name, surfaced to the job as HELION_INPUT_<NAME> or
+  // HELION_OUTPUT_<NAME>. Must be a valid shell identifier ([A-Z_][A-Z0-9_]*).
+  string name       = 1;
+  // Artifact URI. For inputs: where the node pulls from.
+  // For outputs: set by the node after upload and recorded in the
+  // terminal event payload — callers leave it empty on submit.
+  string uri        = 2;
+  // Path relative to the job's working directory. Must stay inside
+  // working_dir; absolute paths and ".." segments are rejected.
+  string local_path = 3;
+}
+
 message DispatchRequest {
   string          job_id          = 1;
   string          command         = 2;
@@ -21,6 +37,12 @@ message DispatchRequest {
   map<string, string> env         = 4;
   int64           timeout_seconds = 5;
   ResourceLimits  limits          = 6;
+
+  // Step 2 — ML pipeline fields.
+  string                       working_dir   = 7;  // empty = per-job temp dir
+  repeated ArtifactBinding     inputs        = 8;  // staged before run
+  repeated ArtifactBinding     outputs       = 9;  // uploaded after success
+  map<string, string>          node_selector = 10; // advisory; enforced by coordinator scheduler
 }
 
 message DispatchAck {

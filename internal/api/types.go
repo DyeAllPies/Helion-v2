@@ -49,6 +49,14 @@ type ResourceRequestAPI struct {
 	Slots         uint32 `json:"slots,omitempty"`           // slot count (default: 1)
 }
 
+// ArtifactBindingRequest is the JSON shape of an input/output entry on
+// SubmitRequest. See cpb.ArtifactBinding for the persisted form.
+type ArtifactBindingRequest struct {
+	Name      string `json:"name"`                // required; [A-Z_][A-Z0-9_]*
+	URI       string `json:"uri,omitempty"`       // required for inputs; empty for outputs
+	LocalPath string `json:"local_path"`          // required; relative, no ".."
+}
+
 // SubmitRequest is the JSON body for POST /jobs.
 type SubmitRequest struct {
 	ID             string              `json:"id"`              // client-generated; required
@@ -60,6 +68,12 @@ type SubmitRequest struct {
 	Resources      *ResourceRequestAPI `json:"resources,omitempty"` // optional scheduling reservation
 	Priority       *uint32             `json:"priority,omitempty"` // 0-100, default 50
 	RetryPolicy    *RetryPolicyRequest `json:"retry_policy,omitempty"` // optional retry configuration
+
+	// Step 2 — ML pipeline fields.
+	WorkingDir   string                   `json:"working_dir,omitempty"`   // optional; empty = per-job tempdir on the node
+	Inputs       []ArtifactBindingRequest `json:"inputs,omitempty"`        // artifact-store objects to stage before run
+	Outputs      []ArtifactBindingRequest `json:"outputs,omitempty"`       // paths to upload after run
+	NodeSelector map[string]string        `json:"node_selector,omitempty"` // exact-match label selector (step 4 wires scheduling)
 }
 
 // JobResponse is the JSON body returned by POST /jobs and GET /jobs/{id}.

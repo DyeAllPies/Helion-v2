@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/grpcclient"
+	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	"github.com/DyeAllPies/Helion-v2/internal/runtime"
+	"github.com/DyeAllPies/Helion-v2/internal/staging"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -26,6 +28,7 @@ type Server struct {
 	pb.UnimplementedNodeServiceServer
 
 	rt          runtime.Runtime
+	stager      *staging.Stager    // optional; nil disables artifact staging
 	client      *grpcclient.Client // coordinator gRPC client for callbacks
 	nodeID      string
 	runtimeName string // "go" or "rust" — reported in JobResult
@@ -39,8 +42,11 @@ type Server struct {
 // coordinator after each job completes.
 // runtimeName is "go" or "rust" — included in every JobResult so the
 // coordinator knows which backend executed the job.
-func New(rt runtime.Runtime, client *grpcclient.Client, nodeID, runtimeName string, log *slog.Logger) *Server {
-	return &Server{rt: rt, client: client, nodeID: nodeID, runtimeName: runtimeName, log: log}
+// stager may be nil for nodes that should not participate in the ML
+// artifact pipeline; Dispatch will reject jobs that carry artifact
+// bindings when the stager is disabled.
+func New(rt runtime.Runtime, stager *staging.Stager, client *grpcclient.Client, nodeID, runtimeName string, log *slog.Logger) *Server {
+	return &Server{rt: rt, stager: stager, client: client, nodeID: nodeID, runtimeName: runtimeName, log: log}
 }
 
 // RunningJobs returns the count of currently-executing jobs.
@@ -72,15 +78,65 @@ func (s *Server) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.Dis
 			CPUPeriodUS: req.Limits.CpuPeriodUs,
 		}
 	}
-	result, err := s.rt.Run(ctx, runtime.RunRequest{
+
+	// Step 2 — stage artifact inputs and outputs. When the job carries
+	// no bindings (legacy / non-ML path) we skip the stager entirely
+	// so existing behaviour is unchanged. A stager-less node that
+	// receives a job with bindings refuses it rather than executing
+	// the command blind to its declared I/O.
+	hasBindings := len(req.Inputs) > 0 || len(req.Outputs) > 0 || req.WorkingDir != ""
+	var prepared *staging.Prepared
+	if hasBindings {
+		if s.stager == nil {
+			msg := "node has no artifact stager; job declares inputs/outputs"
+			s.log.Warn(msg, slog.String("job_id", req.JobId))
+			s.reportResult(ctx, req.JobId, false, -1, msg, startedAt, time.Now())
+			return &pb.DispatchAck{JobId: req.JobId, Accepted: false, Error: msg}, nil
+		}
+		job := jobFromDispatch(req)
+		p, perr := s.stager.Prepare(ctx, job)
+		if perr != nil {
+			s.log.Error("staging prepare", slog.String("job_id", req.JobId), slog.Any("err", perr))
+			s.reportResult(ctx, req.JobId, false, -1, perr.Error(), startedAt, time.Now())
+			return &pb.DispatchAck{JobId: req.JobId, Accepted: false, Error: perr.Error()}, nil
+		}
+		prepared = p
+	}
+
+	runReq := runtime.RunRequest{
 		JobID:          req.JobId,
 		Command:        req.Command,
 		Args:           req.Args,
-		Env:            req.Env,
+		Env:            mergeEnv(req.Env, prepared),
 		TimeoutSeconds: req.TimeoutSeconds,
 		Limits:         lim,
-	})
+	}
+	if prepared != nil {
+		runReq.WorkingDir = prepared.WorkingDir
+	}
+	result, err := s.rt.Run(ctx, runReq)
 	finishedAt := time.Now()
+
+	// Finalize runs on both success and failure so the working
+	// directory is always cleaned up; it only uploads outputs when
+	// the job exited zero and no KillReason fired.
+	var outputURIs []staging.ResolvedOutput
+	if prepared != nil {
+		success := err == nil && result.ExitCode == 0 && result.KillReason == ""
+		res, ferr := s.stager.Finalize(ctx, prepared, success)
+		if ferr != nil {
+			s.log.Error("staging finalize",
+				slog.String("job_id", req.JobId), slog.Any("err", ferr))
+			// Upload failure degrades the job to failed even if the
+			// process exited zero — the caller cannot trust outputs
+			// that did not make it into the artifact store.
+			if err == nil {
+				err = ferr
+			}
+		}
+		outputURIs = res
+	}
+	_ = outputURIs // TODO(step 3): plumb into ReportResult for analytics + lineage
 
 	if err != nil {
 		s.log.Error("runtime error", slog.String("job_id", req.JobId), slog.Any("err", err))
@@ -155,6 +211,42 @@ func (s *Server) Cancel(_ context.Context, req *pb.CancelRequest) (*pb.Ack, erro
 		return nil, status.Errorf(codes.NotFound, "cancel %s: %v", req.JobId, err)
 	}
 	return &pb.Ack{Ok: true}, nil
+}
+
+// jobFromDispatch lifts the wire-format DispatchRequest onto the
+// internal cpb.Job shape that staging.Prepare expects. Only the fields
+// the stager actually reads are populated.
+func jobFromDispatch(req *pb.DispatchRequest) *cpb.Job {
+	job := &cpb.Job{ID: req.JobId, WorkingDir: req.WorkingDir}
+	for _, b := range req.Inputs {
+		job.Inputs = append(job.Inputs, cpb.ArtifactBinding{
+			Name: b.Name, URI: b.Uri, LocalPath: b.LocalPath,
+		})
+	}
+	for _, b := range req.Outputs {
+		job.Outputs = append(job.Outputs, cpb.ArtifactBinding{
+			Name: b.Name, URI: b.Uri, LocalPath: b.LocalPath,
+		})
+	}
+	return job
+}
+
+// mergeEnv returns a new env map with the stager's additions layered on
+// top of whatever the caller supplied. Stager keys (HELION_INPUT_*,
+// HELION_OUTPUT_*) take precedence so a malicious job cannot shadow
+// them by sending a same-named entry in req.Env.
+func mergeEnv(base map[string]string, p *staging.Prepared) map[string]string {
+	if p == nil || len(p.EnvAdditions) == 0 {
+		return base
+	}
+	out := make(map[string]string, len(base)+len(p.EnvAdditions))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range p.EnvAdditions {
+		out[k] = v
+	}
+	return out
 }
 
 // GetMetrics returns current node metrics.

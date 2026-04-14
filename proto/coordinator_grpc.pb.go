@@ -2,6 +2,12 @@
 //
 // Services and messages exposed by the Helion coordinator.
 //
+// IMPORTANT: The generated .pb.go files in this directory were hand-edited
+// in early phases to add fields (e.g. JobResult.Success, ExitCode) that
+// were not in the .proto. These fields have since been added to the .proto
+// to bring it back in sync. Always regenerate after editing .proto files
+// and verify the build compiles cleanly.
+//
 // Regenerate with (from repo root):
 //   protoc --go_out=proto --go_opt=paths=source_relative \
 //          --go-grpc_out=proto --go-grpc_opt=paths=source_relative \

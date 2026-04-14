@@ -39,6 +39,12 @@ type RunRequest struct {
 	Env            map[string]string
 	TimeoutSeconds int64
 	Limits         ResourceLimits
+
+	// WorkingDir is the directory the runtime cd's into before exec.
+	// Empty means "inherit the node agent's cwd" — the caller (typically
+	// the staging layer in internal/staging) is expected to set this to
+	// a per-job directory so the job cannot see another job's files.
+	WorkingDir string
 }
 
 // ResourceLimits constrains a job's CPU and memory usage via cgroup v2.

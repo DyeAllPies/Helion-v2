@@ -33,10 +33,12 @@ import (
 
 	goruntime "runtime"
 
+	"github.com/DyeAllPies/Helion-v2/internal/artifacts"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	grpcclient "github.com/DyeAllPies/Helion-v2/internal/grpcclient"
 	"github.com/DyeAllPies/Helion-v2/internal/nodeserver"
 	"github.com/DyeAllPies/Helion-v2/internal/runtime"
+	"github.com/DyeAllPies/Helion-v2/internal/staging"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -175,8 +177,25 @@ func main() {
 	heartbeatInterval := 10 * time.Second
 	log.Info("registered", slog.Duration("heartbeat_interval", heartbeatInterval))
 
+	// ── optional artifact stager (step 2 of the ML pipeline) ──────────────
+	// Opt-in: if HELION_ARTIFACTS_BACKEND is unset the node starts
+	// without a stager and refuses ML jobs. This keeps non-ML
+	// deployments unchanged.
+	var stager *staging.Stager
+	if os.Getenv("HELION_ARTIFACTS_BACKEND") != "" {
+		store, err := artifacts.Open(artifacts.ConfigFromEnv())
+		if err != nil {
+			log.Error("artifact store open", slog.Any("err", err))
+			os.Exit(1)
+		}
+		keep := os.Getenv("HELION_KEEP_WORKDIR") == "1"
+		stager = staging.NewStager(store, os.Getenv("HELION_WORK_ROOT"), keep, log)
+		log.Info("artifact stager enabled",
+			slog.String("backend", os.Getenv("HELION_ARTIFACTS_BACKEND")))
+	}
+
 	// ── gRPC server (NodeService) ─────────────────────────────────────────────
-	nodeSrv := nodeserver.New(rt, client, nodeID, runtimeBackend, log)
+	nodeSrv := nodeserver.New(rt, stager, client, nodeID, runtimeBackend, log)
 
 	serverCreds, err := bundle.ServerCredentials()
 	if err != nil {

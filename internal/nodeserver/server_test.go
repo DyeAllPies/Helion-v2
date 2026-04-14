@@ -65,7 +65,7 @@ func (m *mockRuntime) Close() error { return nil }
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func newServer(rt runtime.Runtime) *Server {
-	return New(rt, nil, "test-node", "go", slog.Default())
+	return New(rt, nil, nil, "test-node", "go", slog.Default())
 }
 
 // ── Dispatch tests ────────────────────────────────────────────────────────────
@@ -264,7 +264,7 @@ func TestReportResult_WithFailingClient_LogsWarning(t *testing.T) {
 	defer client.Close()
 
 	rt := newMock(runtime.RunResult{ExitCode: 0}, nil)
-	srv := New(rt, client, "rr-node", "go", slog.Default())
+	srv := New(rt, nil, client, "rr-node", "go", slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

@@ -61,6 +61,99 @@ const maxCPUCores = 512
 // common injection shapes).
 const forbiddenCommandChars = "/\\`$|&;<>\x00"
 
+// Step 2 — ML pipeline input/output bounds. These caps mirror the
+// defense-in-depth approach used elsewhere in this file: each bound is
+// generous (much larger than any realistic ML job) but sharp enough that
+// an unbounded request cannot weaponise it. The same limits apply to
+// inputs and outputs independently.
+const (
+	maxArtifactBindings    = 64   // per-direction (inputs or outputs)
+	maxArtifactNameLen     = 64   // environment-variable name ceiling
+	maxArtifactLocalPath   = 512  // relative path length
+	maxArtifactURILen      = 2048 // URI length ceiling
+	maxNodeSelectorEntries = 32
+	maxNodeSelectorKeyLen  = 63
+	maxNodeSelectorValLen  = 253
+	maxWorkingDirLen       = 512
+)
+
+// validateArtifactName enforces that Name is a valid shell identifier.
+// The runtime uses it verbatim in HELION_INPUT_<NAME>, so anything that
+// isn't [A-Z_][A-Z0-9_]* would either fail on exec or, worse, be
+// interpreted oddly by the child process's shell wrappers.
+func validateArtifactName(name string) bool {
+	if name == "" || len(name) > maxArtifactNameLen {
+		return false
+	}
+	for i, c := range name {
+		switch {
+		case c >= 'A' && c <= 'Z':
+		case c == '_':
+		case i > 0 && c >= '0' && c <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validateLocalPath rejects paths that could escape the working
+// directory. Absolute paths, backslashes (Windows separators snuck past
+// clients), NUL bytes, and any ".." segment are refused. A traversal
+// check runs after filepath.Clean-style normalisation in the runtime,
+// but we reject early here so a bad request never even reaches a node.
+func validateLocalPath(p string) string {
+	if p == "" {
+		return "local_path is required"
+	}
+	if len(p) > maxArtifactLocalPath {
+		return fmt.Sprintf("local_path must not exceed %d bytes", maxArtifactLocalPath)
+	}
+	if strings.ContainsRune(p, '\x00') {
+		return "local_path must not contain NUL"
+	}
+	if strings.ContainsRune(p, '\\') {
+		return "local_path must use forward slashes"
+	}
+	if strings.HasPrefix(p, "/") {
+		return "local_path must be relative"
+	}
+	// Segment scan: reject empty and ".." segments. "." is allowed only
+	// as the single leading segment in patterns like "./file", which
+	// we normalise by not allowing it outright — keep things simple.
+	for seg := range strings.SplitSeq(p, "/") {
+		if seg == "" || seg == ".." || seg == "." {
+			return "local_path must not contain empty, '.', or '..' segments"
+		}
+	}
+	return ""
+}
+
+// validateNodeSelector applies label-shape rules before persisting.
+// Keys and values are clamped to Kubernetes-compatible sizes so that
+// once the scheduler wires these in (step 4), the limits already match
+// operator muscle memory.
+func validateNodeSelector(sel map[string]string) string {
+	if len(sel) > maxNodeSelectorEntries {
+		return fmt.Sprintf("node_selector must not exceed %d entries", maxNodeSelectorEntries)
+	}
+	for k, v := range sel {
+		if k == "" || len(k) > maxNodeSelectorKeyLen {
+			return fmt.Sprintf("node_selector keys must be 1-%d bytes", maxNodeSelectorKeyLen)
+		}
+		if strings.ContainsAny(k, "=\x00") {
+			return "node_selector keys must not contain '=' or NUL"
+		}
+		if len(v) > maxNodeSelectorValLen {
+			return fmt.Sprintf("node_selector values must not exceed %d bytes", maxNodeSelectorValLen)
+		}
+		if strings.ContainsRune(v, '\x00') {
+			return "node_selector values must not contain NUL"
+		}
+	}
+	return ""
+}
+
 // validateSubmitRequest runs the AUDIT C4 / C5 input checks that do not depend
 // on request state. Returns an empty string on success or a user-facing error
 // message (which the caller sends with 400 Bad Request).
@@ -105,7 +198,91 @@ func validateSubmitRequest(req *SubmitRequest) string {
 			return fmt.Sprintf("limits.cpu_quota_us must not exceed %d × cpu_period_us", maxCPUCores)
 		}
 	}
+	// Step 2 — ML pipeline fields.
+	if len(req.WorkingDir) > maxWorkingDirLen {
+		return fmt.Sprintf("working_dir must not exceed %d bytes", maxWorkingDirLen)
+	}
+	if strings.ContainsRune(req.WorkingDir, '\x00') {
+		return "working_dir must not contain NUL"
+	}
+	if msg := validateArtifactBindings("inputs", req.Inputs, true); msg != "" {
+		return msg
+	}
+	if msg := validateArtifactBindings("outputs", req.Outputs, false); msg != "" {
+		return msg
+	}
+	// Names must be unique across inputs alone and outputs alone so the
+	// HELION_INPUT_<NAME> / HELION_OUTPUT_<NAME> exports are unambiguous.
+	if dup := firstDuplicateBindingName(req.Inputs); dup != "" {
+		return fmt.Sprintf("inputs: duplicate name %q", dup)
+	}
+	if dup := firstDuplicateBindingName(req.Outputs); dup != "" {
+		return fmt.Sprintf("outputs: duplicate name %q", dup)
+	}
+	if msg := validateNodeSelector(req.NodeSelector); msg != "" {
+		return msg
+	}
 	return ""
+}
+
+// validateArtifactBindings runs per-binding checks common to inputs and
+// outputs. requireURI differentiates the two: inputs must name the
+// artifact to pull, outputs have their URI assigned by the runtime.
+func validateArtifactBindings(kind string, bs []ArtifactBindingRequest, requireURI bool) string {
+	if len(bs) > maxArtifactBindings {
+		return fmt.Sprintf("%s must not exceed %d entries", kind, maxArtifactBindings)
+	}
+	for i, b := range bs {
+		if !validateArtifactName(b.Name) {
+			return fmt.Sprintf("%s[%d].name must match [A-Z_][A-Z0-9_]*", kind, i)
+		}
+		if msg := validateLocalPath(b.LocalPath); msg != "" {
+			return fmt.Sprintf("%s[%d].%s", kind, i, msg)
+		}
+		if len(b.URI) > maxArtifactURILen {
+			return fmt.Sprintf("%s[%d].uri must not exceed %d bytes", kind, i, maxArtifactURILen)
+		}
+		if strings.ContainsRune(b.URI, '\x00') {
+			return fmt.Sprintf("%s[%d].uri must not contain NUL", kind, i)
+		}
+		if requireURI && b.URI == "" {
+			return fmt.Sprintf("%s[%d].uri is required", kind, i)
+		}
+		if !requireURI && b.URI != "" {
+			return fmt.Sprintf("%s[%d].uri must be empty on submit (assigned by runtime)", kind, i)
+		}
+	}
+	return ""
+}
+
+func firstDuplicateBindingName(bs []ArtifactBindingRequest) string {
+	seen := make(map[string]struct{}, len(bs))
+	for _, b := range bs {
+		if _, ok := seen[b.Name]; ok {
+			return b.Name
+		}
+		seen[b.Name] = struct{}{}
+	}
+	return ""
+}
+
+// convertBindings lifts the API-layer request shape to the persisted
+// cpb.ArtifactBinding form. Returns nil for an empty slice so that the
+// BadgerDB-serialised Job carries an omitted key rather than an empty
+// array (match the rest of this struct's ergonomics).
+func convertBindings(bs []ArtifactBindingRequest) []cpb.ArtifactBinding {
+	if len(bs) == 0 {
+		return nil
+	}
+	out := make([]cpb.ArtifactBinding, len(bs))
+	for i, b := range bs {
+		out[i] = cpb.ArtifactBinding{
+			Name:      b.Name,
+			URI:       b.URI,
+			LocalPath: b.LocalPath,
+		}
+	}
+	return out
 }
 
 func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
@@ -151,6 +328,10 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 			CPUQuotaUS:  req.Limits.CPUQuotaUS,
 			CPUPeriodUS: req.Limits.CPUPeriodUS,
 		},
+		WorkingDir:   req.WorkingDir,
+		Inputs:       convertBindings(req.Inputs),
+		Outputs:      convertBindings(req.Outputs),
+		NodeSelector: req.NodeSelector,
 	}
 
 	// Parse optional priority.

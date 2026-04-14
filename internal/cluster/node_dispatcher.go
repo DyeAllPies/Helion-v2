@@ -28,6 +28,24 @@ func NewGRPCNodeDispatcher(tlsCfg *tls.Config) *GRPCNodeDispatcher {
 	return &GRPCNodeDispatcher{tlsCfg: tlsCfg}
 }
 
+// bindingsToProto lifts the persisted cpb.ArtifactBinding slice onto the
+// wire-format pb.ArtifactBinding. nil in -> nil out, so a job with no
+// inputs / outputs sends an absent (not empty) repeated field.
+func bindingsToProto(bs []cpb.ArtifactBinding) []*pb.ArtifactBinding {
+	if len(bs) == 0 {
+		return nil
+	}
+	out := make([]*pb.ArtifactBinding, len(bs))
+	for i, b := range bs {
+		out[i] = &pb.ArtifactBinding{
+			Name:      b.Name,
+			Uri:       b.URI,
+			LocalPath: b.LocalPath,
+		}
+	}
+	return out
+}
+
 // DispatchToNode sends a job to the node at nodeAddr via gRPC Dispatch RPC.
 func (d *GRPCNodeDispatcher) DispatchToNode(ctx context.Context, nodeAddr string, job *cpb.Job) error {
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -48,6 +66,10 @@ func (d *GRPCNodeDispatcher) DispatchToNode(ctx context.Context, nodeAddr string
 		Args:           job.Args,
 		Env:            job.Env,
 		TimeoutSeconds: job.TimeoutSeconds,
+		WorkingDir:     job.WorkingDir,
+		Inputs:         bindingsToProto(job.Inputs),
+		Outputs:        bindingsToProto(job.Outputs),
+		NodeSelector:   job.NodeSelector,
 	}
 
 	ack, err := client.Dispatch(dialCtx, req)

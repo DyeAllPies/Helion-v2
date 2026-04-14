@@ -83,6 +83,76 @@ func (x *ResourceLimits) GetCpuPeriodUs() uint64 {
 	return 0
 }
 
+// ArtifactBinding is an artifact-store object attached to a job, either as
+// an input (downloaded before the command runs) or as an output (uploaded
+// after the command exits 0). See internal/artifacts for URI semantics.
+type ArtifactBinding struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Logical name, surfaced to the job as HELION_INPUT_<NAME> or
+	// HELION_OUTPUT_<NAME>. Must be a valid shell identifier ([A-Z_][A-Z0-9_]*).
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Artifact URI. For inputs: where the node pulls from.
+	// For outputs: set by the node after upload and recorded in the
+	// terminal event payload — callers leave it empty on submit.
+	Uri string `protobuf:"bytes,2,opt,name=uri,proto3" json:"uri,omitempty"`
+	// Path relative to the job's working directory. Must stay inside
+	// working_dir; absolute paths and ".." segments are rejected.
+	LocalPath     string `protobuf:"bytes,3,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArtifactBinding) Reset() {
+	*x = ArtifactBinding{}
+	mi := &file_node_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArtifactBinding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArtifactBinding) ProtoMessage() {}
+
+func (x *ArtifactBinding) ProtoReflect() protoreflect.Message {
+	mi := &file_node_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArtifactBinding.ProtoReflect.Descriptor instead.
+func (*ArtifactBinding) Descriptor() ([]byte, []int) {
+	return file_node_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ArtifactBinding) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ArtifactBinding) GetUri() string {
+	if x != nil {
+		return x.Uri
+	}
+	return ""
+}
+
+func (x *ArtifactBinding) GetLocalPath() string {
+	if x != nil {
+		return x.LocalPath
+	}
+	return ""
+}
+
 type DispatchRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	JobId          string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
@@ -91,13 +161,18 @@ type DispatchRequest struct {
 	Env            map[string]string      `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	TimeoutSeconds int64                  `protobuf:"varint,5,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	Limits         *ResourceLimits        `protobuf:"bytes,6,opt,name=limits,proto3" json:"limits,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Step 2 — ML pipeline fields.
+	WorkingDir    string             `protobuf:"bytes,7,opt,name=working_dir,json=workingDir,proto3" json:"working_dir,omitempty"`                                                                                  // empty = per-job temp dir
+	Inputs        []*ArtifactBinding `protobuf:"bytes,8,rep,name=inputs,proto3" json:"inputs,omitempty"`                                                                                                            // staged before run
+	Outputs       []*ArtifactBinding `protobuf:"bytes,9,rep,name=outputs,proto3" json:"outputs,omitempty"`                                                                                                          // uploaded after success
+	NodeSelector  map[string]string  `protobuf:"bytes,10,rep,name=node_selector,json=nodeSelector,proto3" json:"node_selector,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // advisory; enforced by coordinator scheduler
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DispatchRequest) Reset() {
 	*x = DispatchRequest{}
-	mi := &file_node_proto_msgTypes[1]
+	mi := &file_node_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -109,7 +184,7 @@ func (x *DispatchRequest) String() string {
 func (*DispatchRequest) ProtoMessage() {}
 
 func (x *DispatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[1]
+	mi := &file_node_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -122,7 +197,7 @@ func (x *DispatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DispatchRequest.ProtoReflect.Descriptor instead.
 func (*DispatchRequest) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{1}
+	return file_node_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *DispatchRequest) GetJobId() string {
@@ -167,6 +242,34 @@ func (x *DispatchRequest) GetLimits() *ResourceLimits {
 	return nil
 }
 
+func (x *DispatchRequest) GetWorkingDir() string {
+	if x != nil {
+		return x.WorkingDir
+	}
+	return ""
+}
+
+func (x *DispatchRequest) GetInputs() []*ArtifactBinding {
+	if x != nil {
+		return x.Inputs
+	}
+	return nil
+}
+
+func (x *DispatchRequest) GetOutputs() []*ArtifactBinding {
+	if x != nil {
+		return x.Outputs
+	}
+	return nil
+}
+
+func (x *DispatchRequest) GetNodeSelector() map[string]string {
+	if x != nil {
+		return x.NodeSelector
+	}
+	return nil
+}
+
 type DispatchAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
@@ -178,7 +281,7 @@ type DispatchAck struct {
 
 func (x *DispatchAck) Reset() {
 	*x = DispatchAck{}
-	mi := &file_node_proto_msgTypes[2]
+	mi := &file_node_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -190,7 +293,7 @@ func (x *DispatchAck) String() string {
 func (*DispatchAck) ProtoMessage() {}
 
 func (x *DispatchAck) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[2]
+	mi := &file_node_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -203,7 +306,7 @@ func (x *DispatchAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DispatchAck.ProtoReflect.Descriptor instead.
 func (*DispatchAck) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{2}
+	return file_node_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *DispatchAck) GetJobId() string {
@@ -237,7 +340,7 @@ type CancelRequest struct {
 
 func (x *CancelRequest) Reset() {
 	*x = CancelRequest{}
-	mi := &file_node_proto_msgTypes[3]
+	mi := &file_node_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -249,7 +352,7 @@ func (x *CancelRequest) String() string {
 func (*CancelRequest) ProtoMessage() {}
 
 func (x *CancelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[3]
+	mi := &file_node_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -262,7 +365,7 @@ func (x *CancelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRequest.ProtoReflect.Descriptor instead.
 func (*CancelRequest) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{3}
+	return file_node_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CancelRequest) GetJobId() string {
@@ -293,7 +396,7 @@ type NodeMetrics struct {
 
 func (x *NodeMetrics) Reset() {
 	*x = NodeMetrics{}
-	mi := &file_node_proto_msgTypes[4]
+	mi := &file_node_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -305,7 +408,7 @@ func (x *NodeMetrics) String() string {
 func (*NodeMetrics) ProtoMessage() {}
 
 func (x *NodeMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[4]
+	mi := &file_node_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -318,7 +421,7 @@ func (x *NodeMetrics) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeMetrics.ProtoReflect.Descriptor instead.
 func (*NodeMetrics) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{4}
+	return file_node_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *NodeMetrics) GetNodeId() string {
@@ -371,7 +474,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_node_proto_msgTypes[5]
+	mi := &file_node_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -383,7 +486,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[5]
+	mi := &file_node_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -396,7 +499,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{5}
+	return file_node_proto_rawDescGZIP(), []int{6}
 }
 
 var File_node_proto protoreflect.FileDescriptor
@@ -409,15 +512,29 @@ const file_node_proto_rawDesc = "" +
 	"\fmemory_bytes\x18\x01 \x01(\x04R\vmemoryBytes\x12 \n" +
 	"\fcpu_quota_us\x18\x02 \x01(\x04R\n" +
 	"cpuQuotaUs\x12\"\n" +
-	"\rcpu_period_us\x18\x03 \x01(\x04R\vcpuPeriodUs\"\x9b\x02\n" +
+	"\rcpu_period_us\x18\x03 \x01(\x04R\vcpuPeriodUs\"V\n" +
+	"\x0fArtifactBinding\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
+	"\x03uri\x18\x02 \x01(\tR\x03uri\x12\x1d\n" +
+	"\n" +
+	"local_path\x18\x03 \x01(\tR\tlocalPath\"\xb1\x04\n" +
 	"\x0fDispatchRequest\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x12\n" +
 	"\x04args\x18\x03 \x03(\tR\x04args\x122\n" +
 	"\x03env\x18\x04 \x03(\v2 .helion.DispatchRequest.EnvEntryR\x03env\x12'\n" +
 	"\x0ftimeout_seconds\x18\x05 \x01(\x03R\x0etimeoutSeconds\x12.\n" +
-	"\x06limits\x18\x06 \x01(\v2\x16.helion.ResourceLimitsR\x06limits\x1a6\n" +
+	"\x06limits\x18\x06 \x01(\v2\x16.helion.ResourceLimitsR\x06limits\x12\x1f\n" +
+	"\vworking_dir\x18\a \x01(\tR\n" +
+	"workingDir\x12/\n" +
+	"\x06inputs\x18\b \x03(\v2\x17.helion.ArtifactBindingR\x06inputs\x121\n" +
+	"\aoutputs\x18\t \x03(\v2\x17.helion.ArtifactBindingR\aoutputs\x12N\n" +
+	"\rnode_selector\x18\n" +
+	" \x03(\v2).helion.DispatchRequest.NodeSelectorEntryR\fnodeSelector\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a?\n" +
+	"\x11NodeSelectorEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"V\n" +
 	"\vDispatchAck\x12\x15\n" +
@@ -456,31 +573,36 @@ func file_node_proto_rawDescGZIP() []byte {
 	return file_node_proto_rawDescData
 }
 
-var file_node_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_node_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_node_proto_goTypes = []any{
 	(*ResourceLimits)(nil),  // 0: helion.ResourceLimits
-	(*DispatchRequest)(nil), // 1: helion.DispatchRequest
-	(*DispatchAck)(nil),     // 2: helion.DispatchAck
-	(*CancelRequest)(nil),   // 3: helion.CancelRequest
-	(*NodeMetrics)(nil),     // 4: helion.NodeMetrics
-	(*Empty)(nil),           // 5: helion.Empty
-	nil,                     // 6: helion.DispatchRequest.EnvEntry
-	(*Ack)(nil),             // 7: helion.Ack
+	(*ArtifactBinding)(nil), // 1: helion.ArtifactBinding
+	(*DispatchRequest)(nil), // 2: helion.DispatchRequest
+	(*DispatchAck)(nil),     // 3: helion.DispatchAck
+	(*CancelRequest)(nil),   // 4: helion.CancelRequest
+	(*NodeMetrics)(nil),     // 5: helion.NodeMetrics
+	(*Empty)(nil),           // 6: helion.Empty
+	nil,                     // 7: helion.DispatchRequest.EnvEntry
+	nil,                     // 8: helion.DispatchRequest.NodeSelectorEntry
+	(*Ack)(nil),             // 9: helion.Ack
 }
 var file_node_proto_depIdxs = []int32{
-	6, // 0: helion.DispatchRequest.env:type_name -> helion.DispatchRequest.EnvEntry
+	7, // 0: helion.DispatchRequest.env:type_name -> helion.DispatchRequest.EnvEntry
 	0, // 1: helion.DispatchRequest.limits:type_name -> helion.ResourceLimits
-	1, // 2: helion.NodeService.Dispatch:input_type -> helion.DispatchRequest
-	3, // 3: helion.NodeService.Cancel:input_type -> helion.CancelRequest
-	5, // 4: helion.NodeService.GetMetrics:input_type -> helion.Empty
-	2, // 5: helion.NodeService.Dispatch:output_type -> helion.DispatchAck
-	7, // 6: helion.NodeService.Cancel:output_type -> helion.Ack
-	4, // 7: helion.NodeService.GetMetrics:output_type -> helion.NodeMetrics
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	1, // 2: helion.DispatchRequest.inputs:type_name -> helion.ArtifactBinding
+	1, // 3: helion.DispatchRequest.outputs:type_name -> helion.ArtifactBinding
+	8, // 4: helion.DispatchRequest.node_selector:type_name -> helion.DispatchRequest.NodeSelectorEntry
+	2, // 5: helion.NodeService.Dispatch:input_type -> helion.DispatchRequest
+	4, // 6: helion.NodeService.Cancel:input_type -> helion.CancelRequest
+	6, // 7: helion.NodeService.GetMetrics:input_type -> helion.Empty
+	3, // 8: helion.NodeService.Dispatch:output_type -> helion.DispatchAck
+	9, // 9: helion.NodeService.Cancel:output_type -> helion.Ack
+	5, // 10: helion.NodeService.GetMetrics:output_type -> helion.NodeMetrics
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_node_proto_init() }
@@ -495,7 +617,7 @@ func file_node_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_node_proto_rawDesc), len(file_node_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

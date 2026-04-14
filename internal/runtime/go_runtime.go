@@ -121,6 +121,12 @@ func (r *GoRuntime) Run(ctx context.Context, req RunRequest) (RunResult, error) 
 	for k, v := range req.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
+	// When the staging layer has prepared a per-job working directory,
+	// cd into it before exec. Empty means "inherit the node agent's cwd"
+	// (legacy behaviour for jobs submitted without artifacts).
+	if req.WorkingDir != "" {
+		cmd.Dir = req.WorkingDir
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
