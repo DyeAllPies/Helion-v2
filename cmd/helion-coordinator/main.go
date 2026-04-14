@@ -57,6 +57,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// isBackfillSubcommand reports whether argv describes the
+// `helion-coordinator analytics backfill [...]` invocation. Extracted
+// so the dispatch condition is unit-testable (main() itself is not).
+func isBackfillSubcommand(argv []string) bool {
+	return len(argv) >= 3 && argv[1] == "analytics" && argv[2] == "backfill"
+}
+
 func main() {
 	log := slog.Default()
 
@@ -64,7 +71,7 @@ func main() {
 	// Support `helion-coordinator analytics backfill --pg-dsn=...` as a
 	// one-shot utility that exits after completing. The default (no args)
 	// runs the long-lived coordinator server.
-	if len(os.Args) >= 3 && os.Args[1] == "analytics" && os.Args[2] == "backfill" {
+	if isBackfillSubcommand(os.Args) {
 		runAnalyticsBackfill(log, os.Args[3:])
 		return
 	}

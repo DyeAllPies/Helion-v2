@@ -16,7 +16,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -26,19 +28,39 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func runAnalyticsBackfill(log *slog.Logger, args []string) {
-	fs := flag.NewFlagSet("analytics backfill", flag.ExitOnError)
+// backfillConfig is the validated result of parseBackfillFlags.
+type backfillConfig struct {
+	DSN    string
+	DBPath string
+}
+
+// errNoDSN is returned when neither --pg-dsn nor HELION_ANALYTICS_DSN is set.
+var errNoDSN = errors.New("analytics backfill: --pg-dsn or HELION_ANALYTICS_DSN is required")
+
+// parseBackfillFlags parses argv for the `analytics backfill` subcommand and
+// returns a validated config. Separated from runAnalyticsBackfill so the
+// flag-parsing + env-fallback logic is unit-testable without needing a real
+// BadgerDB or PostgreSQL. Uses ContinueOnError so bad flags return an error
+// instead of calling os.Exit.
+func parseBackfillFlags(args []string) (*backfillConfig, error) {
+	fs := flag.NewFlagSet("analytics backfill", flag.ContinueOnError)
 	dsn := fs.String("pg-dsn", os.Getenv("HELION_ANALYTICS_DSN"),
 		"PostgreSQL connection string (or set HELION_ANALYTICS_DSN)")
 	dbPath := fs.String("db-path", envOr("HELION_DB_PATH", "/var/lib/helion/db"),
 		"Path to the BadgerDB directory (or set HELION_DB_PATH)")
 	if err := fs.Parse(args); err != nil {
-		log.Error("parse flags", slog.Any("err", err))
-		os.Exit(1)
+		return nil, fmt.Errorf("parse flags: %w", err)
 	}
-
 	if *dsn == "" {
-		log.Error("analytics backfill: --pg-dsn or HELION_ANALYTICS_DSN is required")
+		return nil, errNoDSN
+	}
+	return &backfillConfig{DSN: *dsn, DBPath: *dbPath}, nil
+}
+
+func runAnalyticsBackfill(log *slog.Logger, args []string) {
+	cfg, err := parseBackfillFlags(args)
+	if err != nil {
+		log.Error("analytics backfill: configuration", slog.Any("err", err))
 		os.Exit(1)
 	}
 
@@ -49,8 +71,8 @@ func runAnalyticsBackfill(log *slog.Logger, args []string) {
 	// Read-only + BypassLockGuard lets us scan the audit trail while the
 	// coordinator has the DB open for writes. Backfill only reads — any
 	// accidental write would fail with a BadgerDB error.
-	log.Info("analytics backfill: opening BadgerDB (read-only)", slog.String("path", *dbPath))
-	persister, err := cluster.NewBadgerJSONPersisterReadOnly(*dbPath)
+	log.Info("analytics backfill: opening BadgerDB (read-only)", slog.String("path", cfg.DBPath))
+	persister, err := cluster.NewBadgerJSONPersisterReadOnly(cfg.DBPath)
 	if err != nil {
 		log.Error("analytics backfill: open BadgerDB", slog.Any("err", err))
 		os.Exit(1)
@@ -63,7 +85,7 @@ func runAnalyticsBackfill(log *slog.Logger, args []string) {
 
 	// ── Connect to PostgreSQL ────────────────────────────────────────────
 	log.Info("analytics backfill: connecting to PostgreSQL")
-	conn, err := pgxpool.New(ctx, *dsn)
+	conn, err := pgxpool.New(ctx, cfg.DSN)
 	if err != nil {
 		log.Error("analytics backfill: connect PostgreSQL", slog.Any("err", err))
 		os.Exit(1)
