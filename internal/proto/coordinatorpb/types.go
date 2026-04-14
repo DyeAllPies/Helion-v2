@@ -210,6 +210,24 @@ type Job struct {
 	// scheduler. Exact-match equality on labels the node reports at
 	// registration time.
 	NodeSelector map[string]string `json:"node_selector,omitempty"`
+
+	// ResolvedOutputs is populated by the coordinator after a successful
+	// run: for each Outputs binding the node's stager produced, we
+	// record the assigned URI, size, and SHA-256. Empty for failed runs
+	// (the stager skips uploads) and for jobs that declared no outputs.
+	// Step 3's workflow artifact-passing resolves `from: job.output`
+	// references against this slice.
+	ResolvedOutputs []ArtifactOutput `json:"resolved_outputs,omitempty"`
+}
+
+// ArtifactOutput is the coordinator-side mirror of pb.ArtifactOutput —
+// a resolved reference to an artifact the node agent uploaded post-run.
+type ArtifactOutput struct {
+	Name      string `json:"name"`
+	URI       string `json:"uri"`
+	Size      int64  `json:"size,omitempty"`
+	SHA256    string `json:"sha256,omitempty"`
+	LocalPath string `json:"local_path,omitempty"`
 }
 
 // ArtifactBinding attaches an artifact-store object to a job as either
@@ -363,6 +381,15 @@ type WorkflowJob struct {
 	Condition      DependencyCondition `json:"condition,omitempty"`      // when to run (default: on_success)
 	Priority       uint32              `json:"priority,omitempty"`       // overrides workflow priority; 0 = inherit
 	JobID          string              `json:"job_id,omitempty"`         // set after job is created in JobStore
+
+	// Step 2 — ML pipeline fields. Propagated verbatim onto the
+	// materialised Job at Start() time. Step 3 rewrites Inputs[i].URI
+	// references of the form "from: <upstream>.<name>" once the
+	// upstream job produces a ResolvedOutput of that name.
+	WorkingDir   string            `json:"working_dir,omitempty"`
+	Inputs       []ArtifactBinding `json:"inputs,omitempty"`
+	Outputs      []ArtifactBinding `json:"outputs,omitempty"`
+	NodeSelector map[string]string `json:"node_selector,omitempty"`
 }
 
 // ── Workflow ─────────────────────────────────────────────────────────────────

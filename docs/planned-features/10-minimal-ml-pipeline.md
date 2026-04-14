@@ -515,26 +515,141 @@ Security matrix applied in this step:
 | Absolute `local_path` tricks on Windows | Reject `/`, `\`, drive-letter prefix |
 | Submit-bomb via huge binding list | 64-per-direction cap |
 | Unconfigured nodes running ML jobs blind | Refuse dispatch when `stager == nil` |
+| **Compromised node reporting forged output URIs** | Coordinator-side `validateReportedOutput` in `grpcserver.handlers`: scheme pinned to `{file, s3}`, name regex `[A-Z_][A-Z0-9_]*`, URI length ≤2048, NUL/control rejected, count cap 64. Invalid entries dropped + warning-logged; the job still terminates because the process did run — only its declared outputs are untrustworthy. |
+
+**Terminal-event plumbing (closed):** The node's stager-finalized
+output URIs now flow into `pb.JobResult.outputs`, through the
+coordinator's `ReportResult` handler, into `TransitionOptions.ResolvedOutputs`,
+and are persisted on `cpb.Job.ResolvedOutputs`. The `job.completed`
+event carries an `outputs` array when present (via the new
+`events.JobCompletedWithOutputs` constructor). Step 3 reads these
+persisted URIs to resolve `from: <upstream>.<output_name>` references.
+
+**Workflow template plumbing (closed):** `cpb.WorkflowJob` now carries
+`WorkingDir`, `Inputs`, `Outputs`, `NodeSelector`; `workflow_submit.Start`
+copies them onto each materialised Job. The workflow API handler
+([`internal/api/handlers_workflows.go`](../../internal/api/handlers_workflows.go))
+validates per-job bindings through the same validators as
+`SubmitRequest` — `validateArtifactBindings`, `validateNodeSelector`,
+`firstDuplicateBindingName`, `convertBindings` — so a workflow job
+cannot slip past rules that a standalone submit would catch.
 
 Deferred to later steps (HTTP handler layer when artifact upload API
 lands in step 6): per-subject rate limit on artifact upload, audit
 events (`artifact.put`, `staging.prepared`, `staging.uploaded`),
 `http.MaxBytesReader` on the upload handler, signed URLs for node→S3
-direct transfer, resolved output URIs surfaced in terminal event
-payloads (marked `TODO(step 3)` in the server).
+direct transfer.
 
-Tests: **47 new, all passing**
+Tests: **62 new, all passing**
 ([`handlers_jobs_step2_test.go`](../../internal/api/handlers_jobs_step2_test.go),
+[`handlers_workflows_ml_test.go`](../../internal/api/handlers_workflows_ml_test.go),
 [`staging_test.go`](../../internal/staging/staging_test.go),
-[`go_runtime_workdir_test.go`](../../internal/runtime/go_runtime_workdir_test.go)).
+[`go_runtime_workdir_test.go`](../../internal/runtime/go_runtime_workdir_test.go),
+[`ml_outputs_test.go`](../../internal/cluster/ml_outputs_test.go),
+[`workflow_ml_test.go`](../../internal/cluster/workflow_ml_test.go),
+[`outputs_from_proto_test.go`](../../internal/grpcserver/outputs_from_proto_test.go),
+[`outputs_to_proto_test.go`](../../internal/nodeserver/outputs_to_proto_test.go)).
 
-### Parity gap: Rust runtime
+### Rust runtime (parity landed)
 
-The Rust runtime ([`runtime-rust/`](../../runtime-rust/)) still honours
-only the legacy `RunRequest` fields. Rust-backed nodes refuse jobs
-carrying bindings (because they are not wired to a Stager yet). Parity
-is tracked as a follow-up before step 3 can promise workflow-level
-artifact passing on Rust nodes.
+Originally flagged as a step-2 gap. Closed by commit `506680d`
+("feat(runtime): wire working_dir through Go↔Rust IPC + add runtime-rust doc"):
+the Rust runtime honours `RunRequest.WorkingDir` via `cmd.current_dir()`.
+Because input/output *bytes* flow through the Stager at the nodeserver
+level (not through the runtime), no further Rust-side work is required
+for step-2 artifact handling — Rust-backed nodes with a stager
+configured stage artifacts correctly end-to-end.
+
+---
+
+## Security plan
+
+This section anchors every step of the feature to the project's
+existing security doctrine ([`docs/SECURITY.md`](../SECURITY.md),
+[`docs/SECURITY-OPS.md`](../SECURITY-OPS.md),
+[`docs/AUDIT.md`](../AUDIT.md)). The ML pipeline expands Helion's
+trust surface in three new directions — bulk artifact bytes, cross-job
+data references, and node-attested output metadata — each of which
+needs treatment consistent with the existing JWT / mTLS / audit model
+rather than parallel ad-hoc checks.
+
+### Threat additions
+
+Extending the SECURITY.md threat table with ML-specific threats:
+
+| Threat | Step | Mitigation |
+|---|---|---|
+| Malicious artifact fills disk | 2 (done) | `MaxInputDownloadBytes` LimitedReader on download |
+| Oversized output exhausts store | 2 (done) | `MaxOutputUploadBytes` pre-flight Lstat |
+| Cross-job access via `local_path` traversal | 2 (done) | API validator + Stager `safeJoin` prefix-check |
+| Cross-job access via symlink output | 2 (done) | `Lstat` + regular-file gate in `Stager.upload` |
+| Env shadowing via user-supplied `HELION_INPUT_*` | 2 (done) | Stager-wins precedence in `nodeserver.mergeEnv` |
+| Unconfigured nodes running ML jobs blind | 2 (done) | Node refuses dispatch when `stager == nil` |
+| **Compromised node reports forged output URIs** | **2 (done)** | Coordinator `validateReportedOutput`: scheme pinned to `{file,s3}`, name regex, URI length + NUL reject, count cap. Invalid entries dropped + logged, job still terminates. |
+| Artifact upload API DoS (unauthenticated, flood) | 6 | JWT + per-subject token bucket (mirror analytics limiter) + `http.MaxBytesReader` |
+| Registry write without audit | 6 | `dataset.registered` / `model.registered` audit events on success |
+| Inference port collision / unauthorized bind | 7 | Bind to 127.0.0.1 only; coordinator records `node_address:port` but does not proxy without explicit route config |
+| Dashboard leaking artifact URIs via `Referer` / access log | 8 | Signed-URL-first access pattern; URIs only rendered inside authenticated session state, never as GET-request query strings |
+| Registered model references an artifact the registrar never owned | 6 | Server-side check: registered URI must be under a key prefix keyed off the caller's JWT subject or the originating job's ID |
+| Node label spoofing to win GPU jobs | 4/5 | Labels carried in the Register RPC which is already mTLS-authenticated; audit every registration; admin override only via `POST /admin/nodes/{id}/labels` |
+| Artifact GC races a newly-registered model | open | See "Open questions" — pinning rule resolves this but needs confirmation before step 6 ships |
+
+### Security controls per step
+
+| Step | New attack surface | Controls landing this step | SECURITY.md doctrine used |
+|------|-------------------|---------------------------|---------------------------|
+| 1 — Artifact store | Bulk storage; cross-tenant key collisions | Key sanitisation (NUL, control, `..`, drive letters, length≤1024); URI bucket + scheme pin in `S3Store`; `O_EXCL` on LocalStore; `Lstat` rejections on uploads | §8 REST API security (bounded input) pattern applied at the Store boundary |
+| 2 — Job I/O staging | Node agent downloads + uploads bytes; env var injection | Stager: workdir `0o700` under operator-controlled `HELION_WORK_ROOT`; per-job `O_EXCL` `Mkdir`; `safeJoin` on every path; stager-wins env precedence; staging error → staging.failed path rolls back workdir. Coordinator: `validateReportedOutput` trust boundary on node-attested URIs | §6 Audit logging pattern (every transition audited — extended to staging transitions); stager refusal on `stager == nil` follows §1 fail-closed threat doctrine |
+| 3 — Workflow artifact passing | Resolved URIs cross job boundaries | `from: <upstream>.<name>` references resolved against the *coordinator's* `ResolvedOutputs` record (already validated at ingest by step 2), never against the node's proto — so a compromised node cannot make downstream jobs fetch arbitrary URIs | §1 threat isolation — trust boundary at the coordinator, not at the wire |
+| 4 — Node selectors | Scheduler queries node-reported labels | Labels entered via mTLS-authenticated Register RPC (§2); audit every `node.registered` with label set; admin override requires admin JWT |
+| 5 — GPU as a resource | Device enumeration & isolation | GPU indices derived by node at registration time (via `nvidia-smi`) — same trust level as CPU/memory counts; `CUDA_VISIBLE_DEVICES` set by stager, never by user env (stager-wins precedence applies) |
+| 6 — Dataset + model registries | New write endpoints, artifact uploads | JWT required; per-subject rate limit (mirror `analyticsQueryAllow` shape: 2 rps burst 30 → 429); audit events `dataset.registered`, `dataset.deleted`, `model.registered`, `model.deleted` with actor; `http.MaxBytesReader` cap at 5 GiB (open-question: multipart path); URL-ownership check binds a registered URI to the caller's subject or an owning job-ID prefix |
+| 7 — Inference jobs | Long-running serving process exposes a port | Health probe is `GET 127.0.0.1:<port><path>` only — no external bind from the Stager's perspective; service RPC lookup (`GET /api/services/:job_id`) requires JWT; rate-limit at the standard node-RPC limiter; the coordinator does **not** proxy traffic |
+| 8 — Dashboard ML module | New client surface | Inherits dashboard's existing security contract (§9): in-memory JWT, auth interceptor, auth guard on `/ml`, CSP same-origin. Artifact links open through a signed-URL endpoint, never as raw `s3://` URIs |
+| 9 — Iris example | None (read-only artifact reads) | — |
+| 10 — Documentation | None | Updates the SECURITY.md threat table to include the ML rows above |
+
+### Audit event taxonomy (ML-pipeline additions)
+
+Additions to the SECURITY.md §6 audit event list. Each follows the
+existing `{event_type, actor, target, details}` shape:
+
+| Event | Actor | Target | Details | Step |
+|---|---|---|---|---|
+| `staging.prepared` | `node:<node_id>` | `job:<job_id>` | `{inputs: N, outputs: N, working_dir}` | 2 (planned follow-up) |
+| `staging.uploaded` | `node:<node_id>` | `job:<job_id>` | `{outputs: [{name, uri, size}], duration_ms}` | 2 (planned follow-up) |
+| `staging.failed` | `node:<node_id>` | `job:<job_id>` | `{reason, phase}` (phase ∈ prepare/run/finalize) | 2 (planned follow-up) |
+| `staging.output_rejected` | `coordinator` | `job:<job_id>` | `{node_id, name, reason}` — emitted by `validateReportedOutput` drops | 2 (planned follow-up) |
+| `artifact.registered` | JWT subject | `dataset:<name>@<version>` or `model:<name>@<version>` | `{uri, size, sha256, source_job_id}` | 6 |
+| `artifact.deleted` | JWT subject | same | `{uri}` | 6 |
+| `artifact.get` | JWT subject | same | `{endpoint}` — at read API, rate-limited before audit (same as analytics) | 6 |
+| `service.ready` / `service.unhealthy` | `node:<node_id>` | `job:<job_id>` | `{port, health_path, consecutive_failures}` | 7 |
+
+### What is NOT (yet) covered
+
+Called out so an audit (`docs/AUDIT.md` template) can pick them up as
+findings if they ship before the mitigation lands:
+
+- **Signed URLs for direct node→S3 transfer (step 6).** Current design
+  pipes artifact bytes through the coordinator for upload. For large
+  models this won't scale; signed URLs are the intended fix but they
+  need careful scoping (per-object, per-subject, short TTL) that we
+  want to get right, not retrofit.
+- **Per-tenant artifact isolation.** Single shared bucket / store is
+  fine for a single-tenant deployment. Multi-tenant deployments need
+  per-tenant prefixes and a policy engine on top of the store — out of
+  scope for the minimal pipeline.
+- **Job-to-job authorization.** Step 3 will let job B read job A's
+  outputs purely because A's workflow includes B. Fine-grained cross-
+  workflow ACLs are not in scope.
+- **Content scanning of uploaded artifacts.** No malware scan, no
+  provenance attestation (SLSA / Sigstore). Deferred; registry hooks
+  are an obvious place to add them.
+- **Staging audit events.** The staging/output taxonomy above is
+  designed but not yet emitted. A small follow-up commit wires
+  `s.audit.Log(...)` calls into `Stager.Prepare/Finalize` and the
+  coordinator's `validateReportedOutput` drop path. Low risk; purely
+  additive.
 
 ## Open questions
 

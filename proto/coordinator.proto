@@ -139,6 +139,22 @@ message JobResult {
 
   // runtime identifies the backend that executed the job ("go" or "rust").
   string runtime = 8;
+
+  // Step 2 — resolved artifact outputs from the node's stager. Populated
+  // only on successful runs (the stager skips uploads otherwise), one
+  // entry per binding declared on the original Job.Outputs.
+  repeated ArtifactOutput outputs = 9;
+}
+
+// ArtifactOutput is a resolved reference to an artifact uploaded by the
+// node agent after a job exits zero. Name matches the binding declared
+// at submit time; URI is what the artifact store assigned.
+message ArtifactOutput {
+  string name      = 1;
+  string uri       = 2;
+  int64  size      = 3;
+  string sha256    = 4;
+  string local_path = 5; // original working-directory-relative path
 }
 
 enum JobStatus {

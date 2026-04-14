@@ -468,7 +468,11 @@ type JobResult struct {
 	StartedAt  int64                  `protobuf:"varint,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"` // Unix nanoseconds
 	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
 	// runtime identifies the backend that executed the job ("go" or "rust").
-	Runtime       string `protobuf:"bytes,8,opt,name=runtime,proto3" json:"runtime,omitempty"`
+	Runtime string `protobuf:"bytes,8,opt,name=runtime,proto3" json:"runtime,omitempty"`
+	// Step 2 — resolved artifact outputs from the node's stager. Populated
+	// only on successful runs (the stager skips uploads otherwise), one
+	// entry per binding declared on the original Job.Outputs.
+	Outputs       []*ArtifactOutput `protobuf:"bytes,9,rep,name=outputs,proto3" json:"outputs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -559,6 +563,92 @@ func (x *JobResult) GetRuntime() string {
 	return ""
 }
 
+func (x *JobResult) GetOutputs() []*ArtifactOutput {
+	if x != nil {
+		return x.Outputs
+	}
+	return nil
+}
+
+// ArtifactOutput is a resolved reference to an artifact uploaded by the
+// node agent after a job exits zero. Name matches the binding declared
+// at submit time; URI is what the artifact store assigned.
+type ArtifactOutput struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Uri           string                 `protobuf:"bytes,2,opt,name=uri,proto3" json:"uri,omitempty"`
+	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	Sha256        string                 `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	LocalPath     string                 `protobuf:"bytes,5,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"` // original working-directory-relative path
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArtifactOutput) Reset() {
+	*x = ArtifactOutput{}
+	mi := &file_coordinator_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArtifactOutput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArtifactOutput) ProtoMessage() {}
+
+func (x *ArtifactOutput) ProtoReflect() protoreflect.Message {
+	mi := &file_coordinator_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArtifactOutput.ProtoReflect.Descriptor instead.
+func (*ArtifactOutput) Descriptor() ([]byte, []int) {
+	return file_coordinator_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ArtifactOutput) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ArtifactOutput) GetUri() string {
+	if x != nil {
+		return x.Uri
+	}
+	return ""
+}
+
+func (x *ArtifactOutput) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *ArtifactOutput) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *ArtifactOutput) GetLocalPath() string {
+	if x != nil {
+		return x.LocalPath
+	}
+	return ""
+}
+
 type LogChunk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
@@ -572,7 +662,7 @@ type LogChunk struct {
 
 func (x *LogChunk) Reset() {
 	*x = LogChunk{}
-	mi := &file_coordinator_proto_msgTypes[5]
+	mi := &file_coordinator_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -584,7 +674,7 @@ func (x *LogChunk) String() string {
 func (*LogChunk) ProtoMessage() {}
 
 func (x *LogChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_proto_msgTypes[5]
+	mi := &file_coordinator_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -597,7 +687,7 @@ func (x *LogChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogChunk.ProtoReflect.Descriptor instead.
 func (*LogChunk) Descriptor() ([]byte, []int) {
-	return file_coordinator_proto_rawDescGZIP(), []int{5}
+	return file_coordinator_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *LogChunk) GetJobId() string {
@@ -645,7 +735,7 @@ type Ack struct {
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_coordinator_proto_msgTypes[6]
+	mi := &file_coordinator_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -657,7 +747,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_proto_msgTypes[6]
+	mi := &file_coordinator_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -670,7 +760,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_coordinator_proto_rawDescGZIP(), []int{6}
+	return file_coordinator_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Ack) GetOk() bool {
@@ -700,7 +790,7 @@ type Node struct {
 
 func (x *Node) Reset() {
 	*x = Node{}
-	mi := &file_coordinator_proto_msgTypes[7]
+	mi := &file_coordinator_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -712,7 +802,7 @@ func (x *Node) String() string {
 func (*Node) ProtoMessage() {}
 
 func (x *Node) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_proto_msgTypes[7]
+	mi := &file_coordinator_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -725,7 +815,7 @@ func (x *Node) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Node.ProtoReflect.Descriptor instead.
 func (*Node) Descriptor() ([]byte, []int) {
-	return file_coordinator_proto_rawDescGZIP(), []int{7}
+	return file_coordinator_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Node) GetNodeId() string {
@@ -796,7 +886,7 @@ type Job struct {
 
 func (x *Job) Reset() {
 	*x = Job{}
-	mi := &file_coordinator_proto_msgTypes[8]
+	mi := &file_coordinator_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -808,7 +898,7 @@ func (x *Job) String() string {
 func (*Job) ProtoMessage() {}
 
 func (x *Job) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_proto_msgTypes[8]
+	mi := &file_coordinator_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -821,7 +911,7 @@ func (x *Job) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Job.ProtoReflect.Descriptor instead.
 func (*Job) Descriptor() ([]byte, []int) {
-	return file_coordinator_proto_rawDescGZIP(), []int{8}
+	return file_coordinator_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Job) GetId() string {
@@ -923,7 +1013,7 @@ type AuditEvent struct {
 
 func (x *AuditEvent) Reset() {
 	*x = AuditEvent{}
-	mi := &file_coordinator_proto_msgTypes[9]
+	mi := &file_coordinator_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -935,7 +1025,7 @@ func (x *AuditEvent) String() string {
 func (*AuditEvent) ProtoMessage() {}
 
 func (x *AuditEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_coordinator_proto_msgTypes[9]
+	mi := &file_coordinator_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -948,7 +1038,7 @@ func (x *AuditEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditEvent.ProtoReflect.Descriptor instead.
 func (*AuditEvent) Descriptor() ([]byte, []int) {
-	return file_coordinator_proto_rawDescGZIP(), []int{9}
+	return file_coordinator_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AuditEvent) GetEventType() string {
@@ -1012,7 +1102,7 @@ const file_coordinator_proto_rawDesc = "" +
 	"\tmax_slots\x18\b \x01(\rR\bmaxSlots\"O\n" +
 	"\fHeartbeatAck\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12-\n" +
-	"\acommand\x18\x02 \x01(\x0e2\x13.helion.NodeCommandR\acommand\"\xfe\x01\n" +
+	"\acommand\x18\x02 \x01(\x0e2\x13.helion.NodeCommandR\acommand\"\xb0\x02\n" +
 	"\tJobResult\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x18\n" +
@@ -1023,7 +1113,15 @@ const file_coordinator_proto_rawDesc = "" +
 	"started_at\x18\x06 \x01(\x03R\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"finishedAt\x12\x18\n" +
-	"\aruntime\x18\b \x01(\tR\aruntime\"\x95\x01\n" +
+	"\aruntime\x18\b \x01(\tR\aruntime\x120\n" +
+	"\aoutputs\x18\t \x03(\v2\x16.helion.ArtifactOutputR\aoutputs\"\x81\x01\n" +
+	"\x0eArtifactOutput\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
+	"\x03uri\x18\x02 \x01(\tR\x03uri\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x16\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\x12\x1d\n" +
+	"\n" +
+	"local_path\x18\x05 \x01(\tR\tlocalPath\"\x95\x01\n" +
 	"\bLogChunk\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x12\n" +
@@ -1100,7 +1198,7 @@ func file_coordinator_proto_rawDescGZIP() []byte {
 }
 
 var file_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_coordinator_proto_goTypes = []any{
 	(NodeCommand)(0),              // 0: helion.NodeCommand
 	(JobStatus)(0),                // 1: helion.JobStatus
@@ -1109,40 +1207,42 @@ var file_coordinator_proto_goTypes = []any{
 	(*HeartbeatMessage)(nil),      // 4: helion.HeartbeatMessage
 	(*HeartbeatAck)(nil),          // 5: helion.HeartbeatAck
 	(*JobResult)(nil),             // 6: helion.JobResult
-	(*LogChunk)(nil),              // 7: helion.LogChunk
-	(*Ack)(nil),                   // 8: helion.Ack
-	(*Node)(nil),                  // 9: helion.Node
-	(*Job)(nil),                   // 10: helion.Job
-	(*AuditEvent)(nil),            // 11: helion.AuditEvent
-	nil,                           // 12: helion.Job.EnvEntry
-	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
+	(*ArtifactOutput)(nil),        // 7: helion.ArtifactOutput
+	(*LogChunk)(nil),              // 8: helion.LogChunk
+	(*Ack)(nil),                   // 9: helion.Ack
+	(*Node)(nil),                  // 10: helion.Node
+	(*Job)(nil),                   // 11: helion.Job
+	(*AuditEvent)(nil),            // 12: helion.AuditEvent
+	nil,                           // 13: helion.Job.EnvEntry
+	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
 }
 var file_coordinator_proto_depIdxs = []int32{
-	13, // 0: helion.HeartbeatMessage.sent_at:type_name -> google.protobuf.Timestamp
+	14, // 0: helion.HeartbeatMessage.sent_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: helion.HeartbeatAck.command:type_name -> helion.NodeCommand
-	13, // 2: helion.JobResult.finished_at:type_name -> google.protobuf.Timestamp
-	13, // 3: helion.LogChunk.sent_at:type_name -> google.protobuf.Timestamp
-	13, // 4: helion.Node.last_seen:type_name -> google.protobuf.Timestamp
-	13, // 5: helion.Node.registered_at:type_name -> google.protobuf.Timestamp
-	1,  // 6: helion.Job.status:type_name -> helion.JobStatus
-	13, // 7: helion.Job.created_at:type_name -> google.protobuf.Timestamp
-	13, // 8: helion.Job.dispatched_at:type_name -> google.protobuf.Timestamp
-	13, // 9: helion.Job.finished_at:type_name -> google.protobuf.Timestamp
-	12, // 10: helion.Job.env:type_name -> helion.Job.EnvEntry
-	13, // 11: helion.AuditEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	2,  // 12: helion.CoordinatorService.Register:input_type -> helion.RegisterRequest
-	4,  // 13: helion.CoordinatorService.Heartbeat:input_type -> helion.HeartbeatMessage
-	6,  // 14: helion.CoordinatorService.ReportResult:input_type -> helion.JobResult
-	7,  // 15: helion.CoordinatorService.StreamLogs:input_type -> helion.LogChunk
-	3,  // 16: helion.CoordinatorService.Register:output_type -> helion.RegisterResponse
-	5,  // 17: helion.CoordinatorService.Heartbeat:output_type -> helion.HeartbeatAck
-	8,  // 18: helion.CoordinatorService.ReportResult:output_type -> helion.Ack
-	8,  // 19: helion.CoordinatorService.StreamLogs:output_type -> helion.Ack
-	16, // [16:20] is the sub-list for method output_type
-	12, // [12:16] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	14, // 2: helion.JobResult.finished_at:type_name -> google.protobuf.Timestamp
+	7,  // 3: helion.JobResult.outputs:type_name -> helion.ArtifactOutput
+	14, // 4: helion.LogChunk.sent_at:type_name -> google.protobuf.Timestamp
+	14, // 5: helion.Node.last_seen:type_name -> google.protobuf.Timestamp
+	14, // 6: helion.Node.registered_at:type_name -> google.protobuf.Timestamp
+	1,  // 7: helion.Job.status:type_name -> helion.JobStatus
+	14, // 8: helion.Job.created_at:type_name -> google.protobuf.Timestamp
+	14, // 9: helion.Job.dispatched_at:type_name -> google.protobuf.Timestamp
+	14, // 10: helion.Job.finished_at:type_name -> google.protobuf.Timestamp
+	13, // 11: helion.Job.env:type_name -> helion.Job.EnvEntry
+	14, // 12: helion.AuditEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	2,  // 13: helion.CoordinatorService.Register:input_type -> helion.RegisterRequest
+	4,  // 14: helion.CoordinatorService.Heartbeat:input_type -> helion.HeartbeatMessage
+	6,  // 15: helion.CoordinatorService.ReportResult:input_type -> helion.JobResult
+	8,  // 16: helion.CoordinatorService.StreamLogs:input_type -> helion.LogChunk
+	3,  // 17: helion.CoordinatorService.Register:output_type -> helion.RegisterResponse
+	5,  // 18: helion.CoordinatorService.Heartbeat:output_type -> helion.HeartbeatAck
+	9,  // 19: helion.CoordinatorService.ReportResult:output_type -> helion.Ack
+	9,  // 20: helion.CoordinatorService.StreamLogs:output_type -> helion.Ack
+	17, // [17:21] is the sub-list for method output_type
+	13, // [13:17] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_coordinator_proto_init() }
@@ -1156,7 +1256,7 @@ func file_coordinator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_coordinator_proto_rawDesc), len(file_coordinator_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

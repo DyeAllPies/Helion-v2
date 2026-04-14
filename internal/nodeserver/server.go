@@ -90,14 +90,14 @@ func (s *Server) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.Dis
 		if s.stager == nil {
 			msg := "node has no artifact stager; job declares inputs/outputs"
 			s.log.Warn(msg, slog.String("job_id", req.JobId))
-			s.reportResult(ctx, req.JobId, false, -1, msg, startedAt, time.Now())
+			s.reportResult(ctx, req.JobId, false, -1, msg, startedAt, time.Now(), nil)
 			return &pb.DispatchAck{JobId: req.JobId, Accepted: false, Error: msg}, nil
 		}
 		job := jobFromDispatch(req)
 		p, perr := s.stager.Prepare(ctx, job)
 		if perr != nil {
 			s.log.Error("staging prepare", slog.String("job_id", req.JobId), slog.Any("err", perr))
-			s.reportResult(ctx, req.JobId, false, -1, perr.Error(), startedAt, time.Now())
+			s.reportResult(ctx, req.JobId, false, -1, perr.Error(), startedAt, time.Now(), nil)
 			return &pb.DispatchAck{JobId: req.JobId, Accepted: false, Error: perr.Error()}, nil
 		}
 		prepared = p
@@ -136,11 +136,10 @@ func (s *Server) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.Dis
 		}
 		outputURIs = res
 	}
-	_ = outputURIs // TODO(step 3): plumb into ReportResult for analytics + lineage
 
 	if err != nil {
 		s.log.Error("runtime error", slog.String("job_id", req.JobId), slog.Any("err", err))
-		s.reportResult(ctx, req.JobId, false, -1, err.Error(), startedAt, finishedAt)
+		s.reportResult(ctx, req.JobId, false, -1, err.Error(), startedAt, finishedAt, nil)
 		return &pb.DispatchAck{JobId: req.JobId, Accepted: false, Error: err.Error()}, nil
 	}
 
@@ -165,7 +164,7 @@ func (s *Server) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.Dis
 	}
 
 	success := result.ExitCode == 0 && result.KillReason == ""
-	s.reportResult(ctx, req.JobId, success, result.ExitCode, errMsg, startedAt, finishedAt)
+	s.reportResult(ctx, req.JobId, success, result.ExitCode, errMsg, startedAt, finishedAt, outputURIs)
 
 	return &pb.DispatchAck{
 		JobId:    req.JobId,
@@ -175,7 +174,10 @@ func (s *Server) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.Dis
 }
 
 // reportResult calls coordinator.ReportResult in a best-effort manner.
-// Failures are logged but do not cause Dispatch to fail.
+// Failures are logged but do not cause Dispatch to fail. outputs is
+// the stager's resolved artifact URIs and is only populated on the
+// success path — for failed/crashed jobs the slice is nil because
+// Finalize skipped uploads.
 func (s *Server) reportResult(
 	ctx context.Context,
 	jobID string,
@@ -183,23 +185,45 @@ func (s *Server) reportResult(
 	exitCode int32,
 	errMsg string,
 	startedAt, finishedAt time.Time,
+	outputs []staging.ResolvedOutput,
 ) {
 	if s.client == nil {
 		return
 	}
 	rr := &pb.JobResult{
-		JobId:     jobID,
-		NodeId:    s.nodeID,
-		Success:   success,
-		ExitCode:  exitCode,
-		Error:     errMsg,
-		StartedAt: startedAt.UnixNano(),
+		JobId:      jobID,
+		NodeId:     s.nodeID,
+		Success:    success,
+		ExitCode:   exitCode,
+		Error:      errMsg,
+		StartedAt:  startedAt.UnixNano(),
 		FinishedAt: timestamppb.New(finishedAt),
-		Runtime:   s.runtimeName,
+		Runtime:    s.runtimeName,
+		Outputs:    artifactOutputsToProto(outputs),
 	}
 	if err := s.client.ReportResult(ctx, rr); err != nil {
 		s.log.Warn("ReportResult failed", slog.String("job_id", jobID), slog.Any("err", err))
 	}
+}
+
+// artifactOutputsToProto lifts the stager's ResolvedOutput slice onto
+// the wire-format pb.ArtifactOutput. nil in -> nil out so a job with
+// no outputs sends an absent (not empty) repeated field.
+func artifactOutputsToProto(src []staging.ResolvedOutput) []*pb.ArtifactOutput {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]*pb.ArtifactOutput, len(src))
+	for i, o := range src {
+		out[i] = &pb.ArtifactOutput{
+			Name:      o.Name,
+			Uri:       string(o.URI),
+			Size:      o.Size,
+			Sha256:    o.SHA256,
+			LocalPath: o.LocalPath,
+		}
+	}
+	return out
 }
 
 // Cancel terminates a running job.

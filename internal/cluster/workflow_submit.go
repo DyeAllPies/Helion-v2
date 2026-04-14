@@ -86,6 +86,16 @@ func (s *WorkflowStore) Start(ctx context.Context, workflowID string, jobs *JobS
 			TimeoutSeconds: wj.TimeoutSeconds,
 			Priority:       priority,
 			WorkflowID:     workflowID,
+			// Step 2 ML pipeline fields — carried verbatim from the
+			// workflow template onto each materialised Job so the
+			// dispatcher + node-side stager see the same bindings a
+			// standalone submit would produce. Step 3 will resolve
+			// `from: <upstream>.<name>` references against earlier
+			// jobs' ResolvedOutputs just before Submit is called.
+			WorkingDir:   wj.WorkingDir,
+			Inputs:       wj.Inputs,
+			Outputs:      wj.Outputs,
+			NodeSelector: wj.NodeSelector,
 		}
 
 		if err := jobs.Submit(ctx, job); err != nil {

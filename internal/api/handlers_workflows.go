@@ -39,6 +39,13 @@ type WorkflowJobRequest struct {
 	DependsOn      []string          `json:"depends_on,omitempty"`
 	Condition      string            `json:"condition,omitempty"` // "on_success" (default), "on_failure", "on_complete"
 	Priority       *uint32           `json:"priority,omitempty"` // overrides workflow priority; 0-100
+
+	// Step 2 — ML pipeline fields. Mirror SubmitRequest so workflow YAML
+	// can declare artifact bindings per job; validated by the same rules.
+	WorkingDir   string                   `json:"working_dir,omitempty"`
+	Inputs       []ArtifactBindingRequest `json:"inputs,omitempty"`
+	Outputs      []ArtifactBindingRequest `json:"outputs,omitempty"`
+	NodeSelector map[string]string        `json:"node_selector,omitempty"`
 }
 
 // SubmitWorkflowRequest is the JSON body for POST /workflows.
@@ -123,6 +130,32 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: timeout_seconds must be in [0, %d]", j.Name, maxTimeoutSeconds))
 			return
 		}
+		// Step 2 — reuse the submit-job validators so workflow job
+		// bindings get the same treatment as standalone submits.
+		if len(j.WorkingDir) > maxWorkingDirLen || strings.ContainsRune(j.WorkingDir, '\x00') {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: invalid working_dir", j.Name))
+			return
+		}
+		if msg := validateArtifactBindings("inputs", j.Inputs, true); msg != "" {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: %s", j.Name, msg))
+			return
+		}
+		if msg := validateArtifactBindings("outputs", j.Outputs, false); msg != "" {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: %s", j.Name, msg))
+			return
+		}
+		if dup := firstDuplicateBindingName(j.Inputs); dup != "" {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: duplicate input name %q", j.Name, dup))
+			return
+		}
+		if dup := firstDuplicateBindingName(j.Outputs); dup != "" {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: duplicate output name %q", j.Name, dup))
+			return
+		}
+		if msg := validateNodeSelector(j.NodeSelector); msg != "" {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: %s", j.Name, msg))
+			return
+		}
 	}
 
 	// Convert request to internal types.
@@ -137,6 +170,10 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 			Runtime:        j.Runtime,
 			DependsOn:      j.DependsOn,
 			Condition:      parseCondition(j.Condition),
+			WorkingDir:     j.WorkingDir,
+			Inputs:         convertBindings(j.Inputs),
+			Outputs:        convertBindings(j.Outputs),
+			NodeSelector:   j.NodeSelector,
 		}
 		if j.Priority != nil {
 			wj.Priority = *j.Priority

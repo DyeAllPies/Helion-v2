@@ -129,6 +129,12 @@ type TransitionOptions struct {
 	ExitCode int32  // set on completed / failed
 	ErrMsg   string // human-readable error, set on failed / timeout / lost
 	Runtime  string // "go" or "rust" — set when result is reported by node
+
+	// ResolvedOutputs is the node's stager-assigned artifact URIs,
+	// populated only on successful-completion transitions. Persisted
+	// on the Job record so step 3's workflow artifact passing and the
+	// analytics pipeline can read them without a separate lookup.
+	ResolvedOutputs []cpb.ArtifactOutput
 }
 
 // ── JobStore ──────────────────────────────────────────────────────────────────

@@ -62,6 +62,39 @@ func JobCompleted(jobID, nodeID string, durationMs int64) Event {
 	})
 }
 
+// ArtifactSummary is a minimal artifact view embedded in event
+// payloads. Decoupled from cpb.ArtifactOutput to keep the events
+// package import-free of coordinator types.
+type ArtifactSummary struct {
+	Name   string `json:"name"`
+	URI    string `json:"uri"`
+	SHA256 string `json:"sha256,omitempty"`
+}
+
+// JobCompletedWithOutputs is the ML-pipeline variant of JobCompleted —
+// it attaches the node's resolved artifact URIs under an "outputs"
+// key so analytics subscribers and (step 3) the workflow engine can
+// trace data flow across jobs without a separate lookup.
+func JobCompletedWithOutputs(jobID, nodeID string, durationMs int64, outputs []ArtifactSummary) Event {
+	data := map[string]any{
+		"job_id":      jobID,
+		"node_id":     nodeID,
+		"duration_ms": durationMs,
+	}
+	if len(outputs) > 0 {
+		rows := make([]map[string]any, len(outputs))
+		for i, o := range outputs {
+			row := map[string]any{"name": o.Name, "uri": o.URI}
+			if o.SHA256 != "" {
+				row["sha256"] = o.SHA256
+			}
+			rows[i] = row
+		}
+		data["outputs"] = rows
+	}
+	return NewEvent(TopicJobCompleted, data)
+}
+
 // JobFailed creates a job.failed event.
 func JobFailed(jobID, errMsg string, exitCode int32, attempt uint32) Event {
 	return NewEvent(TopicJobFailed, map[string]any{

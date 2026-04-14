@@ -65,6 +65,12 @@ func (s *JobStore) Transition(ctx context.Context, jobID string, to cpb.JobStatu
 		if opts.Runtime != "" {
 			j.Runtime = opts.Runtime
 		}
+		// Resolved outputs are only meaningful on successful completion —
+		// the node's stager skips uploads on failure. Copy defensively so
+		// callers cannot mutate our persisted slice after the transition.
+		if to == cpb.JobStatusCompleted && len(opts.ResolvedOutputs) > 0 {
+			j.ResolvedOutputs = append([]cpb.ArtifactOutput(nil), opts.ResolvedOutputs...)
+		}
 	case cpb.JobStatusCancelled:
 		j.FinishedAt = now
 		if opts.ErrMsg != "" {
@@ -109,7 +115,15 @@ func (s *JobStore) Transition(ctx context.Context, jobID string, to cpb.JobStatu
 	switch to {
 	case cpb.JobStatusCompleted:
 		dur := snap.FinishedAt.Sub(snap.CreatedAt).Milliseconds()
-		s.publishEvent(events.JobCompleted(jobID, snap.NodeID, dur))
+		if len(snap.ResolvedOutputs) > 0 {
+			outs := make([]events.ArtifactSummary, len(snap.ResolvedOutputs))
+			for i, o := range snap.ResolvedOutputs {
+				outs[i] = events.ArtifactSummary{Name: o.Name, URI: o.URI, SHA256: o.SHA256}
+			}
+			s.publishEvent(events.JobCompletedWithOutputs(jobID, snap.NodeID, dur, outs))
+		} else {
+			s.publishEvent(events.JobCompleted(jobID, snap.NodeID, dur))
+		}
 	case cpb.JobStatusFailed:
 		s.publishEvent(events.JobFailed(jobID, snap.Error, snap.ExitCode, snap.Attempt))
 	}

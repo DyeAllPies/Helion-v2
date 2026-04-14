@@ -154,6 +154,7 @@ func (s *Server) ReportResult(
 	opts.NodeID = result.NodeId
 	opts.ExitCode = result.ExitCode
 	opts.Runtime = result.Runtime
+	opts.ResolvedOutputs = s.outputsFromProto(result.JobId, result.NodeId, result.Outputs)
 
 	// If job is in dispatching state, transition to running first
 	// (required by the state machine: dispatching → running → completed)
@@ -213,6 +214,156 @@ func (s *Server) ReportResult(
 	}
 
 	return &pb.Ack{Ok: true}, nil
+}
+
+// Caps applied to ReportResult-supplied outputs. These mirror the
+// submit-time caps in internal/api so a compromised node cannot
+// poison the coordinator's persistence layer with oversized or
+// malformed output records that a downstream workflow resolver
+// (step 3) would later dereference as if trusted.
+const (
+	maxReportedOutputs   = 64
+	maxReportedURILen    = 2048
+	maxReportedNameLen   = 64
+	maxReportedLocalPath = 512
+)
+
+// allowedOutputSchemes pins the URI schemes a node is permitted to
+// report. Anything else (http, https, gs, ssh, ...) is dropped: the
+// artifact store speaks only file:// and s3://, so a scheme outside
+// this set would route a future consumer (step 3 workflow passing,
+// step 6 registry) at a URL the coordinator never issued.
+var allowedOutputSchemes = map[string]struct{}{
+	"file": {},
+	"s3":   {},
+}
+
+// outputsFromProto lifts pb.ArtifactOutput slices (sent by the node
+// after a successful stager-finalize) onto the coordinator-internal
+// cpb.ArtifactOutput form that persists on the Job record.
+//
+// The function is the trust boundary for node-attested artifact
+// metadata: reported entries are validated and silently dropped if
+// they violate shape or scheme rules. The coordinator logs each drop
+// so operators can notice a misbehaving (or compromised) node without
+// failing the job's terminal transition — the process still ran,
+// only its declared outputs are untrustworthy.
+func (s *Server) outputsFromProto(jobID, nodeID string, src []*pb.ArtifactOutput) []cpb.ArtifactOutput {
+	if len(src) == 0 {
+		return nil
+	}
+	// Bound the slice before iterating so a node cannot force the
+	// coordinator to iterate an unbounded list.
+	if len(src) > maxReportedOutputs {
+		s.log.Warn("ReportResult outputs exceed cap; truncating",
+			slog.String("job_id", jobID),
+			slog.String("node_id", nodeID),
+			slog.Int("count", len(src)), slog.Int("cap", maxReportedOutputs))
+		src = src[:maxReportedOutputs]
+	}
+	out := make([]cpb.ArtifactOutput, 0, len(src))
+	for _, o := range src {
+		if o == nil {
+			continue
+		}
+		if reason := validateReportedOutput(o); reason != "" {
+			s.log.Warn("dropping invalid reported output",
+				slog.String("job_id", jobID),
+				slog.String("node_id", nodeID),
+				slog.String("name", o.Name),
+				slog.String("reason", reason))
+			continue
+		}
+		out = append(out, cpb.ArtifactOutput{
+			Name:      o.Name,
+			URI:       o.Uri,
+			Size:      o.Size,
+			SHA256:    o.Sha256,
+			LocalPath: o.LocalPath,
+		})
+	}
+	return out
+}
+
+// outputsFromProto is the package-level convenience used by tests that
+// don't need the logging path. Production code goes through the
+// method form on *Server.
+func outputsFromProto(src []*pb.ArtifactOutput) []cpb.ArtifactOutput {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]cpb.ArtifactOutput, 0, len(src))
+	for _, o := range src {
+		if o == nil {
+			continue
+		}
+		if validateReportedOutput(o) != "" {
+			continue
+		}
+		out = append(out, cpb.ArtifactOutput{
+			Name:      o.Name,
+			URI:       o.Uri,
+			Size:      o.Size,
+			SHA256:    o.Sha256,
+			LocalPath: o.LocalPath,
+		})
+	}
+	return out
+}
+
+// validateReportedOutput enforces the coordinator-side trust boundary
+// on node-attested artifact metadata. Returns the reason string when
+// the entry should be dropped; empty string when it's accepted.
+func validateReportedOutput(o *pb.ArtifactOutput) string {
+	if o.Name == "" || len(o.Name) > maxReportedNameLen {
+		return "name length"
+	}
+	for i := 0; i < len(o.Name); i++ {
+		c := o.Name[i]
+		switch {
+		case c >= 'A' && c <= 'Z':
+		case c == '_':
+		case i > 0 && c >= '0' && c <= '9':
+		default:
+			return "name charset"
+		}
+	}
+	if o.Uri == "" || len(o.Uri) > maxReportedURILen {
+		return "uri length"
+	}
+	// Scheme check: cheap, no url.Parse allocation for simple prefix
+	// matching on the two allowed schemes.
+	if !(hasPrefix(o.Uri, "file://") || hasPrefix(o.Uri, "s3://")) {
+		return "uri scheme"
+	}
+	scheme := "file"
+	if hasPrefix(o.Uri, "s3://") {
+		scheme = "s3"
+	}
+	if _, ok := allowedOutputSchemes[scheme]; !ok {
+		return "uri scheme"
+	}
+	// NUL and control bytes must not slip through into persistence.
+	for i := 0; i < len(o.Uri); i++ {
+		if b := o.Uri[i]; b == 0 || b < 0x20 || b == 0x7f {
+			return "uri control bytes"
+		}
+	}
+	if len(o.LocalPath) > maxReportedLocalPath {
+		return "local_path length"
+	}
+	if o.Size < 0 {
+		return "negative size"
+	}
+	return ""
+}
+
+// hasPrefix mirrors strings.HasPrefix without the allocation-free
+// concern (strings.HasPrefix is already alloc-free). Inlined for
+// readability at the call site; if this function list grows, replace
+// with strings.HasPrefix.
+func hasPrefix(s, p string) bool {
+	return len(s) >= len(p) && s[:len(p)] == p
 }
 
 // StreamLogs receives log chunks from nodes and stores them for later
