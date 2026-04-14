@@ -1,8 +1,10 @@
 # Planned Features
 
 Feature specs that evolved Helion v2 from a job scheduler into a **minimal
-orchestrator**. All 7 core features (01–07) are implemented. Feature 08
-consolidates deferred enhancements as a backlog for future work.
+orchestrator**. All 7 core features (01–07) are implemented. Active-slice
+specs live as numbered files in this directory; items that were identified
+but intentionally pushed past the current scope live in
+[`deferred/`](deferred/) as a running backlog.
 
 Each file follows the template below.
 
@@ -47,12 +49,20 @@ Decisions deferred or needing input.
 | Priority queues | **Implemented** | P1 | [05-priority-queues.md](05-priority-queues.md) |
 | Event system | **Implemented** | P2 | [06-event-system.md](06-event-system.md) |
 | Observability improvements | **Implemented** | P2 | [07-observability.md](07-observability.md) |
-| Deferred enhancements | Not started | P3 | [08-deferred-enhancements.md](08-deferred-enhancements.md) |
 | Analytics pipeline (BadgerDB → PostgreSQL) | **Implemented** | P1 | [09-analytics-pipeline.md](09-analytics-pipeline.md) |
-| Minimal ML pipeline | Not started | P1 | [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) |
+| Minimal ML pipeline | In progress (steps 1–4) | P1 | [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) |
 
 ### Priority definitions
 
 - **P0** — Required for minimal orchestrator.
 - **P1** — Required for production use.
 - **P2** — High-impact improvements but not blockers.
+
+### Backlog
+
+Items deferred during feature implementation — consolidated rather than
+duplicated across per-feature specs. See
+[`deferred/README.md`](deferred/README.md) for the full list and
+suggested implementation priority. New deferrals should be filed there
+(as an entry under the feature they came from), not as a new numbered
+feature doc.

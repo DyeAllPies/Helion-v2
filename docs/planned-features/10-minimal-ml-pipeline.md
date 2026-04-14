@@ -249,7 +249,7 @@ extra pass in `validateFromReferences`; errors surface as a new
 
 ## Step 5 — GPU as a first-class resource
 
-Promoted from feature 08's deferred list. Minimal scope:
+Promoted from the [`deferred/`](deferred/) backlog. Minimal scope:
 
 - `nodeEntry.Resources` gains `GPUs int` (whole-GPU count, no fractional
   sharing, no MIG slicing).
@@ -997,7 +997,7 @@ them up without having to re-discover the context:
   view, not for the dispatch loop itself.
 - **Hardware attestation of node labels** — out of scope for
   feature 10 entirely; recorded in the backlog at
-  [08-deferred-enhancements.md § ML Pipeline / Hardware attestation of node labels](08-deferred-enhancements.md#hardware-attestation-of-node-labels)
+  [deferred/README.md § ML Pipeline / Hardware attestation of node labels](deferred/README.md#hardware-attestation-of-node-labels)
   with the mitigation operators can apply in the meantime
   (deployment-supplied labels via `HELION_LABEL_*`).
 
@@ -1148,7 +1148,7 @@ findings if they ship before the mitigation lands:
   controls both the label set and the node image. The node-agent's
   `nvidia-smi` auto-probe is best-effort metadata for a friendly
   cluster, **not** a security-grade claim. Captured in
-  [08-deferred-enhancements.md](08-deferred-enhancements.md#hardware-attestation-of-node-labels).
+  [deferred/README.md](deferred/README.md#hardware-attestation-of-node-labels).
 
 These are all reasonable follow-on features. None of them are required for
 "a user can train and serve a model on Helion."
