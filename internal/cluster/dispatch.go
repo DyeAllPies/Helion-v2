@@ -124,7 +124,23 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 			})
 			continue
 		}
-		job = resolvedJob
+		// Persist the rewritten Inputs so /api/jobs/{id} shows the
+		// concrete URIs the node received. The From field is
+		// preserved on each entry; both sides of the lineage stay
+		// queryable after dispatch. Only persist when the resolver
+		// actually made changes (pointer equality is how the
+		// resolver signals "no From refs, no copy").
+		if resolvedJob != job {
+			if perr := d.jobs.UpdateResolvedInputs(ctx, job.ID, resolvedJob.Inputs); perr != nil {
+				d.log.Warn("dispatch: persist resolved inputs failed",
+					slog.String("job_id", job.ID), slog.Any("err", perr))
+				_ = d.jobs.Transition(ctx, job.ID, cpb.JobStatusFailed, TransitionOptions{
+					ErrMsg: "persist resolved inputs: " + perr.Error(),
+				})
+				continue
+			}
+			job = resolvedJob
+		}
 
 		node, err := d.scheduler.Pick()
 		if err != nil {

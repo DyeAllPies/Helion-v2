@@ -230,6 +230,21 @@ If no node matches, the job stays pending and emits a
 add a "wait forever vs. fail fast" policy here; it surfaces in feedback
 naturally and can be a P2 follow-up.)
 
+### Step-3 follow-up to pick up during this step
+
+While the DAG validator is being touched for selector-aware checks,
+extend `validateFromReferences` to reject `from:` references whose
+upstream dependency condition is `on_failure` or `on_complete`. A
+downstream that uses `from: X.OUT` can only ever succeed when X
+produced `OUT`, which means X must have completed successfully —
+the step-2 stager only uploads on success. Writing a workflow that
+combines `on_failure` + `from` is therefore always unreachable at
+runtime, but today it slips past submit and fails late at dispatch
+with `ErrResolveOutputMissing`. Catching it at submit saves a
+debugging round-trip for the first user who tries the pattern. One
+extra pass in `validateFromReferences`; errors surface as a new
+`ErrDAGFromConditionUnreachable`.
+
 ---
 
 ## Step 5 — GPU as a first-class resource
@@ -359,6 +374,26 @@ New lazy-loaded Angular module at `dashboard/src/app/features/ml/`:
 
 Reuses the existing auth-guard, JWT interceptor, error banner, and date
 range patterns from the analytics module.
+
+### Step-3 follow-up to pick up during this step
+
+The step-3 dispatch-time resolver fails closed on
+`ErrResolveUpstreamNotCompleted` / `ErrResolveOutputMissing` — the
+downstream job transitions to Failed with an `"artifact resolution:
+..."` error. These are currently `slog.Warn`-logged but not audited,
+so an operator cannot answer "which of today's ML pipelines broke
+because an upstream output went missing?" without reading raw
+coordinator logs. Emit distinct audit events from
+`DispatchLoop.dispatchPending` whenever `ResolveJobInputs` returns
+non-nil, and add a filter + column to the Pipelines view so the
+dashboard can surface them at a glance:
+
+| Event | Actor | Target | Details |
+|---|---|---|---|
+| `ml.resolve_failed` | `coordinator` | `job:<job_id>` | `{workflow_id, upstream, output_name, reason}` |
+
+One emit site in `dispatch.go` plus an `AuditEventType` constant; a
+small badge on the Pipelines row keyed off the event.
 
 ---
 
@@ -632,6 +667,13 @@ just after the eligibility gate and before the first transition:
 failures (`ErrResolveUpstreamMissing`, `ErrResolveUpstreamNotCompleted`,
 `ErrResolveOutputMissing`) transition the downstream to Failed with
 a descriptive error rather than dispatching a half-specified job.
+
+The rewritten Inputs slice is then persisted via
+`JobStore.UpdateResolvedInputs` so `GET /api/jobs/{id}` returns the
+concrete URI the node received alongside the original `From`
+reference — lineage stays queryable across retries and restarts.
+Persistence failure rolls back the in-memory mutation and fails the
+dispatch loudly.
 
 Security invariant kept: the resolver reads the upstream's
 **persisted** `ResolvedOutputs` — already filtered through
