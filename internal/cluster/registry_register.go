@@ -95,17 +95,16 @@ func (r *Registry) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.R
 		entry = &nodeEntry{
 			nodeID:       req.NodeId,
 			registeredAt: now,
-			labels:       labels,
 		}
+		entry._labels.Store(&labels)
 		entry.storeAddress(req.Address)
 		r.nodes[req.NodeId] = entry
 	} else {
 		// Node restarted — update address and labels in case either
-		// changed. Labels are effectively frozen per run, but a
-		// re-register with new env / hardware may legitimately bring
-		// new labels; accept them.
+		// changed. A re-register with new env / hardware may
+		// legitimately bring new labels; accept them.
 		entry.storeAddress(req.Address)
-		entry.labels = labels
+		entry._labels.Store(&labels)
 	}
 	entry.storeLastSeen(now)
 	r.mu.Unlock()

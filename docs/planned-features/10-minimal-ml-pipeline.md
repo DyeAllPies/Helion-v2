@@ -1,7 +1,7 @@
 # Feature: Minimal ML Pipeline
 
 **Priority:** P1
-**Status:** In progress (steps 1–5 implemented; 6–10 pending)
+**Status:** In progress (steps 1–6 implemented; 7–10 pending)
 **Affected files:**
 `internal/api/types.go`,
 `internal/cluster/registry_node.go`,
@@ -479,7 +479,7 @@ the feature is done.
 | 3    | Workflow artifact passing (`from: job.output`)   | 2            | Medium | Done   |
 | 4    | Node labels + node_selector scheduling           | —            | Small  | Done   |
 | 5    | GPU as a scheduling resource                     | 4            | Medium | Done   |
-| 6    | Dataset + model registries (API + storage)       | 1            | Medium | Pending |
+| 6    | Dataset + model registries (API + storage)       | 1            | Medium | Done   |
 | 7    | Inference jobs (Service spec + readiness)        | 2            | Small  | Pending |
 | 8    | Dashboard ML module                              | 6, 7         | Medium | Pending |
 | 9    | Iris end-to-end example                          | 2, 3, 6, 7   | Small  | Pending |
@@ -1143,6 +1143,138 @@ Closed-here follow-ups from the second-pass audit (commit `<this slice>`):
   could silently zero out GPU capacity on coordinator restart
   and every GPU job would become unschedulable until the next
   heartbeat arrived.
+
+### Dataset + model registries (done)
+
+Two parallel resources, metadata only — the bytes stay in the
+artifact store (step 1). The registry answers "what does this
+named model look like, by whom and when?"; the artifact store
+answers "how do I fetch its bytes?" Same split you'd find in
+MLflow / W&B / CometML, minimal cut.
+
+Data + persistence
+([`internal/registry/`](../../internal/registry/)):
+
+- `Dataset` and `Model` structs carry URI + size + SHA256 (copied
+  from the artifact store's Stat so downstream callers can verify
+  without a second round-trip) + tags + CreatedAt + CreatedBy
+  (JWT subject).
+- `Model` adds lineage — `SourceJobID` + `SourceDataset{Name,
+  Version}` + `Metrics map[string]float64`. Lineage is recorded
+  but not *enforced*; the registrar is trusted to stamp the right
+  pointers, matching the broader trust model where node-reported
+  outputs are gated by `attestOutputs` but user-supplied metadata
+  at the REST boundary rides on the JWT subject.
+- Immutable once registered — version bumps create a new entry.
+  Keeps the audit story simple and matches how every registry
+  in the space behaves.
+- `BadgerStore` shares the coordinator's existing BadgerDB under
+  `datasets/<name>/<version>` and `models/<name>/<version>` key
+  prefixes. No separate DB file — metadata is small and low-
+  traffic; isolation isn't worth the operational overhead.
+- `LatestModel(name)` walks the `models/<name>/` prefix and picks
+  the entry with the newest `CreatedAt`. Chronological, not
+  semantic — if a registrar backfills an older version after a
+  newer one, the newer one wins.
+
+REST surface
+([`internal/api/handlers_registry.go`](../../internal/api/handlers_registry.go)):
+
+```
+POST   /api/datasets
+GET    /api/datasets                      (paginated)
+GET    /api/datasets/{name}/{version}
+DELETE /api/datasets/{name}/{version}
+
+POST   /api/models
+GET    /api/models                        (paginated)
+GET    /api/models/{name}/{version}
+GET    /api/models/{name}/latest
+DELETE /api/models/{name}/{version}
+```
+
+Every endpoint rides the shared `authMiddleware` (JWT required);
+mutating endpoints run the per-subject `registryQueryAllow`
+limiter (2 rps, burst 30 — same shape as the analytics limiter
+for consistency); success emits an audit record + event-bus
+event. Registry routes are registered only when
+`SetRegistryStore` is called at coordinator startup, so a
+deployment that didn't opt in returns 404 from the mux rather
+than exposing phantom endpoints.
+
+Validation
+([`internal/registry/validate.go`](../../internal/registry/validate.go)):
+
+- **Name:** lowercase alnum + `-._` (k8s DNS label charset). Shell-
+  / URL- / BadgerDB-key-safe without escaping at any layer.
+- **Version:** broader charset (accepts `v1.0.0`, `2026-04-14`,
+  `git-abc1234`, SemVer `+build` metadata) but still caps length
+  and rejects control bytes / spaces.
+- **URI:** must start with `file://` or `s3://` — same allowlist
+  the rest of the ML pipeline uses. NUL / control rejection and
+  length cap mirror `validateArtifactBindings`.
+- **Tags:** k8s-label-shaped bounds (≤32 entries, 63-byte keys,
+  253-byte values, no `=` or NUL in keys). Same rule as node
+  labels so a user's mental model is "Helion tags behave like
+  k8s labels."
+- **Metrics:** ≤64 entries, 63-byte keys, NaN / ±Inf rejected
+  (won't round-trip through `encoding/json`).
+- **Lineage:** `Model.SourceDataset` is all-or-nothing — partial
+  pointers (name without version) are rejected so the audit
+  record is never half-formed.
+
+Security posture (matches step 2-5 patterns — no new crypto,
+inherits mTLS + hybrid PQ channel):
+
+- JWT subject → CreatedBy → audit actor → rate-limit key. One
+  identity thread through the whole request.
+- `maxSubmitBodyBytes = 1 MiB` cap on the POST body (shared with
+  the job-submit handler) so a malicious caller can't stream MB
+  of free-form tags.
+- Delete of an active model's registry entry does *not* delete
+  the underlying artifact bytes — the registry holds pointers,
+  not the data. Artifact GC is a step-6-adjacent deferred item
+  (see the [deferred backlog](deferred/README.md)).
+
+Deliberately deferred in this slice (recorded for clarity):
+
+- **URI existence check at register time.** Would require wiring
+  the artifact store into the coordinator (today only nodes open
+  one). A caller can register a bogus URI; downstream consumers
+  (workflow resolver, signed-URL fetch) detect it when they
+  actually try to read. Low-value enforcement for the minimal
+  cut — the JWT+audit trail already names who registered the
+  bad pointer.
+- **Artifact GC on registry delete.** A deleted `Model` record
+  leaves its bytes in the artifact store. Pinning (artifacts
+  referenced by a live registry entry survive; others get GC'd
+  after a TTL) is the intended end state — filed as an open
+  question in this doc, will land alongside the upload-via-REST
+  handler that doesn't exist yet.
+- **`GET /api/datasets?tag=foo` filter.** Tag-based search is
+  a list-endpoint convenience. The current list is paginated
+  newest-first; a client can filter Go-side. Nice to have, not
+  on the critical path.
+
+Tests (33 new, all CI-safe):
+
+- [`registry/validate_test.go`](../../internal/registry/validate_test.go)
+  — name / version / URI / tags / metrics / dataset / model
+  validators, including partial-lineage rejection + NaN/±Inf +
+  oversize + control-byte rejection.
+- [`registry/badger_test.go`](../../internal/registry/badger_test.go)
+  — Dataset and Model roundtrips, `ErrAlreadyExists` on dup
+  version, `ErrNotFound` on missing, list newest-first +
+  pagination, delete-is-version-specific, `LatestModel`
+  chronological (not semantic), cross-type isolation
+  (dataset "x" doesn't collide with model "x").
+- [`api/handlers_registry_test.go`](../../internal/api/handlers_registry_test.go)
+  — HTTP surface: register/get/list/delete for both
+  resources, 409 on dup, 404 on missing, 400 on bad scheme /
+  partial lineage / NaN metric, pagination, `/latest`
+  returning most-recent, event bus publishing on register +
+  delete, registry-gated 404 when `SetRegistryStore` wasn't
+  called.
 
 ### Rust runtime (parity landed)
 

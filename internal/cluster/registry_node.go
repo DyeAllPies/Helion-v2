@@ -157,10 +157,12 @@ type nodeEntry struct {
 	registeredAt time.Time
 
 	// labels are reported at Register time and kept for the scheduler's
-	// node_selector filter. Frozen after insertion — the Register path
-	// reads, merges, and re-inserts the entry atomically under
-	// Registry.mu, so snapshot() can read labels without locking.
-	labels map[string]string
+	// node_selector filter. Stored as atomic.Pointer so snapshot()
+	// (which runs outside Registry.mu) can read the current map
+	// without racing a re-register that replaces it. The pointed-to
+	// map itself is never mutated in place — Register always swaps in
+	// a freshly-sanitised map.
+	_labels atomic.Pointer[map[string]string]
 
 	// address may be updated by Register() on node restart.
 	// Stored as atomic.Value to avoid races with concurrent snapshot() calls.
@@ -230,9 +232,9 @@ func (e *nodeEntry) snapshot(staleAfter time.Duration) *cpb.Node {
 	// Defensive copy: snapshot consumers (scheduler policies, dashboard
 	// JSON) must not be able to mutate the entry's label map.
 	var labels map[string]string
-	if len(e.labels) > 0 {
-		labels = make(map[string]string, len(e.labels))
-		for k, v := range e.labels {
+	if lp := e._labels.Load(); lp != nil && len(*lp) > 0 {
+		labels = make(map[string]string, len(*lp))
+		for k, v := range *lp {
 			labels[k] = v
 		}
 	}

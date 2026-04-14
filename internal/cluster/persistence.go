@@ -38,6 +38,13 @@ func NewBadgerJSONPersister(path string, heartbeatInterval time.Duration) (*Badg
 	return &BadgerJSONPersister{db: db, heartbeatInterval: heartbeatInterval}, nil
 }
 
+// DB returns the underlying *badger.DB handle for callers that need
+// to layer their own key-prefix subsystem on the shared database
+// (the dataset + model registries in internal/registry/ do this).
+// Returned handle is owned by the persister — callers must not Close
+// it; the persister's own shutdown path handles that.
+func (p *BadgerJSONPersister) DB() *badger.DB { return p.db }
+
 // NewBadgerJSONPersisterReadOnly opens an existing BadgerDB at path in
 // read-only mode. This is the safe way to scan a live database — the
 // BypassLockGuard flag allows a reader to open the DB even while a separate

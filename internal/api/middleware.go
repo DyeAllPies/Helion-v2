@@ -166,3 +166,29 @@ func (s *Server) analyticsQueryAllow(subject string) bool {
 	s.analyticsMu.Unlock()
 	return lim.Allow()
 }
+
+// ── Registry rate-limit constants ──────────────────────────────────────────
+
+// Per-subject token-bucket limiter on /api/datasets and /api/models.
+// Registry writes are cheap individually (one BadgerDB put) but unbounded
+// register rates from a single authed subject would flood the audit
+// stream and chew through disk on the shared DB. Rate 2 rps + burst 30
+// matches the analytics bucket — one flow, one operator alert threshold.
+const (
+	registryQueryRate  = 2.0
+	registryQueryBurst = 30
+)
+
+// registryQueryAllow returns true if the caller identified by subject is
+// within the registry rate limit. Same token-bucket pattern as
+// analyticsQueryAllow; creates a per-subject limiter on first use.
+func (s *Server) registryQueryAllow(subject string) bool {
+	s.registryMu.Lock()
+	lim, ok := s.registryLimiters[subject]
+	if !ok {
+		lim = rate.NewLimiter(registryQueryRate, registryQueryBurst)
+		s.registryLimiters[subject] = lim
+	}
+	s.registryMu.Unlock()
+	return lim.Allow()
+}

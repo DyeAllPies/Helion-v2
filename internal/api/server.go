@@ -60,6 +60,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
+	"github.com/DyeAllPies/Helion-v2/internal/registry"
 )
 
 // ── Server ────────────────────────────────────────────────────────────────────
@@ -100,6 +101,21 @@ type Server struct {
 	// (PERCENTILE_CONT, date-range scans on job_summary).
 	analyticsMu       sync.Mutex
 	analyticsLimiters map[string]*rate.Limiter
+
+	// registryMu protects registryLimiters. Per-subject rate limiter on
+	// /api/datasets and /api/models. Registry writes are cheap (BadgerDB
+	// single-key writes), but unbounded register rates would let an
+	// authenticated user pollute the audit stream or chew through disk
+	// on the shared BadgerDB. Matches analytics shape for consistency.
+	registryMu       sync.Mutex
+	registryLimiters map[string]*rate.Limiter
+
+	// Dataset / model persistence — nil until SetRegistryStore is called
+	// (coordinator wiring). Handlers return 404 when these are nil so a
+	// node-only deployment without the registry enabled doesn't expose
+	// phantom endpoints.
+	datasets registry.DatasetStore
+	models   registry.ModelStore
 }
 
 // DisableAuth turns off authentication for this Server. Intended ONLY for
@@ -134,6 +150,29 @@ func (s *Server) SetWorkflowStore(ws *cluster.WorkflowStore, jobs *cluster.JobSt
 	s.mux.HandleFunc("DELETE /workflows/{id}", s.authMiddleware(s.handleCancelWorkflow))
 }
 
+// SetRegistryStore enables the dataset + model registry endpoints by
+// injecting a registry.Store. Must be called before Serve. Registers
+// the /api/datasets and /api/models routes on the mux. Callers that
+// don't enable the registry get 404 from the handlers (via the
+// registryConfigured guard) so the endpoints are invisible on
+// deployments that opted out.
+func (s *Server) SetRegistryStore(store registry.Store) {
+	s.datasets = store
+	s.models = store
+	s.mux.HandleFunc("POST /api/datasets", s.authMiddleware(s.handleRegisterDataset))
+	s.mux.HandleFunc("GET /api/datasets", s.authMiddleware(s.handleListDatasets))
+	s.mux.HandleFunc("GET /api/datasets/{name}/{version}", s.authMiddleware(s.handleGetDataset))
+	s.mux.HandleFunc("DELETE /api/datasets/{name}/{version}", s.authMiddleware(s.handleDeleteDataset))
+	s.mux.HandleFunc("POST /api/models", s.authMiddleware(s.handleRegisterModel))
+	s.mux.HandleFunc("GET /api/models", s.authMiddleware(s.handleListModels))
+	// `/latest` lives before `/{name}/{version}` so the Go ServeMux's
+	// most-specific-pattern-wins rule doesn't accidentally route
+	// `GET /api/models/mymodel/latest` to the version handler.
+	s.mux.HandleFunc("GET /api/models/{name}/latest", s.authMiddleware(s.handleLatestModel))
+	s.mux.HandleFunc("GET /api/models/{name}/{version}", s.authMiddleware(s.handleGetModel))
+	s.mux.HandleFunc("DELETE /api/models/{name}/{version}", s.authMiddleware(s.handleDeleteModel))
+}
+
 // NewServer creates an HTTP API server with all Phase 3/4 components.
 func NewServer(
 	jobs JobStoreIface,
@@ -157,6 +196,7 @@ func NewServer(
 		mux:                http.NewServeMux(),
 		tokenIssueLimiters: make(map[string]*rate.Limiter),
 		analyticsLimiters:  make(map[string]*rate.Limiter),
+		registryLimiters:   make(map[string]*rate.Limiter),
 		upgrader: websocket.Upgrader{
 			// Reject cross-origin WebSocket connections. Browsers always send an
 			// Origin header on WebSocket upgrades; we compare its host component

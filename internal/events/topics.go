@@ -28,6 +28,15 @@ const (
 	// The job stays in the pending queue — the operator gets the
 	// event as a diagnostic signal, not a retry trigger.
 	TopicJobUnschedulable = "job.unschedulable"
+
+	// ML registry lifecycle events. Carry enough metadata for a
+	// subscriber (analytics sink, dashboard, external webhook
+	// relay) to answer "what got registered, by whom, when?"
+	// without a second round-trip to the registry API.
+	TopicDatasetRegistered = "dataset.registered"
+	TopicDatasetDeleted    = "dataset.deleted"
+	TopicModelRegistered   = "model.registered"
+	TopicModelDeleted      = "model.deleted"
 )
 
 // NewEvent creates an Event with a generated ID and current timestamp.
@@ -169,6 +178,60 @@ func NodeRevoked(nodeID, reason string) Event {
 func WorkflowCompleted(workflowID string) Event {
 	return NewEvent(TopicWorkflowCompleted, map[string]any{
 		"workflow_id": workflowID,
+	})
+}
+
+// DatasetRegistered creates a dataset.registered event. Payload
+// carries name + version + size so a subscriber can aggregate
+// storage footprint per registrar without re-querying.
+func DatasetRegistered(name, version, uri, actor string, size int64) Event {
+	return NewEvent(TopicDatasetRegistered, map[string]any{
+		"name":       name,
+		"version":    version,
+		"uri":        uri,
+		"actor":      actor,
+		"size_bytes": size,
+	})
+}
+
+// DatasetDeleted creates a dataset.deleted event.
+func DatasetDeleted(name, version, actor string) Event {
+	return NewEvent(TopicDatasetDeleted, map[string]any{
+		"name":    name,
+		"version": version,
+		"actor":   actor,
+	})
+}
+
+// ModelRegistered creates a model.registered event. Lineage fields
+// (source_job_id, source_dataset) are included when non-empty so
+// subscribers can build the "what trained this model" graph
+// without reading the full record.
+func ModelRegistered(name, version, uri, actor string, sourceJobID string, sourceDatasetName, sourceDatasetVersion string) Event {
+	data := map[string]any{
+		"name":    name,
+		"version": version,
+		"uri":     uri,
+		"actor":   actor,
+	}
+	if sourceJobID != "" {
+		data["source_job_id"] = sourceJobID
+	}
+	if sourceDatasetName != "" {
+		data["source_dataset"] = map[string]string{
+			"name":    sourceDatasetName,
+			"version": sourceDatasetVersion,
+		}
+	}
+	return NewEvent(TopicModelRegistered, data)
+}
+
+// ModelDeleted creates a model.deleted event.
+func ModelDeleted(name, version, actor string) Event {
+	return NewEvent(TopicModelDeleted, map[string]any{
+		"name":    name,
+		"version": version,
+		"actor":   actor,
 	})
 }
 

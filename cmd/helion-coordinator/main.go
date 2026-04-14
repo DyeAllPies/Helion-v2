@@ -49,6 +49,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
+	registrypkg "github.com/DyeAllPies/Helion-v2/internal/registry"
 	"github.com/DyeAllPies/Helion-v2/internal/grpcserver"
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	"github.com/DyeAllPies/Helion-v2/internal/metrics"
@@ -316,6 +317,11 @@ func main() {
 	apiSrv.SetWorkflowStore(workflows, jobs)
 	apiSrv.SetLogStore(logStore)
 	apiSrv.SetEventBus(eventBus)
+	// Dataset + model registry rides the coordinator's existing
+	// BadgerDB under its own key prefix — metadata is small + low
+	// traffic, and a separate DB would be operational overhead for
+	// no isolation benefit.
+	apiSrv.SetRegistryStore(registrypkg.NewBadgerStore(persister.DB()))
 
 	// ── Analytics pipeline (opt-in) ──────────────────────────────────────
 	// Set HELION_ANALYTICS_DSN to a PostgreSQL connection string to enable
