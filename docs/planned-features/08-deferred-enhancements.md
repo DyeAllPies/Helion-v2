@@ -164,6 +164,18 @@ JSON dashboard templates for Grafana showing job throughput, node health, queue 
 
 ---
 
+## ML Pipeline (from feature 10)
+
+### Hardware attestation of node labels
+
+The ML pipeline slice in [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) lets nodes self-report labels (`gpu=a100`, `cuda=12.4`, `zone=us-east`) that the scheduler uses for `node_selector` matching. The trust boundary today is mTLS + ML-DSA node certificates: "this is node X that we issued a cert for." It does **not** cover "this node actually owns the hardware it claims." A compromised node under the existing cert can register with `gpu=a100` on a CPU-only host, win GPU-targeted jobs, and either run them incorrectly or exfiltrate the artifacts they stage.
+
+Proper mitigation needs hardware attestation — TPM quotes, Intel SGX / TDX, AMD SEV-SNP, or confidential-VM attestation anchored in the cloud provider's root of trust. The coordinator would verify an attestation quote at Register time and bind the registered labels to the measured hardware.
+
+**Why deferred:** All four attestation paths add heavy dependencies and meaningful per-deployment setup. None of them is universally available — bare-metal clusters, mixed clouds, and ARM dev boxes don't all have the same attestation surface. Shipping minimal ML support should not block on choosing one. The operator mitigation in the interim is to set labels via deployment env (`HELION_LABEL_*`) from a trusted control plane (k8s Deployment, Nomad job spec, systemd unit), treating the node-agent's `nvidia-smi` auto-probe as best-effort metadata for friendly clusters only.
+
+---
+
 ## Implementation priority (suggested)
 
 | Item | Effort | Impact | Suggested priority |
@@ -182,3 +194,4 @@ JSON dashboard templates for Grafana showing job throughput, node health, queue 
 | Affinity/anti-affinity | High | Low | P3 — complex scheduler change |
 | Per-job resource tracking | Medium | Low | P3 — cardinality issues |
 | Alerting / Grafana templates | Low | Low | P3 — users own their stack |
+| Node label hardware attestation | High | High | P3 — needs TPM/SGX/SEV-SNP integration, deployment-specific |

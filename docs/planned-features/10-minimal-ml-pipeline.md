@@ -264,6 +264,21 @@ What we do **not** do here: GPU memory tracking, MIG, multi-host
 collective scheduling, topology awareness. Those are explicit P3 in the
 deferred list and stay there.
 
+### Step-4 follow-up to pick up during this step
+
+While the scheduler is being touched for GPU bin-packing, fix the
+round-robin fairness gap introduced by selector filtering: today
+`RoundRobinPolicy.counter` is global across all `PickForSelector`
+calls, so a selector-narrowed candidate list inherits the global
+index. A deployment with multiple distinct selectors (CPU jobs
+targeting `role=cpu`, GPU jobs targeting `gpu=a100`) can produce
+uneven dispatch across the members of each selector's candidate
+set. Replace the single `atomic.Int64` counter with a `sync.Map` of
+per-selector counters keyed by a canonical string rendering of the
+selector (e.g. `gpu=a100|zone=us-east`). GPU scheduling already
+wants per-selector state for device-index tracking, so the same
+refactor serves both needs.
+
 ---
 
 ## Step 6 — Dataset and model registries
@@ -394,6 +409,29 @@ dashboard can surface them at a glance:
 
 One emit site in `dispatch.go` plus an `AuditEventType` constant; a
 small badge on the Pipelines row keyed off the event.
+
+### Step-4 follow-up to pick up during this step
+
+The `job.unschedulable` event today carries `job_id` +
+`unsatisfied_selector` — enough for an operator to see *what* didn't
+match, but not *why*. The dashboard's Pipelines view would benefit
+from distinguishing the three causes so a user can act on them
+differently:
+
+| Diagnostic | Meaning | Operator action |
+|---|---|---|
+| `no_healthy_node` | zero nodes in the registry are healthy right now | wait / investigate registry |
+| `no_matching_label` | healthy nodes exist but none advertise the requested labels | add a node with the right labels / relax the selector |
+| `all_matching_unhealthy` | nodes with matching labels exist but are all stale | restart the affected nodes |
+
+Extend `JobUnschedulable` with a `reason` field and populate it from
+`DispatchLoop.dispatchPending` using three paths: the existing
+`ErrNoHealthyNodes` branch, the existing `ErrNoNodeMatchesSelector`
+branch, and a new check that walks *all* registered nodes (healthy
+or not) and reports `all_matching_unhealthy` when at least one
+*unhealthy* node matches the selector. The dashboard's Pipelines
+row can then render three distinct badge colours / tooltips keyed
+off `reason`.
 
 ---
 
@@ -941,32 +979,27 @@ contains sorted labels, condition-gate DAG rejection,
 
 #### Deliberately not fixed, with rationale
 
-Second-pass audit identified concerns left unaddressed; recorded so
-a future auditor doesn't re-raise:
+Second-pass audit identified three concerns that were left
+unaddressed in this slice. Each is documented in the section of
+feature 10 (or the deferred-enhancements doc) where the fix would
+naturally land, so the next author working on those areas picks
+them up without having to re-discover the context:
 
-- **Compromised node advertising false labels.** A malicious node can
-  register with `gpu=a100` on a CPU-only host and win GPU-targeted
-  jobs it cannot run. Defending this needs hardware attestation
-  (TPM / SGX / confidential VMs) — well out of scope for the
-  minimal ML pipeline. The existing mTLS + ML-DSA certificate chain
-  proves "this is node X that we issued a cert for"; it does not
-  prove "this node actually has the hardware it claims." Operator
-  mitigation for now: treat labels as operator-set via
-  `HELION_LABEL_*` env in deployment manifests, not as node-side
-  auto-discovery results. The node's `nvidia-smi` probe is
-  best-effort metadata, not a security-grade claim.
-- **Round-robin policy fairness under selector filtering.** The
-  `RoundRobinPolicy.counter` is global across all `PickForSelector`
-  calls, so a selector-narrowed candidate list inherits the global
-  index. Slightly unfair distribution when many selectors share a
-  single policy instance — defer to the GPU-as-resource slice
-  where per-selector counters make more sense anyway.
+- **Round-robin fairness under selector filtering** — deferred to
+  step 5 (GPU as a first-class resource). See that step's
+  "Step-4 follow-up" subsection. The GPU slice already wants
+  per-selector scheduler state for device-index tracking, so the
+  refactor is a single change.
 - **Unschedulable event payload doesn't distinguish "no healthy
-  matching node" from "no matching node at all."** The
-  `unsatisfied_selector` field lets operators see *what* didn't
-  match; not *why* (health vs. absence). A richer diagnostic payload
-  helps the dashboard's step-8 pipelines view but isn't load-bearing
-  for step 4.
+  match" from "no match at all"** — deferred to step 8 (Dashboard
+  ML module). See that step's "Step-4 follow-up" subsection. The
+  richer payload is load-bearing for the dashboard's Pipelines
+  view, not for the dispatch loop itself.
+- **Hardware attestation of node labels** — out of scope for
+  feature 10 entirely; recorded in the backlog at
+  [08-deferred-enhancements.md § ML Pipeline / Hardware attestation of node labels](08-deferred-enhancements.md#hardware-attestation-of-node-labels)
+  with the mitigation operators can apply in the meantime
+  (deployment-supplied labels via `HELION_LABEL_*`).
 
 ### Rust runtime (parity landed)
 
@@ -1102,6 +1135,20 @@ findings if they ship before the mitigation lands:
 - Notebook execution (Papermill / Jupyter kernels as a job type).
 - Auto-scaling inference, traffic splitting, A/B testing, canary deploys.
 - Data versioning beyond a string `version` field (no DVC, no LakeFS).
+- **Hardware attestation of node labels.** A compromised node can
+  register with `gpu=a100` on a CPU-only host and win GPU-targeted
+  jobs it cannot run. Defending against this needs TPM / SGX /
+  confidential-VM attestation and is well beyond the minimal
+  pipeline's scope. The mTLS + ML-DSA certificate chain proves
+  "this is node X that we issued a cert for"; it does not prove
+  "this node actually owns the hardware it claims." Operator
+  mitigation today: treat labels as deployment-supplied via
+  `HELION_LABEL_*` env in orchestration manifests (k8s
+  Deployment/DaemonSet, Nomad job spec, etc.) where the orchestrator
+  controls both the label set and the node image. The node-agent's
+  `nvidia-smi` auto-probe is best-effort metadata for a friendly
+  cluster, **not** a security-grade claim. Captured in
+  [08-deferred-enhancements.md](08-deferred-enhancements.md#hardware-attestation-of-node-labels).
 
 These are all reasonable follow-on features. None of them are required for
 "a user can train and serve a model on Helion."
