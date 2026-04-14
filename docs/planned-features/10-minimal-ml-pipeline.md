@@ -440,10 +440,35 @@ step): key length cap (`MaxKeyLength = 1024`, matches S3 ceiling),
 rejection of NUL + ASCII control bytes, rejection of absolute paths,
 backslashes, Windows drive letters, traversal via `..`, URIs that
 escape the store root, URIs that name a different bucket, and wrong
-schemes. Tests: **35 pass + 1 skipped live integration**
+schemes.
+
+Follow-ups landed on top of the initial step 1:
+
+- **Root directory mode `0o700`** (files inside already `0o600`).
+- **`S3Store` logs WARN on startup when `UseSSL=false`**, pointing
+  operators at `HELION_ARTIFACTS_S3_USE_SSL=1` — harmless in the
+  MinIO dev loop, loud in production.
+- **`VerifyStore(ctx, store)`** — end-to-end Put→Get→Delete probe
+  called from the node agent at startup (opt-in, gated on
+  `HELION_ARTIFACTS_BACKEND`). A misconfigured deployment (typo'd
+  bucket, bad creds, unreachable endpoint, missing write permission)
+  fails loud here rather than silently at the first job.
+- **`GetAndVerify(ctx, store, uri, expectedSHA256, maxBytes)`** —
+  read helper that returns bytes only if their SHA-256 matches the
+  caller-supplied digest. Step 3's workflow resolver and step 6's
+  registry both read URIs whose digests are known in advance; using
+  `GetAndVerify` there means a corrupted / swapped backend object is
+  detected before it reaches a downstream job.
+- **Docker Compose `minio` + `minio-bootstrap` services** under
+  the `ml` profile. `docker compose --profile ml up` now ships a
+  ready-to-use S3-compatible endpoint with the `helion` bucket
+  pre-created.
+
+Tests: **47 pass + 1 skipped live integration**
 ([`local_test.go`](../../internal/artifacts/local_test.go),
 [`s3_test.go`](../../internal/artifacts/s3_test.go),
-[`config_test.go`](../../internal/artifacts/config_test.go)).
+[`config_test.go`](../../internal/artifacts/config_test.go),
+[`verify_test.go`](../../internal/artifacts/verify_test.go)).
 
 ### Step 2 — job spec + runtime staging (done)
 

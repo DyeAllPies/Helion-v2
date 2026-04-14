@@ -91,8 +91,57 @@ services:
       retries: 5
       start_period: 5s
 
+  # ── ML-pipeline artifact store (opt-in) ─────────────────────────────────
+  # Start with: docker compose --profile ml up
+  # Nodes connect only when HELION_ARTIFACTS_BACKEND=s3 is set. The
+  # non-SSL endpoint is fine for dev — the S3Store logs a WARN at
+  # startup to make sure a production deploy notices.
+  minio:
+    image: minio/minio:latest
+    container_name: helion-minio
+    profiles: ["ml"]
+    networks:
+      - helion-net
+    command: server /data --console-address ":9001"
+    ports:
+      - "127.0.0.1:9000:9000" # S3 API
+      - "127.0.0.1:9001:9001" # web console
+    environment:
+      MINIO_ROOT_USER: helion
+      MINIO_ROOT_PASSWORD: helion-dev-secret
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # One-shot bootstrapper: creates the `helion` bucket if it doesn't
+  # exist. Runs once against minio, then exits. Not a long-running
+  # service — kept in the ml profile so the main up path isn't
+  # blocked by it.
+  minio-bootstrap:
+    image: minio/mc:latest
+    container_name: helion-minio-bootstrap
+    profiles: ["ml"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - helion-net
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 helion helion-dev-secret &&
+      mc mb --ignore-existing local/helion &&
+      echo 'bucket ready: local/helion'
+      "
+    restart: "no"
+
 volumes:
   analytics_pgdata:
+  minio_data:
 
 networks:
   helion-net:

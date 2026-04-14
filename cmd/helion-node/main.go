@@ -188,6 +188,22 @@ func main() {
 			log.Error("artifact store open", slog.Any("err", err))
 			os.Exit(1)
 		}
+		// Probe the configured store with a Put→Get→Delete round-trip
+		// so a misconfig (typo'd bucket, bad creds, unreachable
+		// endpoint, missing write permission) fails loud *here*
+		// rather than silently when the first ML job lands. A cold
+		// restart against a still-warming-up MinIO can fail the
+		// probe; the node exits, the orchestrator retries it, which
+		// is the intended behaviour.
+		probeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if perr := artifacts.VerifyStore(probeCtx, store); perr != nil {
+			cancel()
+			log.Error("artifact store probe failed",
+				slog.String("backend", os.Getenv("HELION_ARTIFACTS_BACKEND")),
+				slog.Any("err", perr))
+			os.Exit(1)
+		}
+		cancel()
 		keep := os.Getenv("HELION_KEEP_WORKDIR") == "1"
 		stager = staging.NewStager(store, os.Getenv("HELION_WORK_ROOT"), keep, log)
 		log.Info("artifact stager enabled",

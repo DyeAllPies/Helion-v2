@@ -7,9 +7,13 @@
 package artifacts
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // Config captures the artifact-store settings the coordinator reads at
@@ -76,4 +80,38 @@ func truthy(s string) bool {
 		return true
 	}
 	return false
+}
+
+// VerifyStore runs an end-to-end Put→Get→Delete against the backend to
+// prove that credentials are valid, the bucket/root exists, and the
+// round-trip is healthy. Intended for the node agent's startup path: a
+// misconfigured deployment (typo'd bucket name, wrong endpoint, bad
+// creds, missing write permission) fails loud here rather than silently
+// at the first job dispatch.
+//
+// The sentinel key lives under `helion-probe/<unix-nano>` so it cannot
+// collide with real artifacts and is deleted immediately on success.
+func VerifyStore(ctx context.Context, store Store) error {
+	key := fmt.Sprintf("helion-probe/%d", time.Now().UnixNano())
+	payload := []byte("helion-probe")
+	uri, err := store.Put(ctx, key, bytes.NewReader(payload), int64(len(payload)))
+	if err != nil {
+		return fmt.Errorf("artifacts: probe put: %w", err)
+	}
+	// Best-effort cleanup even on downstream failure.
+	defer func() { _ = store.Delete(context.Background(), uri) }()
+
+	rc, err := store.Get(ctx, uri)
+	if err != nil {
+		return fmt.Errorf("artifacts: probe get: %w", err)
+	}
+	got, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil {
+		return fmt.Errorf("artifacts: probe read: %w", err)
+	}
+	if !bytes.Equal(got, payload) {
+		return fmt.Errorf("artifacts: probe round-trip mismatch (%d bytes)", len(got))
+	}
+	return nil
 }

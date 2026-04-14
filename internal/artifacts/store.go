@@ -15,7 +15,10 @@ package artifacts
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 )
@@ -77,4 +80,79 @@ var (
 	// belong to the Store it was passed to (wrong scheme, wrong root,
 	// malformed).
 	ErrInvalidURI = errors.New("artifacts: invalid uri")
+
+	// ErrChecksumMismatch is returned by GetAndVerify when the bytes
+	// read from the Store do not hash to the expected SHA-256. Callers
+	// that receive this error MUST NOT use the bytes — the backend is
+	// either corrupted or untrusted.
+	ErrChecksumMismatch = errors.New("artifacts: sha256 mismatch")
 )
+
+// GetAndVerify reads the artifact at uri and returns its bytes only
+// if their SHA-256 matches expectedHex (case-insensitive lower-hex).
+// Mismatches return ErrChecksumMismatch and nil bytes so callers
+// cannot accidentally use corrupted data.
+//
+// Use this helper on any read where the digest is known in advance:
+// registered models looked up via the step-6 registry, workflow inputs
+// resolved from an upstream job's ResolvedOutputs (SHA-256 was recorded
+// when the node uploaded). Bare Get is appropriate when the caller has
+// no digest to compare against.
+//
+// maxBytes bounds the response size. Pass 0 for "no caller cap" (the
+// Store's own backend caps still apply); a positive value truncates
+// the verified-read at that size and returns an error if the backend
+// produces more bytes than expected.
+func GetAndVerify(ctx context.Context, s Store, uri URI, expectedHex string, maxBytes int64) ([]byte, error) {
+	if expectedHex == "" {
+		return nil, errors.New("artifacts: GetAndVerify requires expected sha256")
+	}
+	rc, err := s.Get(ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+
+	var r io.Reader = rc
+	if maxBytes > 0 {
+		// +1 so an object exactly at the cap still produces an
+		// "oversize" error, not a silent truncation.
+		r = &io.LimitedReader{R: rc, N: maxBytes + 1}
+	}
+	h := sha256.New()
+	tee := io.TeeReader(r, h)
+	buf, err := io.ReadAll(tee)
+	if err != nil {
+		return nil, fmt.Errorf("artifacts: GetAndVerify read: %w", err)
+	}
+	if maxBytes > 0 && int64(len(buf)) > maxBytes {
+		return nil, fmt.Errorf("artifacts: GetAndVerify size > %d", maxBytes)
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	if !equalFoldHex(got, expectedHex) {
+		return nil, ErrChecksumMismatch
+	}
+	return buf, nil
+}
+
+// equalFoldHex is a hex-only case-insensitive compare. Hex.EncodeToString
+// produces lower case, so this is mostly defensive against callers who
+// stored upper-case digests somewhere.
+func equalFoldHex(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ac, bc := a[i], b[i]
+		if ac >= 'A' && ac <= 'Z' {
+			ac += 'a' - 'A'
+		}
+		if bc >= 'A' && bc <= 'Z' {
+			bc += 'a' - 'A'
+		}
+		if ac != bc {
+			return false
+		}
+	}
+	return true
+}
