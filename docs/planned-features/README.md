@@ -48,6 +48,8 @@ Decisions deferred or needing input.
 | Event system | **Implemented** | P2 | [06-event-system.md](06-event-system.md) |
 | Observability improvements | **Implemented** | P2 | [07-observability.md](07-observability.md) |
 | Deferred enhancements | Not started | P3 | [08-deferred-enhancements.md](08-deferred-enhancements.md) |
+| Analytics pipeline (BadgerDB → PostgreSQL) | **Implemented** | P1 | [09-analytics-pipeline.md](09-analytics-pipeline.md) |
+| Minimal ML pipeline | Not started | P1 | [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) |
 
 ### Priority definitions
 

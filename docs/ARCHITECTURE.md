@@ -225,7 +225,7 @@ security contract (JWT in-memory only, first-message WebSocket auth, CSP).
 
 | Trigger | Job | Steps |
 |---|---|---|
-| Every push / PR | `build` | `go vet` · `golangci-lint` · `go test -race ./...` · `go test ./internal/...` with ≥ 90% coverage gate |
+| Every push / PR | `build` | `go vet` · `golangci-lint` · `go test -race -count=1 ./...` · coverage gates (internal/ ≥ 85%, cmd/ ≥ 24%) |
 | Every push / PR | `test-rust` | `cargo clippy -D warnings` · `cargo llvm-cov` with ≥ 85% coverage gate |
 | Every push / PR | `test-dashboard` | `npm ci` · `ng lint` · `ng test --browsers=ChromeHeadless` with coverage thresholds |
 | After unit suites pass | `e2e` | Build Docker images · boot cluster · wait for healthy nodes · run Playwright E2E suite · tear down |

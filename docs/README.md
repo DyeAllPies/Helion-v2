@@ -51,7 +51,7 @@ The coordinator runs as a Kubernetes `Deployment`. Node agents run as a `DaemonS
 | Key exchange | ML-KEM / Kyber (NIST FIPS 203) | Hybrid PQC — quantum-resistant from day one |
 | Signatures | ML-DSA / Dilithium (NIST FIPS 204) | Node certificate signing, hybrid with ECDSA |
 | Deployment | Kubernetes + Helm | Cloud-agnostic; one chart, per-cloud values files |
-| CI/CD | GitHub Actions + Snyk | Build, lint, test, coverage gate (≥ 90%), dependency CVE scanning |
+| CI/CD | GitHub Actions + Snyk | Build, lint, test (with `-race`), coverage gate (internal/ ≥ 85%, cmd/ ≥ 24%, dashboard 85/60/85/85), dependency CVE scanning |
 
 ---
 
@@ -63,7 +63,7 @@ Key exchange uses a hybrid classical + post-quantum mode (X25519 + ML-KEM/Kyber-
 
 The REST API uses short-lived JWTs (15-minute expiry). WebSocket endpoints authenticate via a first-message pattern — the token is sent as the first frame after the handshake, never as a URL query parameter, keeping tokens out of server logs and browser history. The root token is rotated on every coordinator restart — the previous token is immediately revoked so a leaked token from a prior run is dead on restart. Scoped tokens for individual users or services can be issued and revoked via `POST /admin/tokens` and `DELETE /admin/tokens/{jti}` (admin role required). Tokens are stored in memory only — never in `localStorage` or `sessionStorage`. Every job state transition, node registration, auth failure, and token event is written to an append-only audit log in BadgerDB.
 
-Snyk scans Go dependencies and the coordinator container image on every push, blocking on high-severity CVEs. Internal coverage is gated at ≥ 90% on `./internal/...`.
+Snyk scans Go dependencies and the coordinator container image on every push, blocking on high-severity CVEs. Coverage gates: internal/ ≥ 85%, cmd/ ≥ 24%, dashboard 85% statements / 60% branches / 85% functions / 85% lines.
 
 ---
 
@@ -160,9 +160,18 @@ make test-e2e-headed
 
 # All test suites in one command (Go + Rust + Angular + E2E)
 make test-all
+
+# Pre-push validation (Go lint + test + -race + coverage, Angular lint +
+# test + coverage, repo hygiene). No Docker cluster, no E2E.
+make check
+
+# Pre-push validation including Playwright E2E. Use this when the
+# change touches infra (docker-compose*, Dockerfile*, .github/workflows,
+# scripts/run-e2e.sh, or cluster startup wiring).
+make check-full
 ```
 
-CI enforces a ≥ 90% coverage threshold on `./internal/...`.
+CI enforces coverage thresholds: internal/ ≥ 85%, cmd/ ≥ 24%, dashboard 85/60/85/85 (statements/branches/functions/lines). Failing either tier fails the build.
 
 ---
 
