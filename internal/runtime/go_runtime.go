@@ -173,18 +173,27 @@ func (r *GoRuntime) Run(ctx context.Context, req RunRequest) (RunResult, error) 
 	for k, v := range req.Env {
 		env[k] = v
 	}
-	// Expose the allocated GPU indices to the subprocess via the
-	// CUDA runtime convention. Empty indices (non-GPU job) means we
-	// do NOT set the var at all — setting it to "" would cause the
-	// CUDA runtime to hide every device including any the parent
-	// process could see, which is the right default for CPU jobs
-	// but causes a startup error for accidental GPU code paths. The
-	// allocator only hands out indices for req.GPUs > 0, so this
-	// assignment is strictly the GPU-job path. Map assignment is
-	// the only place that override semantics lives — see the
-	// security note above.
-	if len(gpuIndices) > 0 {
+	// CUDA_VISIBLE_DEVICES policy on this runtime — the security
+	// boundary for per-job device pinning. We unconditionally own
+	// this env var when the node is GPU-equipped (allocator
+	// capacity > 0):
+	//
+	//   - GPU job (gpuIndices populated): set to the comma-
+	//     separated allocator assignment.
+	//   - CPU job (req.GPUs == 0) on a GPU-equipped node: set to
+	//     "" so the subprocess sees zero devices via the CUDA
+	//     runtime. Without this hide a malicious "CPU" job could
+	//     supply its own CUDA_VISIBLE_DEVICES and access devices
+	//     the allocator never handed it — escaping the per-job
+	//     pinning that GPU jobs rely on.
+	//   - CPU-only node (allocator capacity == 0): leave the var
+	//     untouched so legacy CPU workloads on hosts without any
+	//     GPUs see the same env they always did.
+	switch {
+	case len(gpuIndices) > 0:
 		env["CUDA_VISIBLE_DEVICES"] = VisibleDevicesEnv(gpuIndices)
+	case r.gpus != nil && r.gpus.Capacity() > 0:
+		env["CUDA_VISIBLE_DEVICES"] = ""
 	}
 	cmd := exec.CommandContext(jctx, req.Command, req.Args...)
 	for k, v := range env {

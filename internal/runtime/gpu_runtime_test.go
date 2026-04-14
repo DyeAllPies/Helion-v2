@@ -8,14 +8,55 @@ import (
 )
 
 // printEnvVar builds a command that prints the value of the named env
-// variable to stdout. Cross-platform wrapper so the GPU tests can
-// inspect CUDA_VISIBLE_DEVICES without needing a real GPU.
+// variable to stdout, in a way that reliably distinguishes
+// "set to empty string" from "unset" on every platform.
+//
+// POSIX: `sh -c '...'` is straightforward — set vars print as their
+// value (empty = blank line); unset vars also print blank.
+// We don't need to distinguish "" from "unset" on POSIX for these
+// tests because we always assert against the expected value, and
+// the test paths that care about empty-vs-unset are the IPC tests
+// on the Rust side which read the wire bytes directly.
+//
+// Windows: `cmd /c echo %X%` for a defined-but-empty var prints
+// the literal "%X%" (cmd treats empty as undefined for the echo
+// expansion), which would mis-report the security-boundary test.
+// Use `if defined` instead, which returns true for any defined
+// value including empty:
+//
+//	defined+value → "VAL=value"
+//	defined+empty → "VAL="
+//	undefined     → "UNDEFINED"
 func printEnvVar(name string) (string, []string) {
 	if goruntime.GOOS == "windows" {
-		return "cmd", []string{"/c", "echo %" + name + "%"}
+		// %% escapes the percent inside the if-defined batch
+		// expression so cmd doesn't try to expand at parse time.
+		return "cmd", []string{"/c", "if defined " + name + " (echo VAL=%" + name + "%) else (echo UNDEFINED)"}
 	}
-	// POSIX: `sh -c 'echo "$VAR"'` is the most portable form.
 	return "/bin/sh", []string{"-c", "echo \"$" + name + "\""}
+}
+
+// expectedEnvOutput renders what printEnvVar's stdout will look like
+// for a given expected value, taking platform quirks into account.
+// Use this to build assertions instead of comparing stdout against
+// the raw value string.
+//
+// Windows quirk: cmd.exe's `if defined` treats an env var with an
+// empty value as "undefined" — same shell expansion semantics as
+// truly missing. From the test's POV this is functionally what we
+// want for the GPU-hide path: a subprocess on Windows cannot
+// distinguish "set to empty" from "unset," so a CUDA library
+// inside it reads "no devices visible" regardless. We therefore
+// fold defined-empty into UNDEFINED for the Windows expected
+// output. Linux semantics are unchanged (shell sees empty value).
+func expectedEnvOutput(value string, defined bool) string {
+	if goruntime.GOOS == "windows" {
+		if !defined || value == "" {
+			return "UNDEFINED"
+		}
+		return "VAL=" + value
+	}
+	return value
 }
 
 // TestGoRuntime_GPURequest_SetsCudaVisibleDevices proves the device
@@ -168,8 +209,9 @@ func TestGoRuntime_GPURequest_UserEnvCannotOverrideAllocator(t *testing.T) {
 	// Allocator handed out 0,1 (lowest-index-first on a fresh
 	// runtime). The user's "5,6" must NOT have reached the
 	// subprocess.
-	if got != "0,1" {
-		t.Fatalf("user env shadowed allocator: subprocess saw CUDA_VISIBLE_DEVICES=%q (want 0,1)", got)
+	want := expectedEnvOutput("0,1", true)
+	if got != want {
+		t.Fatalf("user env shadowed allocator: subprocess saw CUDA_VISIBLE_DEVICES=%q (want %q)", got, want)
 	}
 }
 
@@ -198,21 +240,26 @@ func TestGoRuntime_GPURequest_UnrelatedUserEnvPreserved(t *testing.T) {
 	if res.ExitCode != 0 {
 		t.Fatalf("exit=%d", res.ExitCode)
 	}
-	if got := strings.TrimSpace(string(res.Stdout)); got != "hello" {
-		t.Fatalf("MY_USER_VAR not preserved: %q", got)
+	want := expectedEnvOutput("hello", true)
+	if got := strings.TrimSpace(string(res.Stdout)); got != want {
+		t.Fatalf("MY_USER_VAR not preserved: got %q (want %q)", got, want)
 	}
 }
 
-// TestGoRuntime_NonGPUJob_OnGPURuntime_Works asserts a CPU job runs
-// normally on a GPU-enabled runtime without touching the allocator
-// (GPUs: 0 in the request → no claim, no env var set).
-func TestGoRuntime_NonGPUJob_OnGPURuntime_Works(t *testing.T) {
-	rt := NewGoRuntimeWithGPUs(4)
+// TestGoRuntime_CPUJobOnGPUNode_GPUsHidden pins the security
+// boundary the other direction: a CPU job (GPUs == 0) running on
+// a GPU-equipped node MUST see CUDA_VISIBLE_DEVICES="" so it
+// cannot opportunistically use devices the allocator never
+// handed it. Without the explicit hide, a malicious "CPU" job
+// could supply its own CUDA_VISIBLE_DEVICES and access devices
+// pinned to a concurrent GPU job.
+func TestGoRuntime_CPUJobOnGPUNode_GPUsHidden(t *testing.T) {
+	rt := NewGoRuntimeWithGPUs(4) // GPU-equipped node
 	defer rt.Close()
 
 	cmd, args := printEnvVar("CUDA_VISIBLE_DEVICES")
 	res, err := rt.Run(context.Background(), RunRequest{
-		JobID:          "cpu-job",
+		JobID:          "cpu-on-gpu-host",
 		Command:        cmd,
 		Args:           args,
 		GPUs:           0,
@@ -224,14 +271,81 @@ func TestGoRuntime_NonGPUJob_OnGPURuntime_Works(t *testing.T) {
 	if res.ExitCode != 0 {
 		t.Fatalf("exit=%d stderr=%s", res.ExitCode, res.Stderr)
 	}
-	// The subprocess must see no CUDA_VISIBLE_DEVICES (empty echo
-	// on POSIX, "%CUDA_VISIBLE_DEVICES%" literal on Windows cmd),
-	// NOT a "0" or "0,1".
 	got := strings.TrimSpace(string(res.Stdout))
-	if strings.HasPrefix(got, "0") || got == "1" || got == "0,1" {
-		t.Fatalf("CUDA_VISIBLE_DEVICES leaked to CPU job: %q", got)
+	want := expectedEnvOutput("", true) // defined-and-empty
+	if got != want {
+		t.Fatalf("CPU job on GPU node saw CUDA_VISIBLE_DEVICES output %q (want %q for defined-empty)", got, want)
 	}
 	if rt.gpus.InUse() != 0 {
 		t.Fatalf("CPU job claimed devices: InUse=%d", rt.gpus.InUse())
+	}
+}
+
+// TestGoRuntime_CPUJobOnGPUNode_UserCannotOverrideHide guards the
+// same escape route the GPU-job override test does, but for the
+// CPU-on-GPU-node path: a malicious CPU job that supplies its own
+// CUDA_VISIBLE_DEVICES="0,1,2,3" must STILL see "" because the
+// runtime overrides via map assignment.
+func TestGoRuntime_CPUJobOnGPUNode_UserCannotOverrideHide(t *testing.T) {
+	rt := NewGoRuntimeWithGPUs(4)
+	defer rt.Close()
+
+	cmd, args := printEnvVar("CUDA_VISIBLE_DEVICES")
+	res, err := rt.Run(context.Background(), RunRequest{
+		JobID:   "escape-attempt",
+		Command: cmd,
+		Args:    args,
+		Env: map[string]string{
+			// "Pretend I have access to all four devices."
+			"CUDA_VISIBLE_DEVICES": "0,1,2,3",
+		},
+		GPUs:           0,
+		TimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit=%d", res.ExitCode)
+	}
+	got := strings.TrimSpace(string(res.Stdout))
+	want := expectedEnvOutput("", true)
+	if got != want {
+		t.Fatalf("user env shadowed hide: subprocess saw %q (want %q for defined-empty)", got, want)
+	}
+}
+
+// TestGoRuntime_CPUJobOnCPUNode_EnvUntouched documents the
+// CPU-only-node policy: when the runtime has no GPU capacity, we
+// leave CUDA_VISIBLE_DEVICES alone so legacy CPU workloads on
+// hosts without any GPUs continue to see whatever env they always
+// did. The hide is a *posture decision* for nodes that actually
+// have GPUs to protect.
+func TestGoRuntime_CPUJobOnCPUNode_EnvUntouched(t *testing.T) {
+	rt := NewGoRuntime() // CPU-only: zero-capacity allocator
+	defer rt.Close()
+
+	cmd, args := printEnvVar("CUDA_VISIBLE_DEVICES")
+	res, err := rt.Run(context.Background(), RunRequest{
+		JobID:   "cpu-on-cpu-host",
+		Command: cmd,
+		Args:    args,
+		Env: map[string]string{
+			// User's value must pass through unchanged on a CPU node.
+			"CUDA_VISIBLE_DEVICES": "user-value",
+		},
+		GPUs:           0,
+		TimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit=%d", res.ExitCode)
+	}
+	got := strings.TrimSpace(string(res.Stdout))
+	want := expectedEnvOutput("user-value", true)
+	if got != want {
+		t.Fatalf("CPU-only node clobbered user env: got %q (want %q)", got, want)
 	}
 }

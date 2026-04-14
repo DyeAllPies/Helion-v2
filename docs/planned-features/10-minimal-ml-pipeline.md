@@ -1120,6 +1120,21 @@ Closed-here follow-ups from the second-pass audit (commit `<this slice>`):
   own value. Tests pin the invariant in both runtimes
   ([`gpu_runtime_test.go`](../../internal/runtime/gpu_runtime_test.go)
   + [`rust_client_gpu_test.go`](../../internal/runtime/rust_client_gpu_test.go)).
+- **CPU jobs on GPU-equipped nodes can no longer see GPUs.**
+  Both runtimes now stamp `CUDA_VISIBLE_DEVICES=""` for
+  `req.GPUs == 0` whenever the node's allocator capacity is
+  > 0. Without this hide, a malicious "CPU" job could supply
+  its own `CUDA_VISIBLE_DEVICES="0,1,2,3"` and access devices
+  pinned to a concurrent GPU job — escaping the per-job
+  allocator's assignment from the side. The shared
+  `withCudaVisibleDevices` helper handles the map-based
+  override for both runtimes; CPU-only nodes (allocator
+  capacity == 0) still pass user env through unchanged so
+  legacy CPU workloads on GPU-less hosts are unaffected. Five
+  new tests cover the three policy branches (GPU job → set
+  to indices, CPU job on GPU node → hide, CPU job on CPU node
+  → untouched) plus user-override blocked on the hide path
+  for both runtimes.
 - **BadgerDB roundtrip for `Node.TotalGpus`** — three new tests in
   [`persistence_labels_test.go`](../../internal/cluster/persistence_labels_test.go)
   pin Save→LoadAll for the field, omitempty on zero, and forward

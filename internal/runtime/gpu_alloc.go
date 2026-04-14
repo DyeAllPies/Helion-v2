@@ -97,6 +97,13 @@ func (a *GPUAllocator) InUse() int {
 	return len(a.busy)
 }
 
+// Capacity returns the total number of whole GPUs this allocator was
+// constructed with. The value is constant for the allocator's
+// lifetime, so this is lock-free. Used by the runtimes to decide
+// whether a CPU job needs an explicit CUDA_VISIBLE_DEVICES="" hide
+// (only meaningful on GPU-equipped nodes — Capacity > 0).
+func (a *GPUAllocator) Capacity() uint32 { return a.total }
+
 // VisibleDevicesEnv formats a slice of device indices as the
 // comma-separated form CUDA_VISIBLE_DEVICES expects. Empty input
 // returns the empty string so the caller can decide whether to set
@@ -111,4 +118,25 @@ func VisibleDevicesEnv(indices []int) string {
 		parts[i] = strconv.Itoa(idx)
 	}
 	return strings.Join(parts, ",")
+}
+
+// withCudaVisibleDevices returns a copy of base with
+// CUDA_VISIBLE_DEVICES set to value. Used by both runtimes so the
+// allocator's choice unambiguously overrides any user-supplied
+// CUDA_VISIBLE_DEVICES (map assignment is unconditional;
+// platform-dependent OS env precedence does not apply). Pass an
+// empty string for the "hide all GPUs from this CPU job" case —
+// the value is preserved verbatim, so the subprocess sees
+// CUDA_VISIBLE_DEVICES="" which the CUDA runtime treats as "no
+// devices visible."
+//
+// The returned map is always a fresh allocation; the caller's base
+// map is never mutated. Safe to pass nil — returns a 1-entry map.
+func withCudaVisibleDevices(base map[string]string, value string) map[string]string {
+	out := make(map[string]string, len(base)+1)
+	for k, v := range base {
+		out[k] = v
+	}
+	out["CUDA_VISIBLE_DEVICES"] = value
+	return out
 }

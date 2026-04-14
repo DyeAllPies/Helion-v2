@@ -59,13 +59,20 @@ func NewRustClientWithGPUs(socketPath string, totalGPUs uint32) *RustClient {
 // Run sends a RunRequest to the Rust runtime and blocks until the job
 // completes or ctx is cancelled.
 func (c *RustClient) Run(ctx context.Context, req RunRequest) (RunResult, error) {
-	// Claim GPU device indices before any IPC so a contention
-	// failure short-circuits the dispatch the same way it would on
-	// the Go runtime. The chosen indices are stamped into req.Env;
-	// the Rust executor inherits the env unchanged, so the
-	// subprocess sees the standard CUDA_VISIBLE_DEVICES regardless
-	// of which runtime spawned it.
-	if req.GPUs > 0 {
+	// CUDA_VISIBLE_DEVICES policy mirrors the Go runtime exactly:
+	//   - GPU job: claim indices from the allocator, stamp the
+	//     comma-separated assignment.
+	//   - CPU job on a GPU-equipped node: stamp "" so the
+	//     subprocess cannot see devices the allocator never
+	//     handed it (security parity — without this hide a
+	//     malicious CPU job could supply its own
+	//     CUDA_VISIBLE_DEVICES and access pinned devices).
+	//   - CPU-only node: leave the env untouched.
+	//
+	// Allocation must happen first so a contention failure
+	// short-circuits the dispatch before any IPC.
+	switch {
+	case req.GPUs > 0:
 		if c.gpus == nil {
 			return RunResult{
 				ExitCode: -1,
@@ -79,19 +86,14 @@ func (c *RustClient) Run(ctx context.Context, req RunRequest) (RunResult, error)
 				Error:    "gpu: " + err.Error(),
 			}, nil
 		}
-		// Defensive copy of the env so we don't mutate the caller's
-		// map (the nodeserver's mergeEnv result is shared with the
-		// rest of the dispatch path).
-		env := make(map[string]string, len(req.Env)+1)
-		for k, v := range req.Env {
-			env[k] = v
-		}
-		env["CUDA_VISIBLE_DEVICES"] = VisibleDevicesEnv(indices)
-		req.Env = env
+		req.Env = withCudaVisibleDevices(req.Env, VisibleDevicesEnv(indices))
 		// Release on every exit path — IPC error, runtime error,
 		// successful completion, ctx cancel — same release-on-defer
 		// invariant the Go runtime upholds.
 		defer c.gpus.Release(req.JobID)
+	case c.gpus != nil && c.gpus.Capacity() > 0:
+		// CPU job on a GPU-equipped node — hide the devices.
+		req.Env = withCudaVisibleDevices(req.Env, "")
 	}
 
 	conn, err := net.Dial("unix", c.socketPath)
