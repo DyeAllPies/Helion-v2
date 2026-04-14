@@ -103,6 +103,14 @@ type Node struct {
 	CpuMillicores   uint32 `json:"cpu_millicores,omitempty"`    // total CPU (e.g. 4000 = 4 cores)
 	TotalMemBytes   uint64 `json:"total_mem_bytes,omitempty"`   // total memory
 	MaxSlots        uint32 `json:"max_slots,omitempty"`         // max concurrent jobs
+
+	// Labels reported at Register time. The scheduler's node_selector
+	// filter matches a job's NodeSelector against this map using
+	// exact-equality semantics (no In / NotIn / glob). Frozen after
+	// Register — re-registering with a different label set requires
+	// either re-issuing the node's certificate or clearing the
+	// coordinator's node record.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // ── ResourceRequest ──────────────────────────────────────────────────────────

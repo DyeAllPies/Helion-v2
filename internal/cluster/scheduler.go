@@ -100,6 +100,69 @@ func (s *Scheduler) Pick() (*cpb.Node, error) {
 	return chosen, nil
 }
 
+// PickForSelector applies a node_selector filter before delegating to the
+// configured Policy. Keys in selector must be present in the candidate's
+// Labels map with exact-equal values (no In / NotIn / glob — k8s-lite).
+// An empty or nil selector matches every healthy node, preserving the
+// behaviour of Pick().
+//
+// Returns ErrNoHealthyNodes when there are no healthy nodes at all, and
+// ErrNoNodeMatchesSelector when at least one node is healthy but none of
+// them satisfy the selector. The dispatch loop distinguishes these two
+// so a selector mismatch surfaces as a distinct `job.unschedulable` event
+// instead of the retriable "no healthy nodes" path.
+func (s *Scheduler) PickForSelector(selector map[string]string) (*cpb.Node, error) {
+	nodes := s.source.HealthyNodes()
+	if len(nodes) == 0 {
+		return nil, ErrNoHealthyNodes
+	}
+	if len(selector) == 0 {
+		chosen := s.policy.Pick(nodes)
+		if chosen == nil {
+			return nil, ErrNoHealthyNodes
+		}
+		return chosen, nil
+	}
+	candidates := filterBySelector(nodes, selector)
+	if len(candidates) == 0 {
+		return nil, ErrNoNodeMatchesSelector
+	}
+	chosen := s.policy.Pick(candidates)
+	if chosen == nil {
+		return nil, ErrNoNodeMatchesSelector
+	}
+	return chosen, nil
+}
+
+// filterBySelector returns the subset of nodes whose Labels satisfy every
+// key-value pair in selector. Selector semantics are exact-match equality
+// only — this is the minimal cut and matches the spec in feature-10.
+// A node whose Labels map is nil / empty matches only an empty selector
+// (which this function is never called with — the caller short-circuits).
+func filterBySelector(nodes []*cpb.Node, selector map[string]string) []*cpb.Node {
+	out := make([]*cpb.Node, 0, len(nodes))
+	for _, n := range nodes {
+		if nodeMatchesSelector(n, selector) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// nodeMatchesSelector is true iff every selector key is present in the
+// node's Labels with the same value.
+func nodeMatchesSelector(n *cpb.Node, selector map[string]string) bool {
+	if n == nil {
+		return false
+	}
+	for k, v := range selector {
+		if got, ok := n.Labels[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
+}
+
 // PolicyName returns the name of the active scheduling policy.
 func (s *Scheduler) PolicyName() string {
 	return s.policy.Name()

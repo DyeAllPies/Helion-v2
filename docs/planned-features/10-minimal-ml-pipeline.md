@@ -1,7 +1,7 @@
 # Feature: Minimal ML Pipeline
 
 **Priority:** P1
-**Status:** In progress (steps 1–3 implemented; 4–10 pending)
+**Status:** In progress (steps 1–4 implemented; 5–10 pending)
 **Affected files:**
 `internal/api/types.go`,
 `internal/cluster/registry_node.go`,
@@ -439,7 +439,7 @@ the feature is done.
 | 1    | Artifact store abstraction (local + S3)          | —            | Medium | Done   |
 | 2    | Job spec: inputs/outputs/working_dir + runtime staging | 1      | Medium | Done   |
 | 3    | Workflow artifact passing (`from: job.output`)   | 2            | Medium | Done   |
-| 4    | Node labels + node_selector scheduling           | —            | Small  | Pending |
+| 4    | Node labels + node_selector scheduling           | —            | Small  | Done   |
 | 5    | GPU as a scheduling resource                     | 4            | Medium | Pending |
 | 6    | Dataset + model registries (API + storage)       | 1            | Medium | Pending |
 | 7    | Inference jobs (Service spec + readiness)        | 2            | Small  | Pending |
@@ -854,6 +854,85 @@ ML workloads:
   run concurrent with live traffic — active Prepare/Finalize cycles
   keep workdir mtimes fresh, so only truly orphaned trees get
   reaped.
+
+### Node labels + node_selector scheduling (done)
+
+Data flow: the node agent collects labels at startup and passes them
+through `RegisterRequest.labels`; the coordinator sanitises, persists
+them on `cpb.Node`, and the scheduler's new `PickForSelector` applies
+exact-match filtering before the configured policy runs its
+bin-packing / round-robin logic.
+
+Node-agent label sources
+([`cmd/helion-node/labels.go`](../../cmd/helion-node/labels.go)):
+
+- **Auto-detected baseline** — `os=<goos>`, `arch=<goarch>`, and
+  `gpu=<model>` when `nvidia-smi --query-gpu=name` succeeds. The GPU
+  probe is a `var gpuProbe = runNvidiaSmi` injection seam so unit
+  tests stub it without touching real hardware (the project memory
+  note about keeping GPU tests small and local applies here).
+- **Operator overrides** via `HELION_LABEL_<KEY>=<VALUE>`
+  environment variables. Key is lower-cased; later wins over
+  auto-detection, so an explicit `HELION_LABEL_GPU=none` hides a
+  physical card from the scheduler.
+
+Coordinator sanitisation
+([`registry_node.go`](../../internal/cluster/registry_node.go)):
+NUL / C0 / DEL rejection, `=` in keys rejected (would break env
+round-trips), k8s-compatible caps (≤32 entries, ≤63-byte keys,
+≤253-byte values). A malicious or misconfigured node sending
+oversize or malformed labels has them dropped silently — the node
+stays addressable, only the bad labels are stripped.
+
+Scheduler
+([`scheduler.go`](../../internal/cluster/scheduler.go)): new
+`PickForSelector(selector)` filters healthy nodes by exact-equality
+label match before delegating to the configured Policy
+(RoundRobin / LeastLoaded / ResourceAware — all untouched). Two
+distinct sentinels make dispatch-time handling precise:
+
+- `ErrNoHealthyNodes` — nothing to pick from (retriable; wait for
+  a node).
+- `ErrNoNodeMatchesSelector` — healthy nodes exist but none have
+  the requested labels (**not** retriable — retrying won't invent
+  labels; the job stays pending and emits
+  `job.unschedulable`).
+
+Dispatch + event
+([`dispatch.go`](../../internal/cluster/dispatch.go)): on
+`ErrNoNodeMatchesSelector` the dispatch loop publishes a
+[`TopicJobUnschedulable`](../../internal/events/topics.go) event
+carrying `job_id` + `unsatisfied_selector`, then moves on. A
+per-job debounce (`unschedulableEmitCooldown = 30s`) prevents event
+spam while a job is stuck; the debounce state clears the moment a
+successful pick happens, so recovery is observable.
+
+DAG validator — step-3 follow-up landed here
+([`dag.go`](../../internal/cluster/dag.go)):
+`ErrDAGFromConditionUnreachable` rejects a workflow at submit time
+when a job has `from:` references but its dependency condition is
+`on_failure` or `on_complete`. The stager only uploads on success,
+so that combination could only ever fail resolution at dispatch —
+catching it at submit saves the user a confusing late failure.
+
+Security summary: labels ride the existing mTLS + hybrid PQ channel
+(no new crypto). The sanitiser is the coordinator-side trust gate
+against node-supplied metadata; a compromised node cannot influence
+selector matching beyond what its own sanitised labels advertise.
+Label values are treated as untrusted strings throughout — never
+passed through shell / env-var expansion, only compared with
+`string ==` and rendered in structured log / event fields.
+
+Tests: **18 new**
+([`scheduler_selector_test.go`](../../internal/cluster/scheduler_selector_test.go),
+[`registry_labels_test.go`](../../internal/cluster/registry_labels_test.go),
+[`dispatch_unschedulable_test.go`](../../internal/cluster/dispatch_unschedulable_test.go),
+[`dag_from_condition_test.go`](../../internal/cluster/dag_from_condition_test.go),
+[`cmd/helion-node/labels_test.go`](../../cmd/helion-node/labels_test.go)).
+Coverage: selector match / no-match / partial-match / empty-selector,
+registry re-registration replacing labels, sanitiser drops for
+bad entries, debounce window, condition-gate DAG rejection,
+`nvidia-smi` stubbed probe.
 
 ### Rust runtime (parity landed)
 

@@ -206,7 +206,8 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, cluster.ErrDAGSelfDep) ||
 			errors.Is(err, cluster.ErrDAGUnknownFrom) ||
 			errors.Is(err, cluster.ErrDAGFromNotAncestor) ||
-			errors.Is(err, cluster.ErrDAGFromUnknownOutput) {
+			errors.Is(err, cluster.ErrDAGFromUnknownOutput) ||
+			errors.Is(err, cluster.ErrDAGFromConditionUnreachable) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}

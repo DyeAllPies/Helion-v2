@@ -22,6 +22,12 @@ const (
 	TopicNodeRevoked       = "node.revoked"
 	TopicWorkflowCompleted = "workflow.completed"
 	TopicWorkflowFailed    = "workflow.failed"
+
+	// TopicJobUnschedulable fires when the dispatch loop cannot find
+	// a healthy node whose labels satisfy the job's node_selector.
+	// The job stays in the pending queue — the operator gets the
+	// event as a diagnostic signal, not a retry trigger.
+	TopicJobUnschedulable = "job.unschedulable"
 )
 
 // NewEvent creates an Event with a generated ID and current timestamp.
@@ -149,5 +155,22 @@ func WorkflowFailed(workflowID, failedJob string) Event {
 	return NewEvent(TopicWorkflowFailed, map[string]any{
 		"workflow_id": workflowID,
 		"failed_job":  failedJob,
+	})
+}
+
+// JobUnschedulable fires when the dispatch loop has healthy nodes but
+// none of them match the job's node_selector. The payload echoes the
+// unsatisfied selector so operators can inspect which label set would
+// have unblocked the job — no need to grep coordinator logs.
+func JobUnschedulable(jobID string, selector map[string]string) Event {
+	// Defensive copy: a consumer mutating the payload map must not
+	// bleed into another subscriber's view of the same event.
+	sel := make(map[string]string, len(selector))
+	for k, v := range selector {
+		sel[k] = v
+	}
+	return NewEvent(TopicJobUnschedulable, map[string]any{
+		"job_id":              jobID,
+		"unsatisfied_selector": sel,
 	})
 }

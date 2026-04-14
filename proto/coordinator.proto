@@ -65,6 +65,13 @@ message RegisterRequest {
   // ML-DSA out-of-band signature verification.
   // Empty on first registration if the node has no existing certificate.
   bytes certificate = 3;
+
+  // Free-form labels the scheduler uses for node_selector matching.
+  // Sources on the node side: HELION_LABEL_* env vars (operator set)
+  // plus best-effort auto-detection (gpu=<model> from nvidia-smi,
+  // os=linux|darwin|windows, arch=amd64|arm64). Persisted on the
+  // coordinator's Node record; never mutated after registration.
+  map<string, string> labels = 4;
 }
 
 message RegisterResponse {
@@ -205,6 +212,11 @@ message Node {
   int32 running_jobs = 5;
 
   google.protobuf.Timestamp registered_at = 6;
+
+  // Labels reported at registration time; used by the scheduler's
+  // node_selector filter. Frozen after Register — re-registering with
+  // a different label set requires a fresh certificate.
+  map<string, string> labels = 7;
 }
 
 // Job is the persisted record for a scheduled job.

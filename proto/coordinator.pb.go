@@ -161,7 +161,13 @@ type RegisterRequest struct {
 	// DER-encoded X.509 certificate presented by the node for cert pinning and
 	// ML-DSA out-of-band signature verification.
 	// Empty on first registration if the node has no existing certificate.
-	Certificate   []byte `protobuf:"bytes,3,opt,name=certificate,proto3" json:"certificate,omitempty"`
+	Certificate []byte `protobuf:"bytes,3,opt,name=certificate,proto3" json:"certificate,omitempty"`
+	// Free-form labels the scheduler uses for node_selector matching.
+	// Sources on the node side: HELION_LABEL_* env vars (operator set)
+	// plus best-effort auto-detection (gpu=<model> from nvidia-smi,
+	// os=linux|darwin|windows, arch=amd64|arm64). Persisted on the
+	// coordinator's Node record; never mutated after registration.
+	Labels        map[string]string `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -213,6 +219,13 @@ func (x *RegisterRequest) GetAddress() string {
 func (x *RegisterRequest) GetCertificate() []byte {
 	if x != nil {
 		return x.Certificate
+	}
+	return nil
+}
+
+func (x *RegisterRequest) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
 	}
 	return nil
 }
@@ -782,8 +795,12 @@ type Node struct {
 	// now - last_seen < 2 × heartbeat_interval.
 	LastSeen *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`
 	// running_jobs is the node's self-reported count from the last heartbeat.
-	RunningJobs   int32                  `protobuf:"varint,5,opt,name=running_jobs,json=runningJobs,proto3" json:"running_jobs,omitempty"`
-	RegisteredAt  *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=registered_at,json=registeredAt,proto3" json:"registered_at,omitempty"`
+	RunningJobs  int32                  `protobuf:"varint,5,opt,name=running_jobs,json=runningJobs,proto3" json:"running_jobs,omitempty"`
+	RegisteredAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=registered_at,json=registeredAt,proto3" json:"registered_at,omitempty"`
+	// Labels reported at registration time; used by the scheduler's
+	// node_selector filter. Frozen after Register — re-registering with
+	// a different label set requires a fresh certificate.
+	Labels        map[string]string `protobuf:"bytes,7,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -856,6 +873,13 @@ func (x *Node) GetRunningJobs() int32 {
 func (x *Node) GetRegisteredAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.RegisteredAt
+	}
+	return nil
+}
+
+func (x *Node) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
 	}
 	return nil
 }
@@ -1080,11 +1104,15 @@ var File_coordinator_proto protoreflect.FileDescriptor
 
 const file_coordinator_proto_rawDesc = "" +
 	"\n" +
-	"\x11coordinator.proto\x12\x06helion\x1a\x1fgoogle/protobuf/timestamp.proto\"f\n" +
+	"\x11coordinator.proto\x12\x06helion\x1a\x1fgoogle/protobuf/timestamp.proto\"\xde\x01\n" +
 	"\x0fRegisterRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12 \n" +
-	"\vcertificate\x18\x03 \x01(\fR\vcertificate\"\xd3\x01\n" +
+	"\vcertificate\x18\x03 \x01(\fR\vcertificate\x12;\n" +
+	"\x06labels\x18\x04 \x03(\v2#.helion.RegisterRequest.LabelsEntryR\x06labels\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd3\x01\n" +
 	"\x10RegisterResponse\x12\x19\n" +
 	"\bcert_der\x18\x01 \x01(\fR\acertDer\x12\x1e\n" +
 	"\vca_cert_der\x18\x02 \x01(\fR\tcaCertDer\x12<\n" +
@@ -1129,14 +1157,18 @@ const file_coordinator_proto_rawDesc = "" +
 	"\x03seq\x18\x04 \x01(\x04R\x03seq\x123\n" +
 	"\asent_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x06sentAt\"\x15\n" +
 	"\x03Ack\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xf0\x01\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xdd\x02\n" +
 	"\x04Node\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x18\n" +
 	"\ahealthy\x18\x03 \x01(\bR\ahealthy\x127\n" +
 	"\tlast_seen\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\blastSeen\x12!\n" +
 	"\frunning_jobs\x18\x05 \x01(\x05R\vrunningJobs\x12?\n" +
-	"\rregistered_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\fregisteredAt\"\xf9\x03\n" +
+	"\rregistered_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\fregisteredAt\x120\n" +
+	"\x06labels\x18\a \x03(\v2\x18.helion.Node.LabelsEntryR\x06labels\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xf9\x03\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x18\n" +
@@ -1198,7 +1230,7 @@ func file_coordinator_proto_rawDescGZIP() []byte {
 }
 
 var file_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_coordinator_proto_goTypes = []any{
 	(NodeCommand)(0),              // 0: helion.NodeCommand
 	(JobStatus)(0),                // 1: helion.JobStatus
@@ -1213,36 +1245,40 @@ var file_coordinator_proto_goTypes = []any{
 	(*Node)(nil),                  // 10: helion.Node
 	(*Job)(nil),                   // 11: helion.Job
 	(*AuditEvent)(nil),            // 12: helion.AuditEvent
-	nil,                           // 13: helion.Job.EnvEntry
-	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
+	nil,                           // 13: helion.RegisterRequest.LabelsEntry
+	nil,                           // 14: helion.Node.LabelsEntry
+	nil,                           // 15: helion.Job.EnvEntry
+	(*timestamppb.Timestamp)(nil), // 16: google.protobuf.Timestamp
 }
 var file_coordinator_proto_depIdxs = []int32{
-	14, // 0: helion.HeartbeatMessage.sent_at:type_name -> google.protobuf.Timestamp
-	0,  // 1: helion.HeartbeatAck.command:type_name -> helion.NodeCommand
-	14, // 2: helion.JobResult.finished_at:type_name -> google.protobuf.Timestamp
-	7,  // 3: helion.JobResult.outputs:type_name -> helion.ArtifactOutput
-	14, // 4: helion.LogChunk.sent_at:type_name -> google.protobuf.Timestamp
-	14, // 5: helion.Node.last_seen:type_name -> google.protobuf.Timestamp
-	14, // 6: helion.Node.registered_at:type_name -> google.protobuf.Timestamp
-	1,  // 7: helion.Job.status:type_name -> helion.JobStatus
-	14, // 8: helion.Job.created_at:type_name -> google.protobuf.Timestamp
-	14, // 9: helion.Job.dispatched_at:type_name -> google.protobuf.Timestamp
-	14, // 10: helion.Job.finished_at:type_name -> google.protobuf.Timestamp
-	13, // 11: helion.Job.env:type_name -> helion.Job.EnvEntry
-	14, // 12: helion.AuditEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	2,  // 13: helion.CoordinatorService.Register:input_type -> helion.RegisterRequest
-	4,  // 14: helion.CoordinatorService.Heartbeat:input_type -> helion.HeartbeatMessage
-	6,  // 15: helion.CoordinatorService.ReportResult:input_type -> helion.JobResult
-	8,  // 16: helion.CoordinatorService.StreamLogs:input_type -> helion.LogChunk
-	3,  // 17: helion.CoordinatorService.Register:output_type -> helion.RegisterResponse
-	5,  // 18: helion.CoordinatorService.Heartbeat:output_type -> helion.HeartbeatAck
-	9,  // 19: helion.CoordinatorService.ReportResult:output_type -> helion.Ack
-	9,  // 20: helion.CoordinatorService.StreamLogs:output_type -> helion.Ack
-	17, // [17:21] is the sub-list for method output_type
-	13, // [13:17] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	13, // 0: helion.RegisterRequest.labels:type_name -> helion.RegisterRequest.LabelsEntry
+	16, // 1: helion.HeartbeatMessage.sent_at:type_name -> google.protobuf.Timestamp
+	0,  // 2: helion.HeartbeatAck.command:type_name -> helion.NodeCommand
+	16, // 3: helion.JobResult.finished_at:type_name -> google.protobuf.Timestamp
+	7,  // 4: helion.JobResult.outputs:type_name -> helion.ArtifactOutput
+	16, // 5: helion.LogChunk.sent_at:type_name -> google.protobuf.Timestamp
+	16, // 6: helion.Node.last_seen:type_name -> google.protobuf.Timestamp
+	16, // 7: helion.Node.registered_at:type_name -> google.protobuf.Timestamp
+	14, // 8: helion.Node.labels:type_name -> helion.Node.LabelsEntry
+	1,  // 9: helion.Job.status:type_name -> helion.JobStatus
+	16, // 10: helion.Job.created_at:type_name -> google.protobuf.Timestamp
+	16, // 11: helion.Job.dispatched_at:type_name -> google.protobuf.Timestamp
+	16, // 12: helion.Job.finished_at:type_name -> google.protobuf.Timestamp
+	15, // 13: helion.Job.env:type_name -> helion.Job.EnvEntry
+	16, // 14: helion.AuditEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	2,  // 15: helion.CoordinatorService.Register:input_type -> helion.RegisterRequest
+	4,  // 16: helion.CoordinatorService.Heartbeat:input_type -> helion.HeartbeatMessage
+	6,  // 17: helion.CoordinatorService.ReportResult:input_type -> helion.JobResult
+	8,  // 18: helion.CoordinatorService.StreamLogs:input_type -> helion.LogChunk
+	3,  // 19: helion.CoordinatorService.Register:output_type -> helion.RegisterResponse
+	5,  // 20: helion.CoordinatorService.Heartbeat:output_type -> helion.HeartbeatAck
+	9,  // 21: helion.CoordinatorService.ReportResult:output_type -> helion.Ack
+	9,  // 22: helion.CoordinatorService.StreamLogs:output_type -> helion.Ack
+	19, // [19:23] is the sub-list for method output_type
+	15, // [15:19] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_coordinator_proto_init() }
@@ -1256,7 +1292,7 @@ func file_coordinator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_coordinator_proto_rawDesc), len(file_coordinator_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

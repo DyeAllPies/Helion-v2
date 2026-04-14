@@ -7,9 +7,11 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -29,6 +31,36 @@ type DispatchLoop struct {
 	dispatcher NodeDispatcher
 	interval   time.Duration
 	log        *slog.Logger
+
+	// unschedulableLastEmit debounces `job.unschedulable` so a job
+	// that can't match its selector doesn't re-emit the event on
+	// every tick (~10/sec at the default 100ms interval). Keyed by
+	// job ID; values are the timestamp of the most recent emit.
+	// Entries are cleared lazily when a job leaves the pending
+	// queue (detected by its absence from the next scan).
+	unschedulableLastEmit map[string]time.Time
+}
+
+// unschedulableEmitCooldown bounds the re-emit rate of the
+// job.unschedulable event per job. Long enough that an operator
+// alert fires at most every 30s per stuck job, short enough that
+// recovery (operator fixes a label) is observable promptly.
+const unschedulableEmitCooldown = 30 * time.Second
+
+// maybeEmitUnschedulable publishes a job.unschedulable event for job
+// unless the same job emitted one within unschedulableEmitCooldown.
+// The debounce state is reset in dispatchPending whenever a job
+// successfully picks a node, so recovery is observable.
+func (d *DispatchLoop) maybeEmitUnschedulable(job *cpb.Job) {
+	now := time.Now()
+	if last, ok := d.unschedulableLastEmit[job.ID]; ok && now.Sub(last) < unschedulableEmitCooldown {
+		return
+	}
+	d.unschedulableLastEmit[job.ID] = now
+	d.log.Info("dispatch: no node matches job node_selector",
+		slog.String("job_id", job.ID),
+		slog.Any("selector", job.NodeSelector))
+	d.jobs.publishEvent(events.JobUnschedulable(job.ID, job.NodeSelector))
 }
 
 // NewDispatchLoop creates a new dispatch loop.
@@ -45,6 +77,8 @@ func NewDispatchLoop(
 		dispatcher: dispatcher,
 		interval:   interval,
 		log:        log,
+
+		unschedulableLastEmit: make(map[string]time.Time),
 	}
 }
 
@@ -142,13 +176,32 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 			job = resolvedJob
 		}
 
-		node, err := d.scheduler.Pick()
+		node, err := d.scheduler.PickForSelector(job.NodeSelector)
 		if err != nil {
-			// No healthy nodes — stop trying until next tick
-			d.log.Debug("dispatch: no healthy nodes, will retry",
-				slog.String("job_id", job.ID))
-			return
+			switch {
+			case errors.Is(err, ErrNoNodeMatchesSelector):
+				// Healthy nodes exist but none satisfy the selector.
+				// Job stays pending — retrying without operator
+				// intervention won't invent labels, but leaving it
+				// queued means a newly-registered matching node
+				// picks it up automatically. The event is the
+				// diagnostic signal operators watch for; debounced
+				// so a stuck job doesn't spam the bus.
+				d.maybeEmitUnschedulable(job)
+				continue
+			default:
+				// No healthy nodes at all — stop trying until the
+				// next tick so we don't burn through every pending
+				// job on a transient registry outage.
+				d.log.Debug("dispatch: no healthy nodes, will retry",
+					slog.String("job_id", job.ID))
+				return
+			}
 		}
+		// Picked a node — clear any debounce state so a future
+		// unschedulable transition (e.g. the matching node goes
+		// unhealthy) re-emits promptly instead of being throttled.
+		delete(d.unschedulableLastEmit, job.ID)
 
 		// Transition pending → scheduled (node picked, RPC not yet sent).
 		opts := TransitionOptions{NodeID: node.NodeID}

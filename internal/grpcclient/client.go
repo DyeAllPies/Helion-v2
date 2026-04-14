@@ -56,6 +56,19 @@ func (c *Client) Register(ctx context.Context, nodeID, address string) (*pb.Regi
 	})
 }
 
+// RegisterWithLabels is the label-aware variant of Register. Labels are
+// forwarded to the coordinator's node_selector filter. Sanitisation
+// (NUL/control rejection, size caps) lives on the coordinator side so
+// a compromised node that bypasses this client cannot smuggle invalid
+// labels through.
+func (c *Client) RegisterWithLabels(ctx context.Context, nodeID, address string, labels map[string]string) (*pb.RegisterResponse, error) {
+	return c.Client.Register(ctx, &pb.RegisterRequest{
+		NodeId:  nodeID,
+		Address: address,
+		Labels:  labels,
+	})
+}
+
 // NodeCapacity holds the resource capacity of this node, reported in heartbeats.
 type NodeCapacity struct {
 	CpuMillicores   uint32

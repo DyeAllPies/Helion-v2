@@ -154,7 +154,13 @@ func main() {
 
 	regCtx, regCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer regCancel()
-	regResp, err := client.Register(regCtx, nodeID, nodeAddr)
+	nodeLabels := gatherNodeLabels()
+	if len(nodeLabels) > 0 {
+		log.Info("node labels for registration",
+			slog.Int("count", len(nodeLabels)),
+			slog.Any("labels", nodeLabels))
+	}
+	regResp, err := client.RegisterWithLabels(regCtx, nodeID, nodeAddr, nodeLabels)
 	if err != nil {
 		log.Error("register with coordinator", slog.Any("err", err))
 		os.Exit(1)

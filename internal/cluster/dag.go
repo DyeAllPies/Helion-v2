@@ -36,6 +36,15 @@ var (
 	// ErrDAGFromUnknownOutput fires when a valid upstream is named
 	// but does not declare an output with the requested name.
 	ErrDAGFromUnknownOutput = errors.New("dag: from references unknown output")
+
+	// ErrDAGFromConditionUnreachable fires when a workflow job carries
+	// a `from:` reference while its dependency Condition is
+	// on_failure or on_complete. The stager only uploads outputs on
+	// successful runs, so `from:` against anything except an
+	// on_success dependency is guaranteed to fail resolution at
+	// dispatch time — better to reject at submit with a clear error
+	// than to let it crash in production.
+	ErrDAGFromConditionUnreachable = errors.New("dag: from unreachable under non-success condition")
 )
 
 // ── ValidateDAG ──────────────────────────────────────────────────────────────
@@ -128,6 +137,16 @@ func validateFromReferences(jobs []cpb.WorkflowJob) error {
 		for _, in := range j.Inputs {
 			if in.From == "" {
 				continue
+			}
+			// A from-reference is only reachable when the downstream
+			// runs because the upstream succeeded — the stager skips
+			// uploads on failure, so `from:` under on_failure or
+			// on_complete is guaranteed to fail resolution at
+			// dispatch time. Reject at submit instead of producing a
+			// confusing ErrResolveOutputMissing later.
+			if j.Condition != cpb.DependencyOnSuccess {
+				return fmt.Errorf("%w: job %q input %q → %q: job's condition is %s, but from-references need on_success so the upstream's outputs exist",
+					ErrDAGFromConditionUnreachable, j.Name, in.Name, in.From, j.Condition)
 			}
 			upstream, outName := splitDotRef(in.From)
 			if upstream == "" {

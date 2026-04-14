@@ -33,6 +33,87 @@ func validateNodeID(id string) error {
 	return nil
 }
 
+// Node-label bounds mirror the job-side node_selector bounds in
+// internal/api/handlers_jobs.go (maxNodeSelectorEntries, maxNodeSelectorKeyLen,
+// maxNodeSelectorValLen). Duplicated as package-local constants so the
+// cluster package does not import the api package.
+const (
+	maxNodeLabelEntries = 32
+	maxNodeLabelKeyLen  = 63
+	maxNodeLabelValLen  = 253
+)
+
+// sanitiseNodeLabels drops label entries whose key or value would not
+// round-trip safely through the scheduler's node_selector comparison
+// (NUL / control bytes, oversize, empty keys, keys containing '=').
+// Returns nil when src is nil or every entry was dropped so consumers
+// can do the idiomatic len(labels) == 0 check without a nil guard.
+// A dropped entry never aborts registration — the rest of the map is
+// accepted; the node remains addressable.
+func sanitiseNodeLabels(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	if len(src) > maxNodeLabelEntries {
+		// Cap the map; pick an arbitrary stable subset. This is
+		// defensive against a compromised / misconfigured node
+		// reporting a huge label set — the k8s-compatible cap of 32
+		// is comfortably above real-world need.
+		src = truncateLabelMap(src, maxNodeLabelEntries)
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		if !validLabelKey(k) || !validLabelValue(v) {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func validLabelKey(k string) bool {
+	if k == "" || len(k) > maxNodeLabelKeyLen {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		b := k[i]
+		if b == '=' || b == 0 || b < 0x20 || b == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func validLabelValue(v string) bool {
+	if len(v) > maxNodeLabelValLen {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		b := v[i]
+		if b == 0 || b < 0x20 || b == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// truncateLabelMap returns a copy of m with at most n entries. Map
+// iteration order is unspecified; the subset is stable only in the
+// sense that once built, the entry count is bounded.
+func truncateLabelMap(m map[string]string, n int) map[string]string {
+	out := make(map[string]string, n)
+	for k, v := range m {
+		if len(out) >= n {
+			break
+		}
+		out[k] = v
+	}
+	return out
+}
+
 // nodeEntry is the in-memory record for one registered node.
 // Fields updated on every heartbeat are plain int32/int64 values accessed via
 // the sync/atomic package — no mutex needed for those updates.
@@ -42,6 +123,12 @@ type nodeEntry struct {
 	// Immutable after insertion into the map.
 	nodeID       string
 	registeredAt time.Time
+
+	// labels are reported at Register time and kept for the scheduler's
+	// node_selector filter. Frozen after insertion — the Register path
+	// reads, merges, and re-inserts the entry atomically under
+	// Registry.mu, so snapshot() can read labels without locking.
+	labels map[string]string
 
 	// address may be updated by Register() on node restart.
 	// Stored as atomic.Value to avoid races with concurrent snapshot() calls.
@@ -105,6 +192,15 @@ func (e *nodeEntry) isHealthy(staleAfter time.Duration) bool {
 }
 
 func (e *nodeEntry) snapshot(staleAfter time.Duration) *cpb.Node {
+	// Defensive copy: snapshot consumers (scheduler policies, dashboard
+	// JSON) must not be able to mutate the entry's label map.
+	var labels map[string]string
+	if len(e.labels) > 0 {
+		labels = make(map[string]string, len(e.labels))
+		for k, v := range e.labels {
+			labels[k] = v
+		}
+	}
 	return &cpb.Node{
 		NodeID:        e.nodeID,
 		Address:       e.loadAddress(),
@@ -115,5 +211,6 @@ func (e *nodeEntry) snapshot(staleAfter time.Duration) *cpb.Node {
 		CpuMillicores: e.loadCpuMillicores(),
 		TotalMemBytes: e.loadTotalMemBytes(),
 		MaxSlots:      e.loadMaxSlots(),
+		Labels:        labels,
 	}
 }

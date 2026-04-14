@@ -45,6 +45,21 @@ func (noHealthyNodesError) Error() string { return "scheduler: no healthy nodes 
 // ErrNoHealthyNodes is the sentinel callers should match with errors.Is().
 var ErrNoHealthyNodes error = noHealthyNodesError{}
 
+// noNodeMatchesSelectorError is returned when healthy nodes exist but
+// none of them satisfy a job's node_selector. Distinct from
+// ErrNoHealthyNodes because the dispatch loop surfaces it as a
+// terminal "unschedulable" path rather than a retriable backoff —
+// retrying won't invent labels on the existing nodes.
+type noNodeMatchesSelectorError struct{}
+
+func (noNodeMatchesSelectorError) Error() string {
+	return "scheduler: no healthy node satisfies the job's node_selector"
+}
+
+// ErrNoNodeMatchesSelector is the sentinel callers should match with
+// errors.Is() to detect an unsatisfied node_selector at dispatch time.
+var ErrNoNodeMatchesSelector error = noNodeMatchesSelectorError{}
+
 // ── Round-robin ───────────────────────────────────────────────────────────────
 
 // RoundRobinPolicy distributes jobs evenly across healthy nodes in rotation.
