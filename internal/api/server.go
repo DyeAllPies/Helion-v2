@@ -77,6 +77,7 @@ type Server struct {
 	workflowJobStore *cluster.JobStore      // needed to look up individual job statuses
 	eventBus         *events.Bus            // nil if event system not enabled
 	logStore         logstore.Store         // nil if log storage not enabled
+	analyticsDB      AnalyticsDB            // nil if analytics not enabled
 	promHandler      http.Handler           // Prometheus /metrics handler; nil disables
 	mux              *http.ServeMux
 	httpSrvMu      sync.Mutex
@@ -93,6 +94,12 @@ type Server struct {
 	// tokenIssueMu protects tokenIssueLimiters.
 	tokenIssueMu       sync.Mutex
 	tokenIssueLimiters map[string]*rate.Limiter // keyed by admin subject
+
+	// analyticsMu protects analyticsLimiters. Per-subject rate limiter on
+	// the /api/analytics/* endpoints to prevent DoS via expensive queries
+	// (PERCENTILE_CONT, date-range scans on job_summary).
+	analyticsMu       sync.Mutex
+	analyticsLimiters map[string]*rate.Limiter
 }
 
 // DisableAuth turns off authentication for this Server. Intended ONLY for
@@ -149,6 +156,7 @@ func NewServer(
 		promHandler:        promHandler,
 		mux:                http.NewServeMux(),
 		tokenIssueLimiters: make(map[string]*rate.Limiter),
+		analyticsLimiters:  make(map[string]*rate.Limiter),
 		upgrader: websocket.Upgrader{
 			// Reject cross-origin WebSocket connections. Browsers always send an
 			// Origin header on WebSocket upgrades; we compare its host component

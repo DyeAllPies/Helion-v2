@@ -19,6 +19,12 @@
 //   HELION_NODE_PINS        Pre-configured cert pins (AUDIT M5), format:
 //                             nodeID1:sha256hex,nodeID2:sha256hex,...
 //                           Unconfigured nodes fall back to first-seen (dev mode).
+//   HELION_ANALYTICS_DSN    PostgreSQL connection string for the analytics pipeline.
+//                           When unset, analytics is disabled (no PostgreSQL dependency).
+//                           Example: "postgres://helion:secret@localhost:5432/helion_analytics?sslmode=disable"
+//   HELION_ANALYTICS_BATCH  Events per flush batch (default: 100)
+//   HELION_ANALYTICS_FLUSH_MS  Max ms between flushes (default: 500)
+//   HELION_ANALYTICS_BUFFER Max in-memory event buffer before dropping (default: 10000)
 
 package main
 
@@ -37,6 +43,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DyeAllPies/Helion-v2/internal/analytics"
 	"github.com/DyeAllPies/Helion-v2/internal/api"
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
@@ -47,10 +54,20 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/metrics"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
 	log := slog.Default()
+
+	// ── Subcommands ───────────────────────────────────────────────────────
+	// Support `helion-coordinator analytics backfill --pg-dsn=...` as a
+	// one-shot utility that exits after completing. The default (no args)
+	// runs the long-lived coordinator server.
+	if len(os.Args) >= 3 && os.Args[1] == "analytics" && os.Args[2] == "backfill" {
+		runAnalyticsBackfill(log, os.Args[3:])
+		return
+	}
 
 	// ── Configuration ─────────────────────────────────────────────────────
 	dbPath := envOr("HELION_DB_PATH", "/var/lib/helion/db")
@@ -91,6 +108,7 @@ func main() {
 	jobs := cluster.NewJobStore(persister, log)
 	jobs.SetEventBus(eventBus)
 	workflows := cluster.NewWorkflowStore(persister, log)
+	workflows.SetEventBus(eventBus)
 
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
@@ -291,6 +309,50 @@ func main() {
 	apiSrv.SetWorkflowStore(workflows, jobs)
 	apiSrv.SetLogStore(logStore)
 	apiSrv.SetEventBus(eventBus)
+
+	// ── Analytics pipeline (opt-in) ──────────────────────────────────────
+	// Set HELION_ANALYTICS_DSN to a PostgreSQL connection string to enable
+	// the analytics pipeline. When unset, nothing happens — no PostgreSQL
+	// dependency, zero overhead.
+	var analyticsSink *analytics.Sink
+	if analyticsDSN := os.Getenv("HELION_ANALYTICS_DSN"); analyticsDSN != "" {
+		log.Info("analytics: connecting to PostgreSQL")
+		// Use a connection pool — *pgx.Conn is NOT safe for concurrent use, and
+		// the sink (writing) and API handlers (reading) run in parallel.
+		pgPool, pgErr := pgxpool.New(ctx, analyticsDSN)
+		if pgErr != nil {
+			log.Error("analytics: connect to PostgreSQL", slog.Any("err", pgErr))
+			os.Exit(1)
+		}
+		defer pgPool.Close()
+
+		// Run pending schema migrations.
+		applied, migErr := analytics.Migrate(ctx, pgPool, log)
+		if migErr != nil {
+			log.Error("analytics: migrations failed", slog.Any("err", migErr))
+			os.Exit(1)
+		}
+		if applied > 0 {
+			log.Info("analytics: migrations applied", slog.Int("count", applied))
+		}
+
+		// Start the event bus → PostgreSQL sink.
+		sinkCfg := analytics.SinkConfig{
+			BatchSize:     envInt("HELION_ANALYTICS_BATCH", 100),
+			FlushInterval: time.Duration(envInt("HELION_ANALYTICS_FLUSH_MS", 500)) * time.Millisecond,
+			BufferLimit:   envInt("HELION_ANALYTICS_BUFFER", 10_000),
+		}
+		analyticsSink = analytics.NewSink(pgPool, eventBus, sinkCfg, log)
+		analyticsSink.Start(ctx)
+
+		// Wire analytics API endpoints.
+		apiSrv.SetAnalyticsDB(pgPool)
+
+		log.Info("analytics pipeline enabled",
+			slog.Int("batch_size", sinkCfg.BatchSize),
+			slog.Int("buffer_limit", sinkCfg.BufferLimit))
+	}
+
 	go func() {
 		log.Info("HTTP API listening", slog.String("addr", httpAddr))
 		if err := apiSrv.Serve(httpAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -380,6 +442,12 @@ func main() {
 	grpcSrv.Stop()
 	if err := apiSrv.Shutdown(shutdownCtx); err != nil {
 		log.Error("HTTP server shutdown", slog.Any("err", err))
+	}
+
+	// Drain the analytics sink before closing the PostgreSQL connection.
+	if analyticsSink != nil {
+		analyticsSink.Stop()
+		log.Info("analytics sink stopped")
 	}
 
 	// AUDIT 2026-04-11/M1 (fixed): drain in-flight audit writes and async

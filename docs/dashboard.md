@@ -44,7 +44,7 @@ dashboard/
 │   ├── fixtures/
 │   │   ├── cluster.fixture.ts   # Token reader, health/node waiters, job submitter
 │   │   └── auth.fixture.ts      # Login-via-textarea Playwright fixture
-│   └── specs/                   # 122 Playwright E2E test specs (9 files)
+│   └── specs/                   # Playwright E2E test specs (10 files)
 ├── playwright.config.ts         # Playwright config (Chromium, auto-starts ng serve)
 ├── Dockerfile                   # Two-stage: Node builder → Nginx runtime
 ├── nginx.conf                   # SPA serving + /api and /ws reverse proxy to coordinator
@@ -69,7 +69,24 @@ ng serve
 ```bash
 ng test                         # Karma + Jasmine (watch mode)
 ng test --watch=false --browsers=ChromeHeadless   # CI mode
+ng test --watch=false --browsers=ChromeHeadless --code-coverage  # with coverage
 ```
+
+#### Coverage thresholds
+
+Coverage minimums: **85% statements · 60% branches · 85% functions · 85% lines**.
+These match the Go `internal/` threshold policy so a failing dashboard build
+surfaces the same way a failing Go build does.
+
+Enforcement is done by `scripts/check-dashboard-coverage.sh` — it parses the
+HTML report emitted by `ng test --code-coverage`. This is necessary because
+`@angular-devkit/build-angular:karma` overrides the coverage reporter list
+declared in `karma.conf.js` and ignores its `check:` block entirely. The
+thresholds are duplicated in both `karma.conf.js` (documentation) and the
+script (the actual gate) — keep them in sync.
+
+The same script runs both in `make check` and as a dedicated step in
+`.github/workflows/ci.yml`.
 
 ### E2E tests (full-stack)
 
@@ -161,4 +178,31 @@ In `environment.ts` (local dev):
 | GET    | `/audit`                   | AuditLogComponent       |
 | WS     | `/ws/jobs/{id}/logs`       | JobDetailComponent      |
 | WS     | `/ws/metrics`              | ClusterMetricsComponent |
+| WS     | `/ws/events`               | EventFeedComponent      |
+| GET    | `/workflows`               | WorkflowListComponent   |
+| GET    | `/workflows/{id}`          | WorkflowDetailComponent |
+| GET    | `/api/analytics/throughput` | AnalyticsDashboardComponent |
+| GET    | `/api/analytics/node-reliability` | AnalyticsDashboardComponent |
+| GET    | `/api/analytics/retry-effectiveness` | AnalyticsDashboardComponent |
+| GET    | `/api/analytics/queue-wait` | AnalyticsDashboardComponent |
+| GET    | `/api/analytics/workflow-outcomes` | AnalyticsDashboardComponent |
+
+## Analytics module
+
+The analytics dashboard is a standalone Angular component at `/analytics`, lazy-loaded
+via `app.routes.ts`. It queries the `/api/analytics/*` REST endpoints (which read from
+PostgreSQL) and renders:
+
+- **Throughput chart** — line chart: completed vs failed jobs per hour
+- **Queue wait chart** — line chart: avg and p95 pending→running wait per hour
+- **Node reliability table** — Material table with failure rates and stale counts
+- **Retry effectiveness** — card grid: first-attempt vs retried outcomes
+- **Workflow outcomes** — stacked bar chart: success/failure per day
+
+All views share a date-range picker (default: last 7 days). Charts use Chart.js with
+the same dark theme as the operational metrics page.
+
+The analytics module only appears functional when the coordinator has analytics enabled
+(`HELION_ANALYTICS_DSN` set). When disabled, the API endpoints are not registered and
+the dashboard will show connection errors.
 

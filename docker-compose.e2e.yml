@@ -17,6 +17,7 @@ name: helion-v2-e2e
 
 volumes:
   e2e-state: {}
+  e2e-analytics-pgdata: {}
 
 services:
   coordinator:
@@ -33,9 +34,31 @@ services:
       - HELION_DB_PATH=/app/state/db
       - HELION_EXTRA_SANS=coordinator
       - HELION_CA_FILE=/app/state/ca.pem
+      # Analytics pipeline enabled for E2E so the /api/analytics/* endpoints
+      # are registered and the dashboard /analytics page has a real backend.
+      - HELION_ANALYTICS_DSN=postgres://helion:secret@analytics-db:5432/helion_analytics?sslmode=disable
+      - HELION_ANALYTICS_FLUSH_MS=200
     volumes:
       - e2e-state:/app/state
       - ./logs:/app/logs
+    depends_on:
+      analytics-db:
+        condition: service_healthy
+
+  # Analytics PostgreSQL — required by the /api/analytics/* endpoints and
+  # the dashboard /analytics page during E2E.  The "analytics" profile is
+  # activated via COMPOSE_PROFILES in scripts/run-e2e.sh so this service
+  # starts automatically for E2E runs.  The overlay overrides the volume
+  # so the E2E run gets a clean database.
+  analytics-db:
+    volumes:
+      - e2e-analytics-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helion -d helion_analytics"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
 
   node1:
     environment:

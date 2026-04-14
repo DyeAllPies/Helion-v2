@@ -33,6 +33,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -62,6 +63,7 @@ type WorkflowStore struct {
 	workflows map[string]*cpb.Workflow
 	persister WorkflowPersister
 	log       *slog.Logger
+	eventBus  *events.Bus // nil when event emission is not wired
 }
 
 // NewWorkflowStore creates a WorkflowStore backed by the given persister.
@@ -74,4 +76,12 @@ func NewWorkflowStore(p WorkflowPersister, log *slog.Logger) *WorkflowStore {
 		persister: p,
 		log:       log,
 	}
+}
+
+// SetEventBus attaches an event bus so workflow lifecycle transitions emit
+// workflow.completed / workflow.failed events. Optional — if unset, the
+// store works as before but downstream consumers (analytics sink, WebSocket
+// feed) will not see workflow events.
+func (s *WorkflowStore) SetEventBus(bus *events.Bus) {
+	s.eventBus = bus
 }

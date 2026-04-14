@@ -38,6 +38,7 @@ const NAV_LINKS: Record<string, string> = {
   '/events':    'Events',
   '/metrics':   'Metrics',
   '/audit':     'Audit',
+  '/analytics': 'Analytics',
 };
 
 /**

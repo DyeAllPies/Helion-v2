@@ -55,6 +55,11 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/audit/audit-log.component').then(m => m.AuditLogComponent),
       },
+      {
+        path: 'analytics',
+        loadComponent: () =>
+          import('./features/analytics/analytics-dashboard.component').then(m => m.AnalyticsDashboardComponent),
+      },
     ],
   },
   { path: '**', redirectTo: '' },

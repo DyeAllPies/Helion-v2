@@ -53,3 +53,21 @@ Run with the race detector (required in CI):
 ```
 go test -race ./internal/persistence/...
 ```
+
+## Dual-store design (analytics)
+
+When the analytics pipeline is enabled (`HELION_ANALYTICS_DSN`), the coordinator
+operates a **dual-database** architecture:
+
+| Store | Engine | Purpose | Consistency |
+|---|---|---|---|
+| Operational | BadgerDB (embedded) | Dispatch, heartbeats, state transitions | Strong (synchronous) |
+| Analytical | PostgreSQL (external) | Historical queries, dashboard analytics | Eventually consistent |
+
+The analytics sink asynchronously replicates events from the in-memory bus into
+PostgreSQL. The two stores are **eventually consistent** — analytics lags behind
+operational state by up to the flush interval (default 500 ms).
+
+BadgerDB is **never read** by the analytics dashboard. PostgreSQL is **never written**
+by the operational hot path. The stores are fully independent — disabling analytics
+has zero impact on the coordinator.

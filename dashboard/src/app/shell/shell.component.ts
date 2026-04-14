@@ -189,7 +189,8 @@ export class ShellComponent {
     { path: '/workflows', label: 'Workflows', icon: 'account_tree'  },
     { path: '/events',  label: 'Events',  icon: 'bolt'          },
     { path: '/metrics', label: 'Metrics', icon: 'show_chart'    },
-    { path: '/audit',   label: 'Audit',   icon: 'receipt_long'  },
+    { path: '/audit',     label: 'Audit',     icon: 'receipt_long'  },
+    { path: '/analytics', label: 'Analytics', icon: 'insights'      },
   ];
 
   constructor(private auth: AuthService, private router: Router) {}

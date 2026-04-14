@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"golang.org/x/time/rate"
 
@@ -27,6 +28,32 @@ const (
 	tokenIssueRate  = 1.0 // 1 token per second per subject
 	tokenIssueBurst = 5   // allow short bursts up to 5
 )
+
+// ── Analytics rate-limit constants ──────────────────────────────────────────
+
+// Per-subject token-bucket limiter for GET /api/analytics/*. Analytics queries
+// run PERCENTILE_CONT + ORDER BY on job_summary, which is expensive as data
+// grows — without this limit, an authenticated user could DoS the coordinator.
+//
+// The dashboard loads 5 charts per page open (5 requests instantly) and users
+// may navigate repeatedly, so a tight bucket (burst 10) would rate-limit real
+// usage. Rate 2 rps + burst 30 accommodates ~6 full dashboard loads in quick
+// succession and caps sustained load at ~120 queries per minute per subject —
+// far above normal use, well below what a DoS attack would need.
+const (
+	analyticsQueryRate  = 2.0
+	analyticsQueryBurst = 30
+)
+
+// ── Analytics input bounds ──────────────────────────────────────────────────
+
+// Maximum time range for analytics queries. Longer windows cause full-table
+// scans and unbounded PostgreSQL memory usage.
+const analyticsMaxRange = 365 * 24 * time.Hour
+
+// Maximum page size for GET /api/analytics/events. Prevents pulling the
+// entire events table with limit=999999999.
+const analyticsMaxLimit = 1000
 
 // ── Token admin constants ─────────────────────────────────────────────────────
 
@@ -121,5 +148,21 @@ func (s *Server) tokenIssueAllow(subject string) bool {
 		s.tokenIssueLimiters[subject] = lim
 	}
 	s.tokenIssueMu.Unlock()
+	return lim.Allow()
+}
+
+// ── analyticsQueryAllow ──────────────────────────────────────────────────────
+
+// analyticsQueryAllow returns true if the caller identified by subject is
+// within the analytics-query rate limit. Creates a per-subject limiter on
+// first use. Same token-bucket pattern as tokenIssueAllow.
+func (s *Server) analyticsQueryAllow(subject string) bool {
+	s.analyticsMu.Lock()
+	lim, ok := s.analyticsLimiters[subject]
+	if !ok {
+		lim = rate.NewLimiter(analyticsQueryRate, analyticsQueryBurst)
+		s.analyticsLimiters[subject] = lim
+	}
+	s.analyticsMu.Unlock()
 	return lim.Allow()
 }

@@ -18,6 +18,9 @@ services:
       - ./logs:/app/logs
     environment:
       - HELION_SCHEDULER=roundrobin
+      # Set HELION_ANALYTICS_DSN to enable the analytics pipeline.
+      # Uncomment (or use --profile analytics) to connect to the analytics-db:
+      # - HELION_ANALYTICS_DSN=postgres://helion:secret@analytics-db:5432/helion_analytics?sslmode=disable
     restart: "no"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/healthz"]
@@ -63,6 +66,33 @@ services:
       coordinator:
         condition: service_started
     restart: "no"
+
+  # ── Analytics PostgreSQL (opt-in) ──────────────────────────────────────
+  # Start with: docker compose --profile analytics up
+  # The coordinator connects only when HELION_ANALYTICS_DSN is set.
+  analytics-db:
+    image: postgres:16-alpine
+    container_name: helion-analytics-db
+    profiles: ["analytics"]
+    networks:
+      - helion-net
+    environment:
+      POSTGRES_DB: helion_analytics
+      POSTGRES_USER: helion
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - analytics_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helion -d helion_analytics"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  analytics_pgdata:
 
 networks:
   helion-net:

@@ -18,9 +18,9 @@ test.describe('Sidebar Navigation', () => {
     await expect(page.locator('.brand-version')).toContainText('v2');
   });
 
-  test('all six nav items are present', async ({ authedPage: page }) => {
+  test('all seven nav items are present', async ({ authedPage: page }) => {
     const navLinks = page.locator('a.nav-link');
-    await expect(navLinks).toHaveCount(6);
+    await expect(navLinks).toHaveCount(7);
 
     const labels = await navLinks.allTextContents();
     const joined = labels.map(l => l.trim().toUpperCase()).join(' ');
@@ -30,6 +30,7 @@ test.describe('Sidebar Navigation', () => {
     expect(joined).toContain('EVENTS');
     expect(joined).toContain('METRICS');
     expect(joined).toContain('AUDIT');
+    expect(joined).toContain('ANALYTICS');
   });
 
   test('nodes link is active when on /nodes', async ({ authedPage: page }) => {

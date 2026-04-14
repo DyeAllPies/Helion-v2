@@ -68,13 +68,19 @@ bench:
 # ── combined ──────────────────────────────────────────────────────────────────
 
 # check: local pre-push validation (no Docker, no Rust, no E2E).
-# Runs Go lint + tests + coverage, then Angular lint + tests.
+# Runs Go lint + tests + coverage, then Angular lint + tests + coverage.
 # Calls ng directly to avoid sub-make path issues on Windows.
+#
+# Angular coverage thresholds are enforced by scripts/check-dashboard-coverage.sh,
+# which parses coverage-summary.json. The Angular test builder
+# (@angular-devkit/build-angular:karma) ignores karma.conf.js `check:` blocks,
+# so external enforcement is required.
 check: lint test coverage-go
 	cd dashboard && npx ng lint
 	cd dashboard && npx ng test --watch=false --browsers=ChromeHeadless --code-coverage
+	./scripts/check-dashboard-coverage.sh
 	@echo ""
-	@echo "==> All local checks passed (Go lint + test + coverage, Angular lint + test)."
+	@echo "==> All local checks passed (Go lint + test + coverage, Angular lint + test + coverage)."
 
 build-all: build build-rust
 

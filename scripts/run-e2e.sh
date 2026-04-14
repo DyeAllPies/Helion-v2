@@ -32,7 +32,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 cleanup() {
   log "Tearing down cluster..."
-  docker compose $COMPOSE_FILES down -v 2>/dev/null || true
+  COMPOSE_PROFILES=analytics docker compose $COMPOSE_FILES down -v 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -42,8 +42,11 @@ log "Starting cluster..."
 # E2E overlay uses a named Docker volume (e2e-state) instead of the host
 # bind mount (./state), so E2E tests never read or pollute user data.
 # `docker compose down -v` removes the volume, giving each run a clean DB.
+#
+# COMPOSE_PROFILES=analytics activates the analytics-db service (PostgreSQL),
+# which the coordinator depends on via docker-compose.e2e.yml.
 mkdir -p "$ROOT_DIR/logs"
-docker compose $COMPOSE_FILES up -d --build
+COMPOSE_PROFILES=analytics docker compose $COMPOSE_FILES up -d --build
 
 # ── 2. Wait for coordinator healthy ─────────────────────────────────────────
 

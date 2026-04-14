@@ -143,6 +143,26 @@ Each node has an independent token-bucket rate limiter in the coordinator.
 2. Heartbeat handler — streaming RPCs bypass unary interceptors; rate limit is checked
    per heartbeat message
 
+### Analytics API rate limiting
+
+The `/api/analytics/*` endpoints have their own per-subject limiter because
+their queries (`PERCENTILE_CONT`, `ORDER BY` on `job_summary`) are expensive
+as data grows. Without this limit, an authenticated user could DoS the
+coordinator.
+
+| Property | Value |
+|---|---|
+| Rate | 2 queries/sec per JWT subject |
+| Burst | 30 |
+| Sustained cap | ~120 queries/min per subject |
+| HTTP status on limit hit | `429 Too Many Requests` |
+| Body | `{"error":"analytics query rate limit exceeded"}` |
+| Keyed on | JWT `sub` claim (subject) |
+
+Rate-limited requests are rejected *before* the audit step, so abusive
+traffic doesn't flood the audit log. See
+`internal/api/middleware.go:analyticsQueryAllow`.
+
 **Load test:**
 
 ```bash
@@ -173,6 +193,7 @@ Every security and operational event is written to an append-only log in BadgerD
 | `security_violation` | Seccomp or OOMKilled reported by node |
 | `coordinator_start` | Coordinator process started |
 | `coordinator_stop` | Coordinator process stopping (graceful shutdown) |
+| `analytics.query` | Authenticated call to a `/api/analytics/*` endpoint. `details` carries `endpoint`, `from`, `to`, `actor`. |
 
 ### Storage
 

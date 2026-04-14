@@ -11,7 +11,9 @@ import { map } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import {
   Job, JobsPage, JobLogsResponse, Node, ClusterMetrics, AuditPage, SubmitJobRequest,
-  Workflow, WorkflowsPage, SubmitWorkflowRequest
+  Workflow, WorkflowsPage, SubmitWorkflowRequest,
+  AnalyticsThroughputResponse, AnalyticsNodeReliabilityRow, AnalyticsRetryRow,
+  AnalyticsQueueWaitResponse, AnalyticsWorkflowOutcomesResponse
 } from '../../shared/models';
 
 // Raw API response shapes (may differ from dashboard models)
@@ -121,6 +123,36 @@ export class ApiService {
       .set('size', size);
     if (type) params = params.set('type', type);
     return this.http.get<AuditPage>(`${this.base}/audit`, { params });
+  }
+
+  // ── Analytics ───────────────────────────────────────────────────────────────
+
+  getAnalyticsThroughput(from: string, to: string): Observable<AnalyticsThroughputResponse> {
+    const params = new HttpParams().set('from', from).set('to', to);
+    return this.http.get<AnalyticsThroughputResponse>(
+      `${this.base}/api/analytics/throughput`, { params });
+  }
+
+  getAnalyticsNodeReliability(): Observable<{ data: AnalyticsNodeReliabilityRow[] }> {
+    return this.http.get<{ data: AnalyticsNodeReliabilityRow[] }>(
+      `${this.base}/api/analytics/node-reliability`);
+  }
+
+  getAnalyticsRetryEffectiveness(): Observable<{ data: AnalyticsRetryRow[] }> {
+    return this.http.get<{ data: AnalyticsRetryRow[] }>(
+      `${this.base}/api/analytics/retry-effectiveness`);
+  }
+
+  getAnalyticsQueueWait(from: string, to: string): Observable<AnalyticsQueueWaitResponse> {
+    const params = new HttpParams().set('from', from).set('to', to);
+    return this.http.get<AnalyticsQueueWaitResponse>(
+      `${this.base}/api/analytics/queue-wait`, { params });
+  }
+
+  getAnalyticsWorkflowOutcomes(from: string, to: string): Observable<AnalyticsWorkflowOutcomesResponse> {
+    const params = new HttpParams().set('from', from).set('to', to);
+    return this.http.get<AnalyticsWorkflowOutcomesResponse>(
+      `${this.base}/api/analytics/workflow-outcomes`, { params });
   }
 }
 

@@ -228,7 +228,7 @@ security contract (JWT in-memory only, first-message WebSocket auth, CSP).
 | Every push / PR | `build` | `go vet` · `golangci-lint` · `go test -race ./...` · `go test ./internal/...` with ≥ 90% coverage gate |
 | Every push / PR | `test-rust` | `cargo clippy -D warnings` · `cargo llvm-cov` with ≥ 85% coverage gate |
 | Every push / PR | `test-dashboard` | `npm ci` · `ng lint` · `ng test --browsers=ChromeHeadless` with coverage thresholds |
-| After unit suites pass | `e2e` | Build Docker images · boot cluster · wait for healthy nodes · run 122 Playwright E2E tests · tear down |
+| After unit suites pass | `e2e` | Build Docker images · boot cluster · wait for healthy nodes · run Playwright E2E suite · tear down |
 | After all suites pass | `snyk` | `snyk test --severity-threshold=high` (Go deps) · `snyk container test` (coordinator image) |
 | After all suites pass | `docker` | `docker buildx build` for coordinator and node images (cache to GHA) |
 
@@ -246,11 +246,15 @@ artifacts for debugging.
   within the test process against real BadgerDB (temp dir, cleaned after).
 - **Security tests.** In `tests/integration/security/`. TLS rejection, invalid JWT, revoked
   node certificate, rate limit enforcement, audit log completeness.
-- **Angular unit tests.** Karma + Jasmine for component unit tests. Coverage thresholds enforced
-  in `karma.conf.js` (98% stmt/lines, 96% fn, 95% branch).
-- **E2E tests.** In `dashboard/e2e/`. 122 Playwright specs covering the full path from
+- **Angular unit tests.** Karma + Jasmine. Coverage thresholds (85% statements / 60%
+  branches / 85% functions / 85% lines) are enforced by
+  `scripts/check-dashboard-coverage.sh` — the `@angular-devkit/build-angular:karma`
+  builder ignores the `check:` block in `karma.conf.js`, so the script parses the
+  generated HTML report and fails the build when a metric drops below its minimum.
+- **E2E tests.** In `dashboard/e2e/`. Playwright specs covering the full path from
   coordinator + nodes (gRPC registration, job dispatch) through the Angular dashboard
-  (login, nodes, jobs, metrics, audit). Tests run against a real cluster — no mocks.
+  (login, nodes, jobs, metrics, audit, analytics). Tests run against a real cluster —
+  no mocks.
 - **Benchmarks.** In `tests/bench/`. Measure Go vs Rust runtime latency and throughput.
   See §8.
 
@@ -317,3 +321,44 @@ instructions, cgroup v2 overhead measurements, and seccomp filtering latency.
 | Crash recovery | Grace period + retry | Fixes v1 naive recovery. 15 s default grace period; configurable. |
 | JWT storage (dashboard) | In-memory only | Never `localStorage`/`sessionStorage`. Intentional for a security-focused project. |
 | Audit log | Append-only, BadgerDB | Every security and job event recorded. Never updated or deleted in normal operation. |
+| Analytics store | PostgreSQL (opt-in) | Dual-database: BadgerDB for operational hot path, PostgreSQL for historical analytics. Opt-in via `HELION_ANALYTICS_DSN`. |
+
+---
+
+## 12. Analytics pipeline
+
+The analytics pipeline exports event data from the operational system into a PostgreSQL
+database for historical querying and dashboard visualisation.
+
+### Dual-database design
+
+BadgerDB remains the **operational store** — low-latency reads/writes for dispatch,
+heartbeats, and state transitions. PostgreSQL is the **analytical store** — append-only
+event facts, populated asynchronously, queried by the analytics dashboard.
+
+```
+Coordinator ──▶ Event Bus ──▶ Analytics Sink ──▶ PostgreSQL
+  (BadgerDB)     (in-memory)   (batch writer)     (analytics)
+```
+
+### Data flow
+
+1. Every state transition emits an event on the in-memory bus (10 topic types).
+2. The analytics `Sink` subscribes to `"*"` and buffers events in memory.
+3. Every 500 ms or 100 events (configurable), the sink flushes to PostgreSQL:
+   - Batch INSERT into the `events` fact table (idempotent via `ON CONFLICT`).
+   - Upsert `job_summary` and `node_summary` tables for fast dashboard queries.
+4. The `/api/analytics/*` REST endpoints query PostgreSQL and return JSON.
+5. The Angular analytics dashboard at `/analytics` visualises the results.
+
+### Opt-in activation
+
+Set `HELION_ANALYTICS_DSN` to a PostgreSQL connection string. When unset, nothing
+happens — no PostgreSQL dependency, zero overhead. Schema migrations run automatically
+on startup.
+
+### Backfill
+
+The `analytics.Backfill()` function reads the existing BadgerDB audit trail and
+inserts historical events into PostgreSQL, so analytics coverage extends back before
+the sink was deployed. Idempotent — safe to run multiple times.

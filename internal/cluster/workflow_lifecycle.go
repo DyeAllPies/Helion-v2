@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -169,11 +170,32 @@ func (s *WorkflowStore) OnJobCompleted(ctx context.Context, jobID string, jobSta
 		}
 	}
 
+	var emitCompleted, emitFailed bool
+	var failedJobName string
 	if allTerminal {
 		if anyFailed {
 			targetWorkflow.Status = cpb.WorkflowStatusFailed
+			emitFailed = true
+			// Use this job as the failed-job attribution if it was the
+			// failing one; otherwise find the first non-successful job.
+			if jobStatus == cpb.JobStatusFailed || jobStatus == cpb.JobStatusTimeout || jobStatus == cpb.JobStatusLost {
+				failedJobName = targetJobName
+			} else {
+				for _, wj := range targetWorkflow.Jobs {
+					if wj.JobID == "" {
+						continue
+					}
+					j, err := jobs.Get(wj.JobID)
+					if err == nil &&
+						(j.Status == cpb.JobStatusFailed || j.Status == cpb.JobStatusTimeout || j.Status == cpb.JobStatusLost) {
+						failedJobName = wj.Name
+						break
+					}
+				}
+			}
 		} else {
 			targetWorkflow.Status = cpb.WorkflowStatusCompleted
+			emitCompleted = true
 		}
 		targetWorkflow.FinishedAt = time.Now()
 		_ = s.persister.SaveWorkflow(ctx, targetWorkflow)
@@ -185,6 +207,16 @@ func (s *WorkflowStore) OnJobCompleted(ctx context.Context, jobID string, jobSta
 	}
 
 	s.mu.Unlock()
+
+	// Publish after releasing the lock so subscribers never contend with us.
+	if s.eventBus != nil {
+		if emitCompleted {
+			s.eventBus.Publish(events.WorkflowCompleted(workflowID))
+		}
+		if emitFailed {
+			s.eventBus.Publish(events.WorkflowFailed(workflowID, failedJobName))
+		}
+	}
 }
 
 // Cancel transitions a running workflow to cancelled and marks all its

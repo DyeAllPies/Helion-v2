@@ -141,3 +141,105 @@ The selector logic:
 HELION_RUNTIME_SOCKET set + socket reachable  → RustRuntime
 otherwise                                      → GoRuntime
 ```
+
+---
+
+## 4. Analytics pipeline
+
+Package: `internal/analytics/`
+
+The analytics pipeline is an opt-in subsystem that exports event data from the
+coordinator into PostgreSQL for historical analysis.
+
+### Sink (`sink.go`)
+
+Subscribes to `"*"` on the event bus and batches events in memory. Flushes to
+PostgreSQL every `HELION_ANALYTICS_FLUSH_MS` (default 500) or `HELION_ANALYTICS_BATCH`
+(default 100) events, whichever comes first. Each flush:
+
+1. Batch-INSERTs into the `events` fact table (`ON CONFLICT DO NOTHING`).
+2. Upserts `job_summary` (one row per job: status, timing, retry count).
+3. Upserts `node_summary` (one row per node: registration history, job tallies).
+
+Buffer grows up to `HELION_ANALYTICS_BUFFER` (default 10,000), then drops oldest.
+Never blocks the coordinator's hot path. On shutdown, drains remaining events with
+a 5-second timeout.
+
+### Migrations (`migrations.go`)
+
+SQL migrations are `go:embed`-ded at compile time. The runner creates a
+`schema_migrations` tracking table and applies numbered migrations in order,
+each in its own transaction. Rollback support via `.down.sql` files.
+
+### Backfill (`backfill.go`)
+
+Reads all `audit:` entries from BadgerDB, normalises audit event types to bus
+topic names (e.g. `job_state_transition` → `job.transition`), and inserts into
+PostgreSQL via the same flush path. Idempotent.
+
+Exposed as a one-shot subcommand of the coordinator binary:
+
+```
+helion-coordinator analytics backfill [--pg-dsn=...] [--db-path=...]
+```
+
+Flags fall back to `HELION_ANALYTICS_DSN` / `HELION_DB_PATH` env vars. Runs
+migrations before inserting so the target database may be empty.
+
+**Read-only BadgerDB access.** Opens via
+`cluster.NewBadgerJSONPersisterReadOnly` (`WithReadOnly(true).WithBypassLockGuard(true)`).
+Any accidental write fails at the BadgerDB layer. Note that BadgerDB's
+read-only mode fails to open if the WAL is dirty — i.e. another writer is
+currently holding the DB open with pending writes. In practice, run
+backfills during maintenance windows or shortly after a clean coordinator
+restart.
+
+### REST API (`internal/api/handlers_analytics.go`)
+
+Six read-only endpoints, all authenticated, querying PostgreSQL:
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/analytics/throughput` | Hourly job counts, avg/p95 duration by status |
+| `GET /api/analytics/node-reliability` | Per-node failure rates and health history |
+| `GET /api/analytics/retry-effectiveness` | Retried vs first-attempt outcomes |
+| `GET /api/analytics/queue-wait` | Avg/p95 pending→running wait per hour |
+| `GET /api/analytics/workflow-outcomes` | Workflow success/failure by day |
+| `GET /api/analytics/events` | Paginated raw event query with type filter |
+
+Time-range endpoints accept `from` and `to` query parameters (RFC 3339).
+Default range: last 7 days.
+
+### Security controls
+
+Every analytics endpoint runs through a shared pre-flight (see
+`handlers_analytics.go:analyticsPreflight`) that applies the same protections
+as the rest of the authenticated API surface:
+
+| Control | Details |
+|---|---|
+| JWT auth | `authMiddleware` — 401 if missing/invalid Bearer token |
+| Per-subject rate limit | Token bucket: `analyticsQueryRate=2 rps`, `analyticsQueryBurst=30`. Returns **429 Too Many Requests** when exceeded. Bucket keyed on JWT subject. |
+| Time-range bounds | `analyticsMaxRange = 365 * 24h`. Rejects inverted, malformed, or oversized ranges with **400 Bad Request**. |
+| Pagination bounds | `analyticsMaxLimit = 1000`. `limit` query param is clamped; negative values fall back to default 100. |
+| Audit logging | Every successful query is recorded as `analytics.query` in the audit log with `actor`, `endpoint`, `from`, `to`. Rate-limited requests are rejected **before** audit so they are not recorded as successful reads. |
+| Error masking | All DB errors return generic `"internal error"`; raw pgx errors logged server-side only. |
+
+The rate-limit and audit behaviour mirrors the existing `tokenIssueAllow`
+and `LogJobSubmit` patterns so operators see one consistent surface.
+
+### Connection pooling
+
+The coordinator connects via `*pgxpool.Pool`, **not** `*pgx.Conn`. The pool
+is required because the sink writes (in a transaction) and the API handlers
+read concurrently — a single pgx connection is not safe for concurrent use
+and produced `"conn busy"` errors before the switch.
+
+### Workflow event emission
+
+Feature 09 depends on `workflow.completed` / `workflow.failed` events. These
+are published by `WorkflowStore.OnJobCompleted` once all jobs in a workflow
+reach terminal state (see [workflow_lifecycle.go](../internal/cluster/workflow_lifecycle.go)).
+Wiring happens at coordinator startup via `workflows.SetEventBus(eventBus)`.
+Without this wiring the analytics sink would never persist workflow rows to
+the `events` table.

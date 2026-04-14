@@ -8,8 +8,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -299,5 +301,115 @@ func TestWorkflowStore_EligibleJobs_OnCompleteCondition(t *testing.T) {
 	eligible := ws.EligibleJobs("wf-cond3", js)
 	if len(eligible) != 1 || eligible[0] != "wf-cond3/notify" {
 		t.Fatalf("expected notify to be eligible after main failed (on_complete), got %v", eligible)
+	}
+}
+
+// ── Event emission ──────────────────────────────────────────────────────────
+
+func TestWorkflowStore_OnJobCompleted_PublishesWorkflowCompleted(t *testing.T) {
+	ws, _ := newTestWorkflowStore()
+	js := newTestJobStore()
+	bus := events.NewBus(10, nil)
+	ws.SetEventBus(bus)
+
+	sub := bus.Subscribe("workflow.completed")
+	defer sub.Cancel()
+
+	ctx := context.Background()
+	wf := &cpb.Workflow{
+		ID: "wf-evt-ok",
+		Jobs: []cpb.WorkflowJob{{Name: "only", Command: "echo"}},
+	}
+	_ = ws.Submit(ctx, wf)
+	_ = ws.Start(ctx, "wf-evt-ok", js)
+
+	_ = js.Transition(ctx, "wf-evt-ok/only", cpb.JobStatusDispatching, cluster.TransitionOptions{})
+	_ = js.Transition(ctx, "wf-evt-ok/only", cpb.JobStatusRunning, cluster.TransitionOptions{})
+	_ = js.Transition(ctx, "wf-evt-ok/only", cpb.JobStatusCompleted, cluster.TransitionOptions{})
+	ws.OnJobCompleted(ctx, "wf-evt-ok/only", cpb.JobStatusCompleted, js)
+
+	select {
+	case ev := <-sub.C:
+		if ev.Type != "workflow.completed" {
+			t.Errorf("type = %q, want workflow.completed", ev.Type)
+		}
+		if ev.Data["workflow_id"] != "wf-evt-ok" {
+			t.Errorf("workflow_id = %v, want wf-evt-ok", ev.Data["workflow_id"])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not receive workflow.completed event")
+	}
+}
+
+func TestWorkflowStore_OnJobCompleted_PublishesWorkflowFailed(t *testing.T) {
+	ws, _ := newTestWorkflowStore()
+	js := newTestJobStore()
+	bus := events.NewBus(10, nil)
+	ws.SetEventBus(bus)
+
+	sub := bus.Subscribe("workflow.failed")
+	defer sub.Cancel()
+
+	ctx := context.Background()
+	wf := &cpb.Workflow{
+		ID: "wf-evt-fail",
+		Jobs: []cpb.WorkflowJob{{Name: "only", Command: "false"}},
+	}
+	_ = ws.Submit(ctx, wf)
+	_ = ws.Start(ctx, "wf-evt-fail", js)
+
+	_ = js.Transition(ctx, "wf-evt-fail/only", cpb.JobStatusDispatching, cluster.TransitionOptions{})
+	_ = js.Transition(ctx, "wf-evt-fail/only", cpb.JobStatusRunning, cluster.TransitionOptions{})
+	_ = js.Transition(ctx, "wf-evt-fail/only", cpb.JobStatusFailed, cluster.TransitionOptions{ErrMsg: "boom"})
+	ws.OnJobCompleted(ctx, "wf-evt-fail/only", cpb.JobStatusFailed, js)
+
+	select {
+	case ev := <-sub.C:
+		if ev.Type != "workflow.failed" {
+			t.Errorf("type = %q, want workflow.failed", ev.Type)
+		}
+		if ev.Data["workflow_id"] != "wf-evt-fail" {
+			t.Errorf("workflow_id = %v, want wf-evt-fail", ev.Data["workflow_id"])
+		}
+		if ev.Data["failed_job"] != "only" {
+			t.Errorf("failed_job = %v, want 'only'", ev.Data["failed_job"])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not receive workflow.failed event")
+	}
+}
+
+func TestWorkflowStore_OnJobCompleted_NoEventWhenWorkflowStillRunning(t *testing.T) {
+	// Emits nothing until ALL jobs reach terminal state.
+	ws, _ := newTestWorkflowStore()
+	js := newTestJobStore()
+	bus := events.NewBus(10, nil)
+	ws.SetEventBus(bus)
+
+	sub := bus.Subscribe("workflow.*")
+	defer sub.Cancel()
+
+	ctx := context.Background()
+	wf := &cpb.Workflow{
+		ID: "wf-partial",
+		Jobs: []cpb.WorkflowJob{
+			{Name: "a", Command: "echo"},
+			{Name: "b", Command: "echo"},
+		},
+	}
+	_ = ws.Submit(ctx, wf)
+	_ = ws.Start(ctx, "wf-partial", js)
+
+	// Only one job finishes.
+	_ = js.Transition(ctx, "wf-partial/a", cpb.JobStatusDispatching, cluster.TransitionOptions{})
+	_ = js.Transition(ctx, "wf-partial/a", cpb.JobStatusRunning, cluster.TransitionOptions{})
+	_ = js.Transition(ctx, "wf-partial/a", cpb.JobStatusCompleted, cluster.TransitionOptions{})
+	ws.OnJobCompleted(ctx, "wf-partial/a", cpb.JobStatusCompleted, js)
+
+	select {
+	case ev := <-sub.C:
+		t.Fatalf("unexpected event emitted while workflow still running: %v", ev.Type)
+	case <-time.After(200 * time.Millisecond):
+		// OK — no event.
 	}
 }

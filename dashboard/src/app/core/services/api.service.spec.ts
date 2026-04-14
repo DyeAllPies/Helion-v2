@@ -158,4 +158,83 @@ describe('ApiService', () => {
     expect(req.request.params.has('type')).toBeFalse();
     req.flush(mockAuditPage);
   });
+
+  // ── Analytics ──────────────────────────────────────────────────────────────
+
+  it('getAnalyticsThroughput() sends GET /api/analytics/throughput with from/to', () => {
+    const from = '2026-04-01T00:00:00Z';
+    const to   = '2026-04-13T00:00:00Z';
+    service.getAnalyticsThroughput(from, to).subscribe(resp => {
+      expect(resp.data.length).toBe(1);
+      expect(resp.from).toBe(from);
+    });
+    const req = httpMock.expectOne(r => r.url.endsWith('/api/analytics/throughput'));
+    expect(req.request.method).toBe('GET');
+    expect(req.request.params.get('from')).toBe(from);
+    expect(req.request.params.get('to')).toBe(to);
+    req.flush({
+      from, to,
+      data: [{
+        hour: from, status: 'completed', job_count: 5,
+        avg_duration_ms: 100, p95_duration_ms: 200,
+      }],
+    });
+  });
+
+  it('getAnalyticsNodeReliability() sends GET /api/analytics/node-reliability without params', () => {
+    service.getAnalyticsNodeReliability().subscribe(resp => {
+      expect(resp.data.length).toBe(1);
+      expect(resp.data[0].node_id).toBe('n1');
+    });
+    const req = httpMock.expectOne(r => r.url.endsWith('/api/analytics/node-reliability'));
+    expect(req.request.method).toBe('GET');
+    expect(req.request.params.keys().length).toBe(0);
+    req.flush({ data: [{
+      node_id: 'n1', address: '10.0.0.1', jobs_completed: 5, jobs_failed: 1,
+      failure_rate_pct: 16.67, times_stale: 0, times_revoked: 0,
+    }] });
+  });
+
+  it('getAnalyticsRetryEffectiveness() sends GET /api/analytics/retry-effectiveness', () => {
+    service.getAnalyticsRetryEffectiveness().subscribe(resp => {
+      expect(resp.data.length).toBe(2);
+    });
+    const req = httpMock.expectOne(r => r.url.endsWith('/api/analytics/retry-effectiveness'));
+    expect(req.request.method).toBe('GET');
+    req.flush({ data: [
+      { category: 'retried',       status: 'completed', job_count: 3, avg_duration_ms: 200 },
+      { category: 'first_attempt', status: 'completed', job_count: 15, avg_duration_ms: 100 },
+    ] });
+  });
+
+  it('getAnalyticsQueueWait() sends GET /api/analytics/queue-wait with from/to', () => {
+    const from = '2026-04-01T00:00:00Z';
+    const to   = '2026-04-13T00:00:00Z';
+    service.getAnalyticsQueueWait(from, to).subscribe();
+    const req = httpMock.expectOne(r => r.url.endsWith('/api/analytics/queue-wait'));
+    expect(req.request.params.get('from')).toBe(from);
+    expect(req.request.params.get('to')).toBe(to);
+    req.flush({ from, to, data: [] });
+  });
+
+  it('getAnalyticsWorkflowOutcomes() sends GET /api/analytics/workflow-outcomes with from/to', () => {
+    const from = '2026-04-01T00:00:00Z';
+    const to   = '2026-04-13T00:00:00Z';
+    service.getAnalyticsWorkflowOutcomes(from, to).subscribe(resp => {
+      expect(resp.data.length).toBe(1);
+    });
+    const req = httpMock.expectOne(r => r.url.endsWith('/api/analytics/workflow-outcomes'));
+    expect(req.request.params.get('from')).toBe(from);
+    expect(req.request.params.get('to')).toBe(to);
+    req.flush({ from, to, data: [{
+      event_type: 'workflow.completed', day: '2026-04-13T00:00:00Z', count: 4,
+    }] });
+  });
+
+  it('analytics requests hit HTTP GET method', () => {
+    service.getAnalyticsThroughput('a', 'b').subscribe();
+    const req = httpMock.expectOne(r => r.url.endsWith('/api/analytics/throughput'));
+    expect(req.request.method).toBe('GET');
+    req.flush({ from: 'a', to: 'b', data: [] });
+  });
 });

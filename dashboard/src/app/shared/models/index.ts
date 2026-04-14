@@ -187,6 +187,64 @@ export interface SubmitWorkflowRequest {
   jobs: SubmitWorkflowJobRequest[];
 }
 
+// ── Analytics ────────────────────────────────────────────────────────────────
+
+export interface AnalyticsThroughputRow {
+  hour:            string;
+  status:          string;
+  job_count:       number;
+  avg_duration_ms: number;
+  p95_duration_ms: number;
+}
+
+export interface AnalyticsThroughputResponse {
+  from: string;
+  to:   string;
+  data: AnalyticsThroughputRow[];
+}
+
+export interface AnalyticsNodeReliabilityRow {
+  node_id:          string;
+  address:          string;
+  jobs_completed:   number;
+  jobs_failed:      number;
+  failure_rate_pct: number;
+  times_stale:      number;
+  times_revoked:    number;
+}
+
+export interface AnalyticsRetryRow {
+  category:       string;   // "retried" | "first_attempt"
+  status:         string;
+  job_count:      number;
+  avg_duration_ms: number;
+}
+
+export interface AnalyticsQueueWaitRow {
+  hour:        string;
+  avg_wait_ms: number;
+  p95_wait_ms: number;
+  job_count:   number;
+}
+
+export interface AnalyticsQueueWaitResponse {
+  from: string;
+  to:   string;
+  data: AnalyticsQueueWaitRow[];
+}
+
+export interface AnalyticsWorkflowOutcomeRow {
+  event_type: string;
+  day:        string;
+  count:      number;
+}
+
+export interface AnalyticsWorkflowOutcomesResponse {
+  from: string;
+  to:   string;
+  data: AnalyticsWorkflowOutcomeRow[];
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export interface LoginRequest {
