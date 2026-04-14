@@ -508,6 +508,54 @@ Tests: **47 pass + 1 skipped live integration**
 [`config_test.go`](../../internal/artifacts/config_test.go),
 [`verify_test.go`](../../internal/artifacts/verify_test.go)).
 
+#### Deliberately not fixed, with rationale
+
+A second-pass audit flagged three concerns in the artifact-store
+surface that were *not* addressed. Each is recorded here so a future
+auditor doesn't re-raise it as an oversight:
+
+1. **`S3Store.Delete` TOCTOU race.** The current implementation
+   ([s3.go:213-216](../../internal/artifacts/s3.go#L213-L216)) calls
+   `StatObject` to probe existence, then `RemoveObject`. Between the
+   two, another caller (or an operator using `mc`) could remove the
+   object — our RemoveObject still succeeds silently (minio-go
+   swallows NoSuchKey for idempotency), so we return `nil` for a
+   delete we didn't perform.
+
+   **Why not fixed:** The race window is milliseconds wide, and both
+   observable outcomes are "object is gone." No caller in this repo
+   distinguishes "I deleted it" from "it was already gone"; the Stager
+   uses Delete only for opportunistic cleanup. Under the primary
+   threat model (compromised node) a node cannot exploit the race to
+   retain stale state — it already controls its own job's outputs.
+   The alternative fix (drop the `ErrNotFound` contract and let
+   `Delete` be idempotent by design) is a breaking API change for no
+   observable win. Accept the documented race.
+
+2. **`LocalStore.Put` concurrent-same-key tempfile orphans.** The
+   audit asserted that racing Puts on the same key leave orphaned
+   tempfiles. **This is not actually true.** Every error path in
+   [local.go:82-108](../../internal/artifacts/local.go#L82-L108)
+   cleans up the tempfile explicitly, and a successful
+   `os.Rename(tmpPath, full)` *consumes* the tempfile (the tempfile
+   no longer exists post-rename). Two racing Puts each produce their
+   own tempfile; both rename onto the same destination in order;
+   last-writer-wins on `full`; neither tempfile survives. No dust
+   actually accumulates.
+
+3. **Library-mode callers bypassing the API validators.** A library
+   caller (internal Go code, not going through POST /jobs) could
+   construct a `cpb.Job` with `Inputs[i].LocalPath = "../escape"` and
+   call `JobStore.Submit` directly, bypassing
+   `validateArtifactBindings`. This is a real bypass at the API
+   boundary, but the Stager's
+   [`safeJoin`](../../internal/staging/staging.go) re-validates
+   every `local_path` before touching disk — a belt-and-braces guard
+   that refuses traversal at the point it would matter. Any library
+   caller would still fail at `Prepare` with "local_path escapes
+   working directory." Accept the two-layer defense; don't duplicate
+   the shape rules into `JobStore.Submit`.
+
 ### Step 2 — job spec + runtime staging (done)
 
 Data model:
