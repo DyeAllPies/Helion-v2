@@ -1,7 +1,7 @@
 # Feature: Minimal ML Pipeline
 
 **Priority:** P1
-**Status:** In progress (steps 1–2 implemented; 3–10 pending)
+**Status:** In progress (steps 1–3 implemented; 4–10 pending)
 **Affected files:**
 `internal/api/types.go`,
 `internal/cluster/registry_node.go`,
@@ -403,7 +403,7 @@ the feature is done.
 |------|--------------------------------------------------|--------------|--------|--------|
 | 1    | Artifact store abstraction (local + S3)          | —            | Medium | Done   |
 | 2    | Job spec: inputs/outputs/working_dir + runtime staging | 1      | Medium | Done   |
-| 3    | Workflow artifact passing (`from: job.output`)   | 2            | Medium | Pending |
+| 3    | Workflow artifact passing (`from: job.output`)   | 2            | Medium | Done   |
 | 4    | Node labels + node_selector scheduling           | —            | Small  | Pending |
 | 5    | GPU as a scheduling resource                     | 4            | Medium | Pending |
 | 6    | Dataset + model registries (API + storage)       | 1            | Medium | Pending |
@@ -578,6 +578,81 @@ Tests: **62 new, all passing**
 [`outputs_from_proto_test.go`](../../internal/grpcserver/outputs_from_proto_test.go),
 [`outputs_to_proto_test.go`](../../internal/nodeserver/outputs_to_proto_test.go)).
 
+### Step 3 — workflow artifact passing (done)
+
+The step-2 groundwork (ResolvedOutputs on every completed job)
+already surfaces output URIs on the coordinator record; step 3 adds
+the input side: a workflow job's binding can declare
+`from: "<upstream_name>.<output_name>"` instead of a concrete URI,
+and the coordinator rewrites the reference at dispatch time.
+
+Data model:
+
+- [`cpb.ArtifactBinding`](../../internal/proto/coordinatorpb/types.go)
+  gains a `From` field (JSON `from,omitempty`). The persisted Job
+  record carries both `From` and the resolved `URI` once the
+  coordinator rewrites — preserves lineage for audit and for retries.
+- [`api.ArtifactBindingRequest`](../../internal/api/types.go) mirrors
+  it; plain-job submits still reject any `From` (no upstream context).
+
+API validation
+([`validateArtifactBindingsCtx`](../../internal/api/handlers_jobs.go)):
+
+- `From` only accepted when `allowFrom=true` and `requireURI=true` —
+  i.e. workflow-job **inputs**. Outputs and plain submits reject it.
+- `URI` and `From` are mutually exclusive on a single input. One of
+  them must be present.
+- `From` shape: `<upstream_job>.<output_name>`, splits at the **last**
+  `.` so workflow job names containing dots still work. Output name
+  must match `[A-Z_][A-Z0-9_]*` (same rule as binding names). Length
+  ≤ 256, NUL/control rejected.
+
+DAG validation
+([`internal/cluster/dag.go`](../../internal/cluster/dag.go)):
+
+After cycle detection, `validateFromReferences` walks every input
+with a `From`:
+
+1. **Upstream exists** in the workflow — else `ErrDAGUnknownFrom`.
+2. **Upstream is an ancestor** (transitive `depends_on` closure) —
+   else `ErrDAGFromNotAncestor`. Without the dependency edge the
+   scheduler would race and could dispatch the downstream before the
+   upstream completed.
+3. **Upstream declares the named output** — else
+   `ErrDAGFromUnknownOutput`.
+
+Dispatch-time resolution
+([`internal/cluster/workflow_resolve.go`](../../internal/cluster/workflow_resolve.go)):
+
+`ResolveJobInputs(job, JobLookup)` returns a defensive copy of the
+Job with every `From` rewritten to the upstream's
+`ResolvedOutputs[n].URI`. Hooked into
+[`DispatchLoop.dispatchPending`](../../internal/cluster/dispatch.go)
+just after the eligibility gate and before the first transition:
+failures (`ErrResolveUpstreamMissing`, `ErrResolveUpstreamNotCompleted`,
+`ErrResolveOutputMissing`) transition the downstream to Failed with
+a descriptive error rather than dispatching a half-specified job.
+
+Security invariant kept: the resolver reads the upstream's
+**persisted** `ResolvedOutputs` — already filtered through
+`attestOutputs` when the upstream reported its terminal state (step 2).
+A compromised node cannot inject a cross-job or foreign-scheme URI
+into a downstream job's inputs because the URI it would inject never
+made it onto the upstream's record in the first place. The
+`jobs/<job_id>/<local_path>` suffix match from step 2 is the gate;
+step 3 just trusts what it previously blessed.
+
+Tests: **21 new, all passing**
+([`handlers_jobs_step3_test.go`](../../internal/api/handlers_jobs_step3_test.go),
+[`handlers_workflows_step3_test.go`](../../internal/api/handlers_workflows_step3_test.go),
+[`dag_step3_test.go`](../../internal/cluster/dag_step3_test.go),
+[`workflow_resolve_test.go`](../../internal/cluster/workflow_resolve_test.go)).
+Coverage includes: `From` shape happy path + 9 rejection cases,
+URI/From mutual exclusivity, DAG unknown-upstream / non-ancestor /
+unknown-output / malformed-shape rejection, resolver happy path +
+upstream-missing / not-completed / output-missing / nil-job /
+non-workflow-job / mixed-URI-and-From / multi-From round-trips.
+
 ### Rust runtime (parity landed)
 
 Originally flagged as a step-2 gap. Closed by commit `506680d`
@@ -628,7 +703,7 @@ Extending the SECURITY.md threat table with ML-specific threats:
 |------|-------------------|---------------------------|---------------------------|
 | 1 — Artifact store | Bulk storage; cross-tenant key collisions | Key sanitisation (NUL, control, `..`, drive letters, length≤1024); URI bucket + scheme pin in `S3Store`; `O_EXCL` on LocalStore; `Lstat` rejections on uploads | §8 REST API security (bounded input) pattern applied at the Store boundary |
 | 2 — Job I/O staging | Node agent downloads + uploads bytes; env var injection | Stager: workdir `0o700` under operator-controlled `HELION_WORK_ROOT`; per-job `O_EXCL` `Mkdir`; `safeJoin` on every path; stager-wins env precedence; staging error → staging.failed path rolls back workdir. Coordinator: `validateReportedOutput` trust boundary on node-attested URIs | §6 Audit logging pattern (every transition audited — extended to staging transitions); stager refusal on `stager == nil` follows §1 fail-closed threat doctrine |
-| 3 — Workflow artifact passing | Resolved URIs cross job boundaries | `from: <upstream>.<name>` references resolved against the *coordinator's* `ResolvedOutputs` record (already validated at ingest by step 2), never against the node's proto — so a compromised node cannot make downstream jobs fetch arbitrary URIs | §1 threat isolation — trust boundary at the coordinator, not at the wire |
+| 3 — Workflow artifact passing **(done)** | Resolved URIs cross job boundaries | `from: <upstream>.<name>` references resolved against the *coordinator's* `ResolvedOutputs` record (already attested by step 2's `jobs/<job_id>/<local_path>` suffix check), never against the node's proto. DAG validator rejects non-ancestor references (would race the scheduler) and undeclared outputs. Resolver is a pure read of persisted, pre-attested data — a compromised node cannot inject a URI into a downstream job it doesn't own. | §1 threat isolation — trust boundary at the coordinator, not at the wire |
 | 4 — Node selectors | Scheduler queries node-reported labels | Labels entered via mTLS-authenticated Register RPC (§2); audit every `node.registered` with label set; admin override requires admin JWT |
 | 5 — GPU as a resource | Device enumeration & isolation | GPU indices derived by node at registration time (via `nvidia-smi`) — same trust level as CPU/memory counts; `CUDA_VISIBLE_DEVICES` set by stager, never by user env (stager-wins precedence applies) |
 | 6 — Dataset + model registries | New write endpoints, artifact uploads | JWT required; per-subject rate limit (mirror `analyticsQueryAllow` shape: 2 rps burst 30 → 429); audit events `dataset.registered`, `dataset.deleted`, `model.registered`, `model.deleted` with actor; `http.MaxBytesReader` cap at 5 GiB (open-question: multipart path); URL-ownership check binds a registered URI to the caller's subject or an owning job-ID prefix |

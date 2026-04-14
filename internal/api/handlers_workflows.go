@@ -136,7 +136,10 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: invalid working_dir", j.Name))
 			return
 		}
-		if msg := validateArtifactBindings("inputs", j.Inputs, true); msg != "" {
+		// Workflow-job inputs may carry a `from: "<upstream>.<output>"`
+		// reference — enable that path in the shared validator. Outputs
+		// still take neither URI nor From (the runtime assigns URI).
+		if msg := validateArtifactBindingsCtx("inputs", j.Inputs, true, true); msg != "" {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: %s", j.Name, msg))
 			return
 		}
@@ -200,7 +203,10 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, cluster.ErrDAGUnknownDep) ||
 			errors.Is(err, cluster.ErrDAGDuplicateName) ||
 			errors.Is(err, cluster.ErrDAGEmptyName) ||
-			errors.Is(err, cluster.ErrDAGSelfDep) {
+			errors.Is(err, cluster.ErrDAGSelfDep) ||
+			errors.Is(err, cluster.ErrDAGUnknownFrom) ||
+			errors.Is(err, cluster.ErrDAGFromNotAncestor) ||
+			errors.Is(err, cluster.ErrDAGFromUnknownOutput) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}

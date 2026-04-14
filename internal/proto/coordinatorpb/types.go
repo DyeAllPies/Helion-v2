@@ -240,9 +240,18 @@ type ArtifactBinding struct {
 	// submit time so later code can trust it.
 	Name string `json:"name"`
 
-	// URI points to the artifact in the store. Required for inputs;
-	// assigned by the runtime after upload for outputs.
+	// URI points to the artifact in the store. Required for plain-job
+	// inputs; assigned by the runtime after upload for outputs.
+	// For workflow-job inputs, mutually exclusive with From: either
+	// supply a concrete URI now or a From reference to resolve later.
 	URI string `json:"uri,omitempty"`
+
+	// From is a step-3 workflow-only reference of the form
+	// "<upstream_job_name>.<output_name>". The coordinator rewrites
+	// this into a concrete URI at dispatch time, drawing the value
+	// from the upstream job's ResolvedOutputs record. Ignored on
+	// plain-job submits (the validator rejects From there).
+	From string `json:"from,omitempty"`
 
 	// LocalPath is the job-relative path. Rejected at submit time if
 	// absolute or containing ".." segments so it cannot escape the

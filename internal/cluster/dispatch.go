@@ -106,6 +106,26 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 			continue
 		}
 
+		// Step-3 artifact resolution: rewrite any `from:
+		// <upstream>.<output>` input references to concrete URIs
+		// drawn from the upstream job's ResolvedOutputs. Runs only
+		// for workflow jobs carrying at least one From ref — the
+		// resolver short-circuits otherwise. A resolution failure
+		// means the upstream never produced the named output (or
+		// ancestor dependency was skipped); the downstream job
+		// cannot run, so transition to Failed with a descriptive
+		// error instead of dispatching a half-specified job.
+		resolvedJob, rerr := ResolveJobInputs(job, d.jobs)
+		if rerr != nil {
+			d.log.Warn("dispatch: artifact resolution failed",
+				slog.String("job_id", job.ID), slog.Any("err", rerr))
+			_ = d.jobs.Transition(ctx, job.ID, cpb.JobStatusFailed, TransitionOptions{
+				ErrMsg: "artifact resolution: " + rerr.Error(),
+			})
+			continue
+		}
+		job = resolvedJob
+
 		node, err := d.scheduler.Pick()
 		if err != nil {
 			// No healthy nodes — stop trying until next tick

@@ -225,10 +225,20 @@ func validateSubmitRequest(req *SubmitRequest) string {
 	return ""
 }
 
-// validateArtifactBindings runs per-binding checks common to inputs and
-// outputs. requireURI differentiates the two: inputs must name the
-// artifact to pull, outputs have their URI assigned by the runtime.
+// validateArtifactBindings is the legacy plain-submit validator —
+// rejects any From reference because From is only meaningful inside a
+// workflow where sibling jobs exist. Use validateArtifactBindingsCtx
+// for the workflow path.
 func validateArtifactBindings(kind string, bs []ArtifactBindingRequest, requireURI bool) string {
+	return validateArtifactBindingsCtx(kind, bs, requireURI, false)
+}
+
+// validateArtifactBindingsCtx runs per-binding checks common to inputs
+// and outputs. requireURI differentiates the two: inputs must name the
+// artifact to pull, outputs have their URI assigned by the runtime.
+// allowFrom widens the input rule to accept a From reference as an
+// alternative to URI — only appropriate inside a workflow submission.
+func validateArtifactBindingsCtx(kind string, bs []ArtifactBindingRequest, requireURI, allowFrom bool) string {
 	if len(bs) > maxArtifactBindings {
 		return fmt.Sprintf("%s must not exceed %d entries", kind, maxArtifactBindings)
 	}
@@ -247,7 +257,26 @@ func validateArtifactBindings(kind string, bs []ArtifactBindingRequest, requireU
 				return fmt.Sprintf("%s[%d].uri must not contain NUL or control bytes", kind, i)
 			}
 		}
+		// From is only valid on *workflow-job* inputs (allowFrom=true
+		// and requireURI=true — outputs don't get a From, neither do
+		// plain submits because there's no "upstream" without a DAG).
+		if b.From != "" {
+			if !allowFrom || !requireURI {
+				return fmt.Sprintf("%s[%d].from is only valid on workflow-job inputs", kind, i)
+			}
+			if b.URI != "" {
+				return fmt.Sprintf("%s[%d]: uri and from are mutually exclusive", kind, i)
+			}
+			if msg := validateArtifactFromShape(b.From); msg != "" {
+				return fmt.Sprintf("%s[%d].from %s", kind, i, msg)
+			}
+			// A from-reference skips the URI-required and scheme checks below.
+			continue
+		}
 		if requireURI && b.URI == "" {
+			if allowFrom {
+				return fmt.Sprintf("%s[%d]: one of uri or from is required", kind, i)
+			}
 			return fmt.Sprintf("%s[%d].uri is required", kind, i)
 		}
 		if !requireURI && b.URI != "" {
@@ -264,6 +293,62 @@ func validateArtifactBindings(kind string, bs []ArtifactBindingRequest, requireU
 		}
 	}
 	return ""
+}
+
+// maxArtifactFromLen caps the "<job>.<output>" reference length. The
+// upstream name obeys whatever limit the workflow-name validator
+// imposes elsewhere; the output-name half is capped by
+// maxArtifactNameLen. 256 bytes is more than either half could
+// legitimately need combined.
+const maxArtifactFromLen = 256
+
+// validateArtifactFromShape checks the "<upstream_job>.<output_name>"
+// syntax. The output name must match the same charset as a binding
+// Name (so HELION_INPUT_<NAME> stays a valid env var) and the upstream
+// job name must be non-empty. Splitting at the *last* '.' lets us
+// accept workflow job names that happen to contain periods (e.g.
+// user.build-1). Returns the empty string on success or a reason
+// suffix that the caller prepends with "from " for a human message.
+func validateArtifactFromShape(ref string) string {
+	if ref == "" {
+		return "is required"
+	}
+	if len(ref) > maxArtifactFromLen {
+		return fmt.Sprintf("must not exceed %d bytes", maxArtifactFromLen)
+	}
+	for i := 0; i < len(ref); i++ {
+		if c := ref[i]; c == 0 || c < 0x20 || c == 0x7f {
+			return "must not contain NUL or control bytes"
+		}
+	}
+	dot := strings.LastIndexByte(ref, '.')
+	if dot <= 0 || dot == len(ref)-1 {
+		return `must be "<upstream_job>.<output_name>"`
+	}
+	upstream := ref[:dot]
+	output := ref[dot+1:]
+	if upstream == "" {
+		return `must be "<upstream_job>.<output_name>"`
+	}
+	if !validateArtifactName(output) {
+		return fmt.Sprintf("output name %q must match [A-Z_][A-Z0-9_]*", output)
+	}
+	return ""
+}
+
+// SplitFromRef pulls the "<upstream>.<output>" pair out of a valid
+// From reference. The caller must have run validateArtifactFromShape
+// first; this helper does no re-validation and returns ("","") for
+// malformed input.
+func SplitFromRef(ref string) (upstream, output string) {
+	if ref == "" {
+		return "", ""
+	}
+	dot := strings.LastIndexByte(ref, '.')
+	if dot <= 0 || dot == len(ref)-1 {
+		return "", ""
+	}
+	return ref[:dot], ref[dot+1:]
 }
 
 // isAllowedArtifactScheme returns true iff uri starts with one of the
@@ -297,6 +382,7 @@ func convertBindings(bs []ArtifactBindingRequest) []cpb.ArtifactBinding {
 		out[i] = cpb.ArtifactBinding{
 			Name:      b.Name,
 			URI:       b.URI,
+			From:      b.From,
 			LocalPath: b.LocalPath,
 		}
 	}

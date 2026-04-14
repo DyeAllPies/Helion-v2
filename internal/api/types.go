@@ -52,9 +52,10 @@ type ResourceRequestAPI struct {
 // ArtifactBindingRequest is the JSON shape of an input/output entry on
 // SubmitRequest. See cpb.ArtifactBinding for the persisted form.
 type ArtifactBindingRequest struct {
-	Name      string `json:"name"`                // required; [A-Z_][A-Z0-9_]*
-	URI       string `json:"uri,omitempty"`       // required for inputs; empty for outputs
-	LocalPath string `json:"local_path"`          // required; relative, no ".."
+	Name      string `json:"name"`                 // required; [A-Z_][A-Z0-9_]*
+	URI       string `json:"uri,omitempty"`        // required for plain-job inputs; empty for outputs or when From is set
+	From      string `json:"from,omitempty"`       // step-3 workflow input: "<upstream_job>.<output_name>"; mutually exclusive with URI
+	LocalPath string `json:"local_path"`           // required; relative, no ".."
 }
 
 // SubmitRequest is the JSON body for POST /jobs.
