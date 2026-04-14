@@ -105,6 +105,7 @@ func encodeRunRequest(req RunRequest) []byte {
 		b = protowire.AppendTag(b, 6, protowire.BytesType)
 		b = protowire.AppendBytes(b, sub)
 	}
+	b = pbString(b, 7, req.WorkingDir)
 	return b
 }
 

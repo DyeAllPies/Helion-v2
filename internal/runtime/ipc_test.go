@@ -131,6 +131,28 @@ func TestEncodeRunRequestNoLimits(t *testing.T) {
 	}
 }
 
+// TestEncodeRunRequestWorkingDir verifies the working_dir string is emitted
+// on field 7 (bytes wire type, tag 0x3a) when non-empty, and omitted when
+// empty. Keeping the Rust runtime in sync with the staging layer depends on
+// this field surviving the round trip.
+func TestEncodeRunRequestWorkingDir(t *testing.T) {
+	req := RunRequest{JobID: "j", Command: "c", WorkingDir: "/tmp/helion-job-abc"}
+	b := encodeRunRequest(req)
+	if !bytes.Contains(b, []byte("/tmp/helion-job-abc")) {
+		t.Error("encoded RunRequest missing working_dir payload")
+	}
+	// Field 7, bytes type → tag byte = (7<<3)|2 = 0x3a.
+	if !bytes.Contains(b, []byte{0x3a}) {
+		t.Error("encoded RunRequest missing field-7 tag for working_dir")
+	}
+
+	// Empty WorkingDir must not emit the tag (pbString skips empties).
+	req2 := RunRequest{JobID: "j", Command: "c"}
+	if bytes.Contains(encodeRunRequest(req2), []byte{0x3a}) {
+		t.Error("empty working_dir should not emit field-7 tag")
+	}
+}
+
 // ── RunResponse decode ────────────────────────────────────────────────────────
 
 func TestDecodeRunResponseFull(t *testing.T) {

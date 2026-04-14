@@ -39,6 +39,12 @@ message RunRequest {
   map<string, string> env             = 4;
   int64               timeout_seconds = 5;
   ResourceLimits      limits          = 6;
+
+  // Working directory the runtime chdir's into before exec.
+  // Empty means "inherit the node agent's cwd" (legacy pre-staging behaviour).
+  // Populated by the Go-side staging layer (internal/staging) with a per-job
+  // directory so the job cannot observe another job's files.
+  string              working_dir     = 7;
 }
 
 // RunResponse reports the outcome of a completed (or killed) job.

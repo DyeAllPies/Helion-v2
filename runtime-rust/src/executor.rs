@@ -98,6 +98,13 @@ impl Executor {
         for (k, v) in &req.env {
             cmd.env(k, v);
         }
+        // Working directory: populated by the Go staging layer
+        // (internal/staging) with a per-job path so each job sees only its
+        // own inputs. Empty means "inherit the agent's cwd" — legacy
+        // behaviour for jobs submitted without artifact staging.
+        if !req.working_dir.is_empty() {
+            cmd.current_dir(&req.working_dir);
+        }
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -257,6 +264,7 @@ mod tests {
             env: Default::default(),
             timeout_seconds: 5,
             limits: None,
+            working_dir: String::new(),
         };
         let resp = exec.run(req);
         assert_eq!(resp.exit_code, 0, "stderr: {}", String::from_utf8_lossy(&resp.stderr));
@@ -274,6 +282,7 @@ mod tests {
             env: Default::default(),
             timeout_seconds: 5,
             limits: None,
+            working_dir: String::new(),
         };
         let resp = exec.run(req);
         assert_ne!(resp.exit_code, 0);
@@ -290,6 +299,7 @@ mod tests {
             env: Default::default(),
             timeout_seconds: 5,
             limits: None,
+            working_dir: String::new(),
         };
         let resp = exec.run(req);
         assert_eq!(resp.exit_code, 0);
@@ -311,6 +321,7 @@ mod tests {
             env: Default::default(),
             timeout_seconds: 1,
             limits: None,
+            working_dir: String::new(),
         };
         let resp = exec.run(req);
         assert_eq!(resp.kill_reason, "Timeout", "expected Timeout kill_reason");
@@ -334,6 +345,7 @@ mod tests {
             env: Default::default(),
             timeout_seconds: 5,
             limits: None,
+            working_dir: String::new(),
         };
         let resp = exec.run(req);
         assert_ne!(resp.exit_code, 0);
@@ -350,6 +362,7 @@ mod tests {
             env: Default::default(),
             timeout_seconds: 0,
             limits: None,
+            working_dir: String::new(),
         };
         let resp = exec.run(req);
         assert_eq!(resp.exit_code, 0, "zero-timeout job should still succeed");
@@ -369,6 +382,7 @@ mod tests {
             env,
             timeout_seconds: 5,
             limits: None,
+            working_dir: String::new(),
         };
         let resp = exec.run(req);
         assert_eq!(resp.exit_code, 0);
@@ -387,6 +401,7 @@ mod tests {
             env: Default::default(),
             timeout_seconds: 5,
             limits: None,
+            working_dir: String::new(),
         };
         let resp = exec.run(req);
         assert_eq!(resp.exit_code, 0);
@@ -413,6 +428,46 @@ mod tests {
         }
     }
 
+    /// When `working_dir` is set, the child process must be cd'd into it
+    /// before exec. This mirrors Go's `TestGoRuntime_WorkingDir_CdIntoIt`
+    /// and is load-bearing for artifact staging (internal/staging) on the
+    /// Rust-runtime path.
+    #[test]
+    #[cfg(unix)]
+    fn run_honours_working_dir() {
+        let tmp = std::env::temp_dir().join(format!("helion-rt-wd-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir tmp");
+        // Resolve symlinks up-front (macOS /tmp → /private/tmp) so we can
+        // match whichever form `pwd` prints.
+        let want = std::fs::canonicalize(&tmp)
+            .unwrap_or_else(|_| tmp.clone())
+            .to_string_lossy()
+            .into_owned();
+
+        let exec = Executor::new();
+        let req = RunRequest {
+            job_id: "test-wd".into(),
+            command: "/bin/pwd".into(),
+            args: vec![],
+            env: Default::default(),
+            timeout_seconds: 5,
+            limits: None,
+            working_dir: tmp.to_string_lossy().into_owned(),
+        };
+        let resp = exec.run(req);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert_eq!(resp.exit_code, 0, "stderr: {}", String::from_utf8_lossy(&resp.stderr));
+        let got = String::from_utf8_lossy(&resp.stdout).trim().to_owned();
+        let leaf = tmp.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            got == want || got.ends_with(&leaf),
+            "cwd mismatch: got {:?}, want {:?}",
+            got,
+            want,
+        );
+    }
+
     #[test]
     #[cfg(unix)]
     fn cancel_running_job() {
@@ -427,6 +482,7 @@ mod tests {
                 env: Default::default(),
                 timeout_seconds: 30,
                 limits: None,
+                working_dir: String::new(),
             };
             exec2.run(req)
         });
