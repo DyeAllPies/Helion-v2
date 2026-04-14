@@ -163,6 +163,53 @@ Rate-limited requests are rejected *before* the audit step, so abusive
 traffic doesn't flood the audit log. See
 `internal/api/middleware.go:analyticsQueryAllow`.
 
+### Registry API rate limiting
+
+The `/api/datasets` and `/api/models` endpoints share the same per-subject
+limiter shape. Registry writes are cheap BadgerDB single-key puts, but an
+authenticated user could otherwise flood the audit log or chew through disk
+by registering millions of entries.
+
+| Property | Value |
+|---|---|
+| Rate | 2 requests/sec per JWT subject |
+| Burst | 30 |
+| HTTP status on limit hit | `429 Too Many Requests` |
+| Keyed on | JWT `sub` claim (subject) |
+
+Every mutation (`POST` / `DELETE`) also lands in the audit log with the
+subject as actor, the dataset/model (name, version), and the URI for
+register events. See `internal/api/handlers_registry.go`.
+
+**Registry authorization model (current):** any authenticated user can
+register, read, or delete any entry. There is no per-entry owner check.
+This matches the small-team deployment model of the rest of the API and
+is explicitly called out in the registry handler doc comment. Tightening
+to admin-only delete or owner-only delete is a deliberate future step,
+tracked in `docs/planned-features/10-minimal-ml-pipeline.md`.
+
+**Input validation.** The registry rejects malformed input before any
+disk write:
+
+- `name`, `version` — k8s-shaped (`[a-z0-9._-]`, bounded length).
+- `uri` — scheme allowlist (`file://`, `s3://`). `http(s)://` is
+  rejected so a caller can't wire the registry into an SSRF chain
+  on downstream consumers.
+- `metrics` — `NaN` / `+Inf` / `-Inf` are rejected. JSON can smuggle
+  these via `1e400` which parses as `+Inf`; the validator catches it.
+- `tags` — k8s label bounds (32 entries, 63-char keys, 253-char
+  values, printable-ASCII, no `NUL`).
+- `source_dataset` — partial pointers (name without version or vice
+  versa) are rejected. A lineage pointer is either complete or absent.
+
+The URI existence is *not* checked at register time. A registered
+dataset/model URI may dangle if the underlying artifact is deleted
+out-of-band. This is intentional: the registry is metadata-only, and
+coupling the two would require artifact-store credentials on the
+coordinator. Deletion of a dataset also does not cascade to models
+that reference it — lineage becomes soft. Both are explicit deferrals
+in the feature 10 spec.
+
 **Load test:**
 
 ```bash
