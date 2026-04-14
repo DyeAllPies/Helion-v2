@@ -128,6 +128,28 @@ func NodeRegistered(nodeID, address string) Event {
 	})
 }
 
+// NodeRegisteredWithLabels attaches the node's reported labels to the
+// event payload so the analytics sink (and step-8 dashboard) can
+// answer "which nodes advertise gpu=a100 in our cluster right now?"
+// without re-querying the registry. Labels are copied defensively;
+// subscribers cannot mutate the source map. An empty/nil labels
+// argument produces the same shape as the label-less constructor
+// (no "labels" key) to match historical payloads.
+func NodeRegisteredWithLabels(nodeID, address string, labels map[string]string) Event {
+	data := map[string]any{
+		"node_id": nodeID,
+		"address": address,
+	}
+	if len(labels) > 0 {
+		cp := make(map[string]string, len(labels))
+		for k, v := range labels {
+			cp[k] = v
+		}
+		data["labels"] = cp
+	}
+	return NewEvent(TopicNodeRegistered, data)
+}
+
 // NodeStale creates a node.stale event.
 func NodeStale(nodeID string) Event {
 	return NewEvent(TopicNodeStale, map[string]any{

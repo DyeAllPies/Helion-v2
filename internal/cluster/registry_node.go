@@ -9,6 +9,8 @@ package cluster
 import (
 	"fmt"
 	"regexp"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -112,6 +114,36 @@ func truncateLabelMap(m map[string]string, n int) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// formatLabelsForAudit renders a label map as a stable "k1=v1,k2=v2"
+// string sorted by key. Used in the node.registered audit detail so
+// operators can grep for "labels=...gpu=a100..." in the audit stream.
+// Sorting keeps the output deterministic across runs — important for
+// test assertions and for post-hoc diffing of historical records.
+// Returns "{}" for empty maps so the shape is visually distinct
+// from "labels=" (which could also mean "no labels key in detail").
+func formatLabelsForAudit(m map[string]string) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(m[k])
+	}
+	b.WriteByte('}')
+	return b.String()
 }
 
 // nodeEntry is the in-memory record for one registered node.

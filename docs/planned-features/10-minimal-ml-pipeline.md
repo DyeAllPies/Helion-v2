@@ -923,16 +923,50 @@ Label values are treated as untrusted strings throughout — never
 passed through shell / env-var expansion, only compared with
 `string ==` and rendered in structured log / event fields.
 
-Tests: **18 new**
+Tests: **24 across the slice**
 ([`scheduler_selector_test.go`](../../internal/cluster/scheduler_selector_test.go),
 [`registry_labels_test.go`](../../internal/cluster/registry_labels_test.go),
 [`dispatch_unschedulable_test.go`](../../internal/cluster/dispatch_unschedulable_test.go),
+[`dispatch_debounce_internal_test.go`](../../internal/cluster/dispatch_debounce_internal_test.go),
+[`persistence_labels_test.go`](../../internal/cluster/persistence_labels_test.go),
 [`dag_from_condition_test.go`](../../internal/cluster/dag_from_condition_test.go),
 [`cmd/helion-node/labels_test.go`](../../cmd/helion-node/labels_test.go)).
 Coverage: selector match / no-match / partial-match / empty-selector,
 registry re-registration replacing labels, sanitiser drops for
-bad entries, debounce window, condition-gate DAG rejection,
+bad entries, debounce window + recovery + cleanup on successful
+pick, BadgerDB round-trip of labels + forward-compat with
+pre-label records + omitempty on empty-labels, audit detail
+contains sorted labels, condition-gate DAG rejection,
 `nvidia-smi` stubbed probe.
+
+#### Deliberately not fixed, with rationale
+
+Second-pass audit identified concerns left unaddressed; recorded so
+a future auditor doesn't re-raise:
+
+- **Compromised node advertising false labels.** A malicious node can
+  register with `gpu=a100` on a CPU-only host and win GPU-targeted
+  jobs it cannot run. Defending this needs hardware attestation
+  (TPM / SGX / confidential VMs) — well out of scope for the
+  minimal ML pipeline. The existing mTLS + ML-DSA certificate chain
+  proves "this is node X that we issued a cert for"; it does not
+  prove "this node actually has the hardware it claims." Operator
+  mitigation for now: treat labels as operator-set via
+  `HELION_LABEL_*` env in deployment manifests, not as node-side
+  auto-discovery results. The node's `nvidia-smi` probe is
+  best-effort metadata, not a security-grade claim.
+- **Round-robin policy fairness under selector filtering.** The
+  `RoundRobinPolicy.counter` is global across all `PickForSelector`
+  calls, so a selector-narrowed candidate list inherits the global
+  index. Slightly unfair distribution when many selectors share a
+  single policy instance — defer to the GPU-as-resource slice
+  where per-selector counters make more sense anyway.
+- **Unschedulable event payload doesn't distinguish "no healthy
+  matching node" from "no matching node at all."** The
+  `unsatisfied_selector` field lets operators see *what* didn't
+  match; not *why* (health vs. absence). A richer diagnostic payload
+  helps the dashboard's step-8 pipelines view but isn't load-bearing
+  for step 4.
 
 ### Rust runtime (parity landed)
 

@@ -122,7 +122,7 @@ func (r *Registry) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.R
 	snap := entry.snapshot(r.staleAfter)
 	r.persistNodeAsync(snap)
 	r.appendAuditAsync("node.registered", req.NodeId, req.NodeId,
-		fmt.Sprintf("address=%s new=%v", req.Address, !exists))
+		fmt.Sprintf("address=%s new=%v labels=%s", req.Address, !exists, formatLabelsForAudit(labels)))
 
 	// AUDIT 2026-04-12/H1: issue a coordinator-signed certificate so the node
 	// can present it on its gRPC server. This allows the coordinator to verify
