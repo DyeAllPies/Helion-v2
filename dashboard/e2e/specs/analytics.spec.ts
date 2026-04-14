@@ -48,10 +48,15 @@ test.describe('Analytics Dashboard', () => {
     await expect(inputs).toHaveCount(2);
 
     // Both inputs must be populated with ISO date strings (YYYY-MM-DD).
-    for (let i = 0; i < 2; i++) {
-      const value = await inputs.nth(i).inputValue();
-      expect(value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    }
+    // ngOnInit sets these asynchronously, and after a navigateTo() bounce
+    // the component is re-created, so we retry until both values are set
+    // rather than reading once and hoping the timing lines up.
+    await expect(async () => {
+      for (let i = 0; i < 2; i++) {
+        const value = await inputs.nth(i).inputValue();
+        expect(value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      }
+    }).toPass({ timeout: 5_000, intervals: [200] });
   });
 
   test('default date range is last 7 days', async ({ authedPage: page }) => {
