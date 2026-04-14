@@ -41,6 +41,7 @@ func bindingsToProto(bs []cpb.ArtifactBinding) []*pb.ArtifactBinding {
 			Name:      b.Name,
 			Uri:       b.URI,
 			LocalPath: b.LocalPath,
+			Sha256:    b.SHA256,
 		}
 	}
 	return out

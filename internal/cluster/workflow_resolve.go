@@ -95,15 +95,21 @@ func ResolveJobInputs(job *cpb.Job, jobs JobLookup) (*cpb.Job, error) {
 		if upstream.Status != cpb.JobStatusCompleted {
 			return nil, fmt.Errorf("%w: %s is %s", ErrResolveUpstreamNotCompleted, upstreamID, upstream.Status)
 		}
-		uri := findOutputURI(upstream.ResolvedOutputs, outputName)
-		if uri == "" {
+		found := findResolvedOutput(upstream.ResolvedOutputs, outputName)
+		if found == nil {
 			return nil, fmt.Errorf("%w: %s has no output %q", ErrResolveOutputMissing, upstreamID, outputName)
 		}
-		b.URI = uri
+		b.URI = found.URI
+		// Copy the upstream's committed SHA-256 onto the downstream's
+		// input so the node's stager can verify the download via
+		// artifacts.GetAndVerify. Empty digest means "upstream never
+		// committed one" — rare, but plain-URI inputs also land here
+		// and stay at empty; the stager falls back to a plain Get.
+		b.SHA256 = found.SHA256
 		// Keep the From field: the persisted Job should carry both
 		// so /api/jobs/{id} responses show the lineage. The copy we
-		// dispatch to the node is fine carrying both as well — the
-		// proto builder only looks at Name/URI/LocalPath.
+		// dispatch to the node carries URI + SHA256 + From — the
+		// proto builder forwards URI + SHA256 + LocalPath.
 	}
 	return &out, nil
 }
@@ -119,15 +125,18 @@ func hasAnyFromRef(bs []cpb.ArtifactBinding) bool {
 	return false
 }
 
-// findOutputURI returns the URI from the first ResolvedOutput whose
-// Name matches. Order matters only if a job somehow reported two
-// outputs with the same name, which attestOutputs currently allows
-// — first-wins is the conservative choice.
-func findOutputURI(outs []cpb.ArtifactOutput, name string) string {
-	for _, o := range outs {
-		if o.Name == name {
-			return o.URI
+// findResolvedOutput returns a pointer to the first ResolvedOutput
+// whose Name matches, or nil when no such entry exists. Order matters
+// only if a job somehow reported two outputs with the same name,
+// which attestOutputs currently allows — first-wins is the
+// conservative choice. The caller reads both URI and SHA256 off the
+// returned pointer, so the cross-job integrity attestation (the
+// digest) travels with the URI instead of being re-fetched.
+func findResolvedOutput(outs []cpb.ArtifactOutput, name string) *cpb.ArtifactOutput {
+	for i := range outs {
+		if outs[i].Name == name {
+			return &outs[i]
 		}
 	}
-	return ""
+	return nil
 }

@@ -728,6 +728,41 @@ made it onto the upstream's record in the first place. The
 `jobs/<job_id>/<local_path>` suffix match from step 2 is the gate;
 step 3 just trusts what it previously blessed.
 
+Cross-job integrity attestation
+([`cpb.ArtifactBinding.SHA256`](../../internal/proto/coordinatorpb/types.go) +
+[`artifacts.GetAndVerify`](../../internal/artifacts/store.go)):
+
+The resolver also copies the upstream's committed SHA-256 onto the
+downstream's input. The digest travels over the wire via the new
+`pb.ArtifactBinding.sha256` field and the node's stager routes
+verified downloads through `artifacts.GetAndVerify` — the download
+is read into a capped buffer, hashed, and only written to the
+workdir if the digest matches. Mismatches return
+`artifacts.ErrChecksumMismatch` and the stager rolls back the
+workdir, failing the downstream job.
+
+This is defence-in-depth on top of the hybrid PQ channel
+([`docs/SECURITY.md` §3](../SECURITY.md)): the ML-KEM-768 / X25519
+key exchange already protects the coordinator↔node wire from
+tampering, and the artifact store is typically accessed over TLS.
+The digest check catches three scenarios those layers don't
+directly address:
+
+- **Leaked store credentials.** An attacker who stole S3/MinIO
+  write credentials but cannot reach the coordinator's BadgerDB
+  could swap bytes under a key — the committed SHA on the
+  coordinator record still reflects the original upload, so the
+  downstream detects the swap.
+- **Bit-rot / filesystem corruption** between upload and download.
+- **Store-side MITM** (belt-and-braces over the store's TLS).
+
+The check does **not** address a compromised *upstream node* that
+reports a self-consistent `{URI, SHA}` pair — that stays the primary
+threat model's concern and is handled by `attestOutputs` + node-ID
+cross-check. Plain-URI inputs (no committed digest) fall back to a
+streaming Get so no verification overhead is paid when no digest is
+available to check against.
+
 Tests: **21 new, all passing**
 ([`handlers_jobs_step3_test.go`](../../internal/api/handlers_jobs_step3_test.go),
 [`handlers_workflows_step3_test.go`](../../internal/api/handlers_workflows_step3_test.go),
@@ -789,7 +824,7 @@ Extending the SECURITY.md threat table with ML-specific threats:
 |------|-------------------|---------------------------|---------------------------|
 | 1 — Artifact store | Bulk storage; cross-tenant key collisions | Key sanitisation (NUL, control, `..`, drive letters, length≤1024); URI bucket + scheme pin in `S3Store`; `O_EXCL` on LocalStore; `Lstat` rejections on uploads | §8 REST API security (bounded input) pattern applied at the Store boundary |
 | 2 — Job I/O staging | Node agent downloads + uploads bytes; env var injection | Stager: workdir `0o700` under operator-controlled `HELION_WORK_ROOT`; per-job `O_EXCL` `Mkdir`; `safeJoin` on every path; stager-wins env precedence; staging error → staging.failed path rolls back workdir. Coordinator: `validateReportedOutput` trust boundary on node-attested URIs | §6 Audit logging pattern (every transition audited — extended to staging transitions); stager refusal on `stager == nil` follows §1 fail-closed threat doctrine |
-| 3 — Workflow artifact passing **(done)** | Resolved URIs cross job boundaries | `from: <upstream>.<name>` references resolved against the *coordinator's* `ResolvedOutputs` record (already attested by step 2's `jobs/<job_id>/<local_path>` suffix check), never against the node's proto. DAG validator rejects non-ancestor references (would race the scheduler) and undeclared outputs. Resolver is a pure read of persisted, pre-attested data — a compromised node cannot inject a URI into a downstream job it doesn't own. | §1 threat isolation — trust boundary at the coordinator, not at the wire |
+| 3 — Workflow artifact passing **(done)** | Resolved URIs cross job boundaries | `from: <upstream>.<name>` references resolved against the *coordinator's* `ResolvedOutputs` record (already attested by step 2's `jobs/<job_id>/<local_path>` suffix check), never against the node's proto. DAG validator rejects non-ancestor references (would race the scheduler) and undeclared outputs. Resolver is a pure read of persisted, pre-attested data — a compromised node cannot inject a URI into a downstream job it doesn't own. Upstream's committed SHA-256 travels with each resolved input; the downstream stager runs `artifacts.GetAndVerify` to catch leaked-store-creds tamper, bit rot, and store-side MITM. | §1 threat isolation — trust boundary at the coordinator, not at the wire; §3 defence-in-depth on top of hybrid PQ channel |
 | 4 — Node selectors | Scheduler queries node-reported labels | Labels entered via mTLS-authenticated Register RPC (§2); audit every `node.registered` with label set; admin override requires admin JWT |
 | 5 — GPU as a resource | Device enumeration & isolation | GPU indices derived by node at registration time (via `nvidia-smi`) — same trust level as CPU/memory counts; `CUDA_VISIBLE_DEVICES` set by stager, never by user env (stager-wins precedence applies) |
 | 6 — Dataset + model registries | New write endpoints, artifact uploads | JWT required; per-subject rate limit (mirror `analyticsQueryAllow` shape: 2 rps burst 30 → 429); audit events `dataset.registered`, `dataset.deleted`, `model.registered`, `model.deleted` with actor; `http.MaxBytesReader` cap at 5 GiB (open-question: multipart path); URL-ownership check binds a registered URI to the caller's subject or an owning job-ID prefix |

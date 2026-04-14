@@ -97,7 +97,14 @@ type ArtifactBinding struct {
 	Uri string `protobuf:"bytes,2,opt,name=uri,proto3" json:"uri,omitempty"`
 	// Path relative to the job's working directory. Must stay inside
 	// working_dir; absolute paths and ".." segments are rejected.
-	LocalPath     string `protobuf:"bytes,3,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`
+	LocalPath string `protobuf:"bytes,3,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`
+	// Expected SHA-256 (lower-hex). Populated only on inputs whose URI
+	// was resolved from an upstream's ResolvedOutput — the coordinator
+	// knows the digest at resolve time. Empty on plain-URI inputs where
+	// no digest has been committed. When present, the node's stager
+	// verifies the download against this digest and refuses the job
+	// if the bytes don't match.
+	Sha256        string `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -149,6 +156,13 @@ func (x *ArtifactBinding) GetUri() string {
 func (x *ArtifactBinding) GetLocalPath() string {
 	if x != nil {
 		return x.LocalPath
+	}
+	return ""
+}
+
+func (x *ArtifactBinding) GetSha256() string {
+	if x != nil {
+		return x.Sha256
 	}
 	return ""
 }
@@ -512,12 +526,13 @@ const file_node_proto_rawDesc = "" +
 	"\fmemory_bytes\x18\x01 \x01(\x04R\vmemoryBytes\x12 \n" +
 	"\fcpu_quota_us\x18\x02 \x01(\x04R\n" +
 	"cpuQuotaUs\x12\"\n" +
-	"\rcpu_period_us\x18\x03 \x01(\x04R\vcpuPeriodUs\"V\n" +
+	"\rcpu_period_us\x18\x03 \x01(\x04R\vcpuPeriodUs\"n\n" +
 	"\x0fArtifactBinding\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
 	"\x03uri\x18\x02 \x01(\tR\x03uri\x12\x1d\n" +
 	"\n" +
-	"local_path\x18\x03 \x01(\tR\tlocalPath\"\xb1\x04\n" +
+	"local_path\x18\x03 \x01(\tR\tlocalPath\x12\x16\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"\xb1\x04\n" +
 	"\x0fDispatchRequest\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x12\n" +

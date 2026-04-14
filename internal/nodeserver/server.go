@@ -244,7 +244,7 @@ func jobFromDispatch(req *pb.DispatchRequest) *cpb.Job {
 	job := &cpb.Job{ID: req.JobId, WorkingDir: req.WorkingDir}
 	for _, b := range req.Inputs {
 		job.Inputs = append(job.Inputs, cpb.ArtifactBinding{
-			Name: b.Name, URI: b.Uri, LocalPath: b.LocalPath,
+			Name: b.Name, URI: b.Uri, LocalPath: b.LocalPath, SHA256: b.Sha256,
 		})
 	}
 	for _, b := range req.Outputs {

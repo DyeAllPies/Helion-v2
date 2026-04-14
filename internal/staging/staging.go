@@ -146,7 +146,7 @@ func (s *Stager) Prepare(ctx context.Context, job *cpb.Job) (*Prepared, error) {
 		if err != nil {
 			return rollback(fmt.Errorf("staging: input %s: %w", in.Name, err))
 		}
-		if err := s.download(ctx, artifacts.URI(in.URI), dest); err != nil {
+		if err := s.download(ctx, artifacts.URI(in.URI), in.SHA256, dest); err != nil {
 			return rollback(fmt.Errorf("staging: input %s: %w", in.Name, err))
 		}
 		p.EnvAdditions["HELION_INPUT_"+in.Name] = dest
@@ -301,10 +301,37 @@ func safeJoin(root, rel string) (string, error) {
 // download pulls uri from the store into dest. Enforces
 // MaxInputDownloadBytes with io.LimitReader so a malicious artifact
 // cannot fill the disk. dest's parent directory is created lazily.
-func (s *Stager) download(ctx context.Context, uri artifacts.URI, dest string) error {
+//
+// When expectedSHA256 is non-empty, the download is routed through
+// artifacts.GetAndVerify so the staged bytes are digest-checked
+// before they land. The digest comes from the coordinator's
+// attested ResolvedOutputs record for the upstream — catching
+// store-side tamper, bit rot, and TLS-layer corruption that
+// slipped past the hybrid PQ channel's MAC. A mismatch returns
+// artifacts.ErrChecksumMismatch; the caller fails the job.
+func (s *Stager) download(ctx context.Context, uri artifacts.URI, expectedSHA256, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
+
+	// Verified path: digest known up-front. GetAndVerify reads into
+	// memory (bounded by MaxInputDownloadBytes), checks the hash,
+	// and only then writes the bytes out to disk. The extra
+	// in-memory buffer is the cost of the integrity guarantee —
+	// acceptable given the cap.
+	if expectedSHA256 != "" {
+		buf, err := artifacts.GetAndVerify(ctx, s.store, uri, expectedSHA256, MaxInputDownloadBytes)
+		if err != nil {
+			return fmt.Errorf("verified get: %w", err)
+		}
+		if err := os.WriteFile(dest, buf, 0o600); err != nil {
+			return fmt.Errorf("write verified dest: %w", err)
+		}
+		return nil
+	}
+
+	// Unverified path: no digest committed. Falls back to a streaming
+	// read so huge unverified artifacts don't have to fit in RAM.
 	rc, err := s.store.Get(ctx, uri)
 	if err != nil {
 		return fmt.Errorf("store get: %w", err)

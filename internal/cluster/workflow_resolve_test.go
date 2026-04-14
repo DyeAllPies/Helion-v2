@@ -67,7 +67,11 @@ func TestResolveJobInputs_HappyPath(t *testing.T) {
 		ID:     "wf/preprocess",
 		Status: cpb.JobStatusCompleted,
 		ResolvedOutputs: []cpb.ArtifactOutput{
-			{Name: "TRAIN", URI: "s3://b/jobs/wf/preprocess/out/train.parquet"},
+			{
+				Name:   "TRAIN",
+				URI:    "s3://b/jobs/wf/preprocess/out/train.parquet",
+				SHA256: "abc123deadbeef",
+			},
 		},
 	}
 	downstream := &cpb.Job{
@@ -84,12 +88,18 @@ func TestResolveJobInputs_HappyPath(t *testing.T) {
 	if got.Inputs[0].URI != "s3://b/jobs/wf/preprocess/out/train.parquet" {
 		t.Fatalf("URI not resolved: %q", got.Inputs[0].URI)
 	}
+	// Integrity attestation rides alongside the URI — the downstream
+	// stager uses this digest to verify the download via
+	// artifacts.GetAndVerify. Without it the verified path is a no-op.
+	if got.Inputs[0].SHA256 != "abc123deadbeef" {
+		t.Fatalf("SHA256 not propagated: %q", got.Inputs[0].SHA256)
+	}
 	if got.Inputs[0].From != "preprocess.TRAIN" {
 		t.Fatalf("From should be preserved for lineage: %q", got.Inputs[0].From)
 	}
 	// The original job must not have been mutated (defensive copy).
-	if downstream.Inputs[0].URI != "" {
-		t.Fatalf("original mutated: %q", downstream.Inputs[0].URI)
+	if downstream.Inputs[0].URI != "" || downstream.Inputs[0].SHA256 != "" {
+		t.Fatalf("original mutated: %+v", downstream.Inputs[0])
 	}
 }
 

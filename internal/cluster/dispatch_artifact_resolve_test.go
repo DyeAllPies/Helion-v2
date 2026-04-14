@@ -120,6 +120,13 @@ func TestDispatchLoop_Step3_ResolvesFromRefEndToEnd(t *testing.T) {
 	if got := downstream.Inputs[0].From; got != "preprocess.TRAIN" {
 		t.Fatalf("From lost on persist: %q", got)
 	}
+	// The upstream's committed SHA-256 must travel onto the
+	// downstream's input so the node stager can verify the download
+	// via artifacts.GetAndVerify. Without this the verified-read
+	// path in staging.download is a no-op.
+	if got := downstream.Inputs[0].SHA256; got != "deadbeef" {
+		t.Fatalf("SHA256 not propagated onto downstream: %q", got)
+	}
 }
 
 // TestDispatchLoop_Step3_ResolveFailure_TransitionsToFailed verifies

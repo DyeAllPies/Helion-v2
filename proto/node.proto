@@ -28,6 +28,13 @@ message ArtifactBinding {
   // Path relative to the job's working directory. Must stay inside
   // working_dir; absolute paths and ".." segments are rejected.
   string local_path = 3;
+  // Expected SHA-256 (lower-hex). Populated only on inputs whose URI
+  // was resolved from an upstream's ResolvedOutput — the coordinator
+  // knows the digest at resolve time. Empty on plain-URI inputs where
+  // no digest has been committed. When present, the node's stager
+  // verifies the download against this digest and refuses the job
+  // if the bytes don't match.
+  string sha256     = 4;
 }
 
 message DispatchRequest {

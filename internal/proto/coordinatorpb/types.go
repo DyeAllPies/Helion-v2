@@ -246,7 +246,7 @@ type ArtifactBinding struct {
 	// supply a concrete URI now or a From reference to resolve later.
 	URI string `json:"uri,omitempty"`
 
-	// From is a step-3 workflow-only reference of the form
+	// From is a workflow-only reference of the form
 	// "<upstream_job_name>.<output_name>". The coordinator rewrites
 	// this into a concrete URI at dispatch time, drawing the value
 	// from the upstream job's ResolvedOutputs record. Ignored on
@@ -257,6 +257,16 @@ type ArtifactBinding struct {
 	// absolute or containing ".." segments so it cannot escape the
 	// working directory.
 	LocalPath string `json:"local_path"`
+
+	// SHA256 is the expected lower-hex digest of the resolved input
+	// bytes. Populated by the coordinator at From-resolve time from
+	// the upstream's ResolvedOutput record; empty on plain-URI
+	// inputs where no upstream committed a digest. When present, the
+	// node's stager verifies the download against this digest via
+	// artifacts.GetAndVerify and fails the job on mismatch — catches
+	// store-side tamper, bit rot, and TLS-layer corruption that
+	// slipped past the hybrid PQ channel's MAC.
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 // ── BackoffStrategy ──────────────────────────────────────────────────────────
