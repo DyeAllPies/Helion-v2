@@ -14,7 +14,7 @@ PROTO_FILES := coordinator.proto node.proto runtime.proto
 # affected (developers who want workspace mode keep that option).
 GO_ENV := GOWORK=off
 
-.PHONY: proto build build-rust build-all test test-short lint clean \
+.PHONY: proto build build-rust build-all test test-short test-race lint clean \
         test-dashboard lint-dashboard coverage-go test-all lint-all \
         test-e2e test-e2e-headed test-e2e-ui bench check verify-repo \
         docker-smoke
@@ -40,6 +40,15 @@ test:
 
 test-short:
 	$(GO_ENV) CGO_ENABLED=0 go test -short ./internal/...
+
+# test-race: run the Go test suite with the race detector (-race). The
+# race detector requires CGO / a C compiler, which is often not
+# installed on Windows developer machines. This target wraps
+# `go test -race` in the same golang:1.26 Docker image CI uses, so
+# every developer (regardless of platform) can catch data races before
+# pushing. Mirrors the CI step `go test -race -count=1 ./...`.
+test-race:
+	./scripts/test-race.sh ./internal/... ./tests/integration/...
 
 lint:
 	$(GO_ENV) go vet ./...
@@ -81,24 +90,29 @@ bench:
 
 # ── combined ──────────────────────────────────────────────────────────────────
 
-# check: local pre-push validation (no Docker, no Rust, no E2E).
-# Runs Go lint + tests + coverage, then Angular lint + tests + coverage,
-# plus repo-hygiene guards that catch CI-only failures (missing go.sum
-# entries that the Docker build catches, shell scripts without the exec
-# bit, stale module hashes).
+# check: local pre-push validation.
+#
+# Runs, in order:
+#   - Go lint (vet + golangci-lint)
+#   - Go tests (regular)
+#   - Go tests with -race (inside Docker so Windows devs don't need a C
+#     compiler). This is critical: data races that pass regular tests
+#     will break CI, and that's exactly what happened once before.
+#   - Go coverage gate (internal/ ≥ 85%)
+#   - Angular lint + tests + coverage gate
+#   - Repo hygiene (go.sum verify, shell-script exec bits)
 #
 # Calls ng directly to avoid sub-make path issues on Windows.
 #
-# Angular coverage thresholds are enforced by scripts/check-dashboard-coverage.sh,
-# which parses the generated HTML. The Angular test builder
-# (@angular-devkit/build-angular:karma) ignores karma.conf.js `check:` blocks,
-# so external enforcement is required.
-check: lint test coverage-go verify-repo
+# Angular coverage thresholds are enforced by scripts/check-dashboard-coverage.sh
+# because @angular-devkit/build-angular:karma ignores karma.conf.js
+# `check:` blocks.
+check: lint test test-race coverage-go verify-repo
 	cd dashboard && npx ng lint
 	cd dashboard && npx ng test --watch=false --browsers=ChromeHeadless --code-coverage
 	./scripts/check-dashboard-coverage.sh
 	@echo ""
-	@echo "==> All local checks passed (Go lint + test + coverage, Angular lint + test + coverage, repo hygiene)."
+	@echo "==> All local checks passed (Go lint + test + race + coverage, Angular lint + test + coverage, repo hygiene)."
 
 # verify-repo: `go mod verify` + exec-bit checks on tracked shell
 # scripts. Cheap, part of the default `make check`.

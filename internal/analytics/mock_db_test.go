@@ -8,6 +8,7 @@ package analytics
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -40,8 +41,8 @@ func (m *mockConn) Begin(_ context.Context) (pgx.Tx, error) {
 	if m.beginErr != nil {
 		return nil, m.beginErr
 	}
-	m.tx.committed = false
-	m.tx.rolledBack = false
+	m.tx.committed.Store(false)
+	m.tx.rolledBack.Store(false)
 	return m.tx, nil
 }
 
@@ -65,32 +66,86 @@ func (m *mockConn) Query(ctx context.Context, sql string, args ...any) (pgx.Rows
 // ── mockTx ───────────────────────────────────────────────────────────────
 
 // mockTx implements pgx.Tx by recording Exec calls and commit/rollback state.
+//
+// All fields touched by the tx methods (Commit, Rollback, Exec) are accessed
+// from both the main test goroutine (assertions) and the Sink's background
+// flush goroutine, so they need synchronisation. We use atomic.Bool for the
+// simple flags and a mutex for the exec-call slice. Tests must use the
+// accessor methods (Committed(), RolledBack(), ExecCalls(), ExecCall(i))
+// rather than reading the fields directly — direct access is a data race.
 type mockTx struct {
-	conn       *mockConn
-	committed  bool
-	rolledBack bool
-	execErr    error // injected error for a specific Exec call
-	execCalls  []execCall
+	conn    *mockConn
+	execErr atomic.Value // nil or error, injected Exec failure
+
+	committed  atomic.Bool
+	rolledBack atomic.Bool
+
+	execMu    sync.Mutex
+	execCalls []execCall
 }
+
+// Committed reports whether Commit was called since the last reset (Begin).
+func (t *mockTx) Committed() bool { return t.committed.Load() }
+
+// RolledBack reports whether Rollback was called since the last reset.
+func (t *mockTx) RolledBack() bool { return t.rolledBack.Load() }
+
+// ExecCalls returns a defensive copy of the recorded Exec calls.
+func (t *mockTx) ExecCalls() []execCall {
+	t.execMu.Lock()
+	defer t.execMu.Unlock()
+	out := make([]execCall, len(t.execCalls))
+	copy(out, t.execCalls)
+	return out
+}
+
+// ExecCall returns the i-th recorded Exec call.
+func (t *mockTx) ExecCall(i int) execCall {
+	t.execMu.Lock()
+	defer t.execMu.Unlock()
+	return t.execCalls[i]
+}
+
+// ExecCallCount returns how many Exec calls have been recorded.
+func (t *mockTx) ExecCallCount() int {
+	t.execMu.Lock()
+	defer t.execMu.Unlock()
+	return len(t.execCalls)
+}
+
+// setExecErr injects an error for future Exec calls. Nil to clear.
+func (t *mockTx) setExecErr(err error) {
+	if err == nil {
+		t.execErr.Store((*mockErr)(nil))
+		return
+	}
+	t.execErr.Store(&mockErr{err: err})
+}
+
+// mockErr boxes an error so atomic.Value's strict-type rule is satisfied
+// (atomic.Value panics if you call Store with differently-typed values).
+type mockErr struct{ err error }
 
 func (t *mockTx) Begin(_ context.Context) (pgx.Tx, error) {
 	return t, nil
 }
 
 func (t *mockTx) Commit(_ context.Context) error {
-	t.committed = true
+	t.committed.Store(true)
 	return nil
 }
 
 func (t *mockTx) Rollback(_ context.Context) error {
-	t.rolledBack = true
+	t.rolledBack.Store(true)
 	return nil
 }
 
 func (t *mockTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	t.execMu.Lock()
 	t.execCalls = append(t.execCalls, execCall{SQL: sql, Args: args})
-	if t.execErr != nil {
-		return pgconn.NewCommandTag(""), t.execErr
+	t.execMu.Unlock()
+	if boxed, ok := t.execErr.Load().(*mockErr); ok && boxed != nil && boxed.err != nil {
+		return pgconn.NewCommandTag(""), boxed.err
 	}
 	return pgconn.NewCommandTag("OK 1"), nil
 }

@@ -84,13 +84,13 @@ func TestMigrate_BeginTxError(t *testing.T) {
 
 func TestMigrate_ExecError_RollsBack(t *testing.T) {
 	mc := newMockConn()
-	mc.tx.execErr = fmt.Errorf("syntax error")
+	mc.tx.setExecErr(fmt.Errorf("syntax error"))
 
 	_, err := Migrate(context.Background(), mc, testLogger())
 	if err == nil {
 		t.Fatal("expected error from migration exec")
 	}
-	if !mc.tx.rolledBack {
+	if !mc.tx.RolledBack() {
 		t.Error("transaction should have been rolled back")
 	}
 }
@@ -140,7 +140,7 @@ func TestRollback_RollsBackHighestVersion(t *testing.T) {
 	if version != maxV {
 		t.Errorf("rolled back version %d, want %d", version, maxV)
 	}
-	if !mc.tx.committed {
+	if !mc.tx.Committed() {
 		t.Error("rollback transaction should have been committed")
 	}
 }
@@ -153,13 +153,13 @@ func TestRollback_ExecError_RollsBack(t *testing.T) {
 		}
 		return &emptyRows{}, nil
 	}
-	mc.tx.execErr = fmt.Errorf("drop failed")
+	mc.tx.setExecErr(fmt.Errorf("drop failed"))
 
 	_, err := Rollback(context.Background(), mc, testLogger())
 	if err == nil {
 		t.Fatal("expected error from rollback exec")
 	}
-	if !mc.tx.rolledBack {
+	if !mc.tx.RolledBack() {
 		t.Error("transaction should have been rolled back")
 	}
 }
@@ -232,7 +232,7 @@ func TestBackfill_WithMockDB_InsertsEvents(t *testing.T) {
 	if n != 2 {
 		t.Errorf("inserted = %d, want 2", n)
 	}
-	if !mc.tx.committed {
+	if !mc.tx.Committed() {
 		t.Error("backfill should commit the transaction")
 	}
 }

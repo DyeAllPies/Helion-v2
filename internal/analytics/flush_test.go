@@ -26,7 +26,7 @@ func TestFlush_CommitsTransaction(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	if !mc.tx.committed {
+	if !mc.tx.Committed() {
 		t.Error("transaction was not committed")
 	}
 }
@@ -47,14 +47,14 @@ func TestFlush_BeginError_Returns(t *testing.T) {
 
 func TestFlush_InsertError_RollsBack(t *testing.T) {
 	mc := newMockConn()
-	mc.tx.execErr = fmt.Errorf("insert failed")
+	mc.tx.setExecErr(fmt.Errorf("insert failed"))
 	s := &Sink{conn: mc, log: testLogger()}
 
 	err := s.flush(context.Background(), []events.Event{events.JobSubmitted("j1", "echo", 50)})
 	if err == nil {
 		t.Fatal("expected error from insert failure")
 	}
-	if !mc.tx.rolledBack {
+	if !mc.tx.RolledBack() {
 		t.Error("transaction was not rolled back on insert error")
 	}
 }
@@ -68,7 +68,7 @@ func TestFlush_EmptyBatch_Commits(t *testing.T) {
 	}
 	// Even an empty batch opens+commits a transaction (insert is a no-op,
 	// upsertSummaries loops over nothing).
-	if !mc.tx.committed {
+	if !mc.tx.Committed() {
 		t.Error("empty batch should still commit the transaction")
 	}
 }
@@ -89,11 +89,11 @@ func TestInsertEvents_BuildsMultiRowSQL(t *testing.T) {
 		t.Fatalf("insertEvents: %v", err)
 	}
 
-	if len(tx.execCalls) != 1 {
-		t.Fatalf("expected 1 exec call, got %d", len(tx.execCalls))
+	if tx.ExecCallCount() != 1 {
+		t.Fatalf("expected 1 exec call, got %d", tx.ExecCallCount())
 	}
 
-	sql := tx.execCalls[0].SQL
+	sql := tx.ExecCall(0).SQL
 	if !strings.Contains(sql, "INSERT INTO events") {
 		t.Error("SQL should contain INSERT INTO events")
 	}
@@ -101,8 +101,8 @@ func TestInsertEvents_BuildsMultiRowSQL(t *testing.T) {
 		t.Error("SQL should contain ON CONFLICT clause")
 	}
 	// 2 rows × 7 params = 14 args
-	if len(tx.execCalls[0].Args) != 14 {
-		t.Errorf("expected 14 args, got %d", len(tx.execCalls[0].Args))
+	if len(tx.ExecCall(0).Args) != 14 {
+		t.Errorf("expected 14 args, got %d", len(tx.ExecCall(0).Args))
 	}
 }
 
@@ -114,7 +114,7 @@ func TestInsertEvents_EmptyBatch_NoExec(t *testing.T) {
 	if err := s.insertEvents(context.Background(), tx, nil); err != nil {
 		t.Fatalf("insertEvents empty: %v", err)
 	}
-	if len(tx.execCalls) != 0 {
+	if tx.ExecCallCount() != 0 {
 		t.Error("empty batch should not exec")
 	}
 }
@@ -147,9 +147,9 @@ func TestUpsertSummaries_RoutesAllEventTypes(t *testing.T) {
 	// job.failed (no node_id in standard constructor → no node incr),
 	// job.retrying, node.registered, node.stale, node.revoked = 9.
 	// workflow.completed and workflow.failed are no-ops in upsertSummaries.
-	if len(tx.execCalls) != 9 {
-		t.Errorf("expected 9 exec calls, got %d", len(tx.execCalls))
-		for i, c := range tx.execCalls {
+	if tx.ExecCallCount() != 9 {
+		t.Errorf("expected 9 exec calls, got %d", tx.ExecCallCount())
+		for i, c := range tx.ExecCalls() {
 			t.Logf("  [%d] %s", i, c.SQL[:min(80, len(c.SQL))])
 		}
 	}
@@ -167,15 +167,15 @@ func TestUpsertJobSubmitted_InsertsWithCorrectArgs(t *testing.T) {
 		t.Fatalf("upsertJobSubmitted: %v", err)
 	}
 
-	if len(tx.execCalls) != 1 {
-		t.Fatalf("expected 1 exec, got %d", len(tx.execCalls))
+	if tx.ExecCallCount() != 1 {
+		t.Fatalf("expected 1 exec, got %d", tx.ExecCallCount())
 	}
-	if !strings.Contains(tx.execCalls[0].SQL, "job_summary") {
+	if !strings.Contains(tx.ExecCall(0).SQL, "job_summary") {
 		t.Error("should target job_summary table")
 	}
 	// args: job_id, command, priority, timestamp
-	if tx.execCalls[0].Args[0] != "j1" {
-		t.Errorf("job_id = %v, want j1", tx.execCalls[0].Args[0])
+	if tx.ExecCall(0).Args[0] != "j1" {
+		t.Errorf("job_id = %v, want j1", tx.ExecCall(0).Args[0])
 	}
 }
 
@@ -188,7 +188,7 @@ func TestUpsertJobSubmitted_EmptyJobID_Skips(t *testing.T) {
 	if err := s.upsertJobSubmitted(context.Background(), tx, evt); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(tx.execCalls) != 0 {
+	if tx.ExecCallCount() != 0 {
 		t.Error("should skip when job_id is empty")
 	}
 }
@@ -203,10 +203,10 @@ func TestUpsertJobTransition_Running_SetsStartedAt(t *testing.T) {
 		t.Fatalf("upsertJobTransition: %v", err)
 	}
 
-	if len(tx.execCalls) != 1 {
-		t.Fatalf("expected 1 exec, got %d", len(tx.execCalls))
+	if tx.ExecCallCount() != 1 {
+		t.Fatalf("expected 1 exec, got %d", tx.ExecCallCount())
 	}
-	if !strings.Contains(tx.execCalls[0].SQL, "started_at") {
+	if !strings.Contains(tx.ExecCall(0).SQL, "started_at") {
 		t.Error("running transition should SET started_at")
 	}
 }
@@ -221,10 +221,10 @@ func TestUpsertJobTransition_NonRunning(t *testing.T) {
 		t.Fatalf("upsertJobTransition: %v", err)
 	}
 
-	if len(tx.execCalls) != 1 {
-		t.Fatalf("expected 1 exec, got %d", len(tx.execCalls))
+	if tx.ExecCallCount() != 1 {
+		t.Fatalf("expected 1 exec, got %d", tx.ExecCallCount())
 	}
-	if strings.Contains(tx.execCalls[0].SQL, "started_at") {
+	if strings.Contains(tx.ExecCall(0).SQL, "started_at") {
 		t.Error("non-running transition should NOT set started_at")
 	}
 }
@@ -240,13 +240,13 @@ func TestUpsertJobCompleted_IncrementsNodeCounter(t *testing.T) {
 	}
 
 	// Should have 2 exec calls: job_summary upsert + node_summary increment.
-	if len(tx.execCalls) != 2 {
-		t.Fatalf("expected 2 exec calls, got %d", len(tx.execCalls))
+	if tx.ExecCallCount() != 2 {
+		t.Fatalf("expected 2 exec calls, got %d", tx.ExecCallCount())
 	}
-	if !strings.Contains(tx.execCalls[1].SQL, "node_summary") {
+	if !strings.Contains(tx.ExecCall(1).SQL, "node_summary") {
 		t.Error("second exec should update node_summary")
 	}
-	if !strings.Contains(tx.execCalls[1].SQL, "jobs_completed") {
+	if !strings.Contains(tx.ExecCall(1).SQL, "jobs_completed") {
 		t.Error("should increment jobs_completed")
 	}
 }
@@ -269,10 +269,10 @@ func TestUpsertJobFailed_IncrementsNodeCounter(t *testing.T) {
 		t.Fatalf("upsertJobFailed: %v", err)
 	}
 
-	if len(tx.execCalls) != 2 {
-		t.Fatalf("expected 2 exec calls, got %d", len(tx.execCalls))
+	if tx.ExecCallCount() != 2 {
+		t.Fatalf("expected 2 exec calls, got %d", tx.ExecCallCount())
 	}
-	if !strings.Contains(tx.execCalls[1].SQL, "jobs_failed") {
+	if !strings.Contains(tx.ExecCall(1).SQL, "jobs_failed") {
 		t.Error("should increment jobs_failed on node_summary")
 	}
 }
@@ -287,8 +287,8 @@ func TestUpsertJobRetrying(t *testing.T) {
 		t.Fatalf("upsertJobRetrying: %v", err)
 	}
 
-	if len(tx.execCalls) != 1 {
-		t.Fatalf("expected 1 exec, got %d", len(tx.execCalls))
+	if tx.ExecCallCount() != 1 {
+		t.Fatalf("expected 1 exec, got %d", tx.ExecCallCount())
 	}
 }
 
@@ -302,10 +302,10 @@ func TestUpsertNodeRegistered(t *testing.T) {
 		t.Fatalf("upsertNodeRegistered: %v", err)
 	}
 
-	if len(tx.execCalls) != 1 {
-		t.Fatalf("expected 1 exec, got %d", len(tx.execCalls))
+	if tx.ExecCallCount() != 1 {
+		t.Fatalf("expected 1 exec, got %d", tx.ExecCallCount())
 	}
-	if !strings.Contains(tx.execCalls[0].SQL, "node_summary") {
+	if !strings.Contains(tx.ExecCall(0).SQL, "node_summary") {
 		t.Error("should target node_summary")
 	}
 }
@@ -320,10 +320,10 @@ func TestUpsertNodeStale(t *testing.T) {
 		t.Fatalf("upsertNodeStale: %v", err)
 	}
 
-	if len(tx.execCalls) != 1 {
-		t.Fatalf("expected 1 exec, got %d", len(tx.execCalls))
+	if tx.ExecCallCount() != 1 {
+		t.Fatalf("expected 1 exec, got %d", tx.ExecCallCount())
 	}
-	if !strings.Contains(tx.execCalls[0].SQL, "times_stale") {
+	if !strings.Contains(tx.ExecCall(0).SQL, "times_stale") {
 		t.Error("should increment times_stale")
 	}
 }
@@ -338,10 +338,10 @@ func TestUpsertNodeRevoked(t *testing.T) {
 		t.Fatalf("upsertNodeRevoked: %v", err)
 	}
 
-	if len(tx.execCalls) != 1 {
-		t.Fatalf("expected 1 exec, got %d", len(tx.execCalls))
+	if tx.ExecCallCount() != 1 {
+		t.Fatalf("expected 1 exec, got %d", tx.ExecCallCount())
 	}
-	if !strings.Contains(tx.execCalls[0].SQL, "times_revoked") {
+	if !strings.Contains(tx.ExecCall(0).SQL, "times_revoked") {
 		t.Error("should increment times_revoked")
 	}
 }
@@ -368,7 +368,7 @@ func TestSink_BatchFlush_TriggersOnBatchSize(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// The tx should have been committed (flush happened).
-	if !mc.tx.committed {
+	if !mc.tx.Committed() {
 		t.Error("expected flush to commit after batch size reached")
 	}
 
@@ -393,7 +393,7 @@ func TestSink_TimedFlush_TriggersOnInterval(t *testing.T) {
 	// Wait for timed flush.
 	time.Sleep(400 * time.Millisecond)
 
-	if !mc.tx.committed {
+	if !mc.tx.Committed() {
 		t.Error("expected timed flush to commit")
 	}
 
@@ -419,7 +419,7 @@ func TestSink_Stop_FlushesRemaining(t *testing.T) {
 	cancel()
 	s.Stop()
 
-	if !mc.tx.committed {
+	if !mc.tx.Committed() {
 		t.Error("Stop() should flush remaining events")
 	}
 }
