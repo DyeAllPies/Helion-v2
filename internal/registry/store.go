@@ -32,6 +32,10 @@ type DatasetStore interface {
 	GetDataset(name, version string) (*Dataset, error)
 	ListDatasets(ctx context.Context, page, size int) ([]*Dataset, int, error)
 	DeleteDataset(ctx context.Context, name, version string) error
+	// CountDatasets returns the number of registered dataset entries.
+	// Backs helion_datasets_total. Kept on the interface so a fake
+	// test store can satisfy the metrics path without a full scan.
+	CountDatasets(ctx context.Context) (int, error)
 }
 
 // ModelStore is the equivalent surface for models. Separate from
@@ -45,6 +49,9 @@ type ModelStore interface {
 	LatestModel(name string) (*Model, error)
 	ListModels(ctx context.Context, page, size int) ([]*Model, int, error)
 	DeleteModel(ctx context.Context, name, version string) error
+	// CountModels returns the number of registered model entries.
+	// Backs helion_models_total.
+	CountModels(ctx context.Context) (int, error)
 }
 
 // Store is the union interface the REST handler depends on — it

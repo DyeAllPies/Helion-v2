@@ -201,6 +201,38 @@ Proper mitigation needs hardware attestation — TPM quotes, Intel SGX / TDX, AM
 
 **Why deferred:** All four attestation paths add heavy dependencies and meaningful per-deployment setup. None of them is universally available — bare-metal clusters, mixed clouds, and ARM dev boxes don't all have the same attestation surface. Shipping minimal ML support should not block on choosing one. The operator mitigation in the interim is to set labels via deployment env (`HELION_LABEL_*`) from a trusted control plane (k8s Deployment, Nomad job spec, systemd unit), treating the node-agent's `nvidia-smi` auto-probe as best-effort metadata for friendly clusters only.
 
+### Registry lineage enforcement
+
+*From the 2026-04-14 audit (M3, M4) — see [`../../audits/2026-04-14.md`](../../audits/2026-04-14.md).*
+
+Step 6 of the ML pipeline introduced a dataset + model registry where a model carries `source_job_id` and `source_dataset` fields that point back to the training job and its inputs. Today those pointers are **soft**: the registry does not validate `source_job_id` against the JobStore at register time, and deleting a dataset does not detect or cascade to models that reference it. A model can end up with a `source_dataset` pointing at a name+version that no longer resolves.
+
+Tightening this has three shapes, each with a real cost:
+
+1. **Reject-on-reference delete** — full model-prefix scan per dataset delete; blocks legitimate retention / GDPR deletes.
+2. **Cascade delete** — silently removes downstream artifacts that may be in production serving paths. Dangerous default.
+3. **Dangle detection on read** — materialise the lineage join at `GET /api/models/...` time; changes response shape + couples registry read-path to dataset store.
+
+Similarly, validating `source_job_id` at register time would require the registry package to import the JobStore (collapsing the current clean separation) and is race-prone against job GC.
+
+**Why deferred:** the explicit step-6 design treats lineage as a historical audit trail, not a foreign-key constraint. The spec is internally consistent and the failure mode is cosmetic (broken UI link at worst). Revisit when either (a) a deployment reports that broken lineage confused an operator in practice, or (b) the ML pipeline grows a "model delete" UX that would benefit from automatic dependent-model cleanup. If (b) lands first, (1) becomes the natural fix shape; if (a) lands first, (3) is the lower-risk path.
+
+### Registry indexed listing
+
+*From the 2026-04-14 audit (L1) — see [`../../audits/2026-04-14.md`](../../audits/2026-04-14.md).*
+
+`ListDatasets` / `ListModels` currently full-scan the prefix, JSON-decode every entry, sort by `CreatedAt`, and slice to the requested page. Cost is O(n) in total registered entries per list call regardless of page size.
+
+**Why deferred:** the handler is behind the registry rate limiter (2/s per subject, burst 30) and even at 100k entries the scan is sub-50 ms with BadgerDB's LSM layout. The fix — either a secondary `CreatedAt` index or cursor-based pagination — is a meaningful scope increase that earns nothing at current traffic. Revisit if a real operator reports registry size past the 10k mark, or if the dashboard's ML module (step 8) starts driving a lot of parallel list requests.
+
+### Registry integration test through a real coordinator
+
+*From the 2026-04-14 audit (L3) — see [`../../audits/2026-04-14.md`](../../audits/2026-04-14.md).*
+
+`internal/api/handlers_registry_test.go` exercises the handlers through the ServeMux in a single process with an in-memory BadgerDB. There is no test under `tests/integration/` that spins up the coordinator binary with mTLS + a real registered dataset end-to-end.
+
+**Why deferred:** the existing `tests/integration` harness is shaped around gRPC node registration and workflow dispatch. Registry is HTTP-only, and the handler tests already exercise the full validator / rate-limit / audit / event-emission chain within a single process. A new integration shape for this surface is boilerplate-heavy and would mostly catch wiring regressions in `cmd/helion-coordinator/main.go`. If a wiring regression ever lands it will also be caught by the step-10 iris example, which drives the registry end-to-end as part of its own acceptance test.
+
 ---
 
 ## Implementation priority (suggested)
@@ -223,3 +255,6 @@ Proper mitigation needs hardware attestation — TPM quotes, Intel SGX / TDX, AM
 | Alerting / Grafana templates | Low | Low | P3 — users own their stack |
 | Node label hardware attestation | High | High | P3 — needs TPM/SGX/SEV-SNP integration, deployment-specific |
 | In-use resource tracking (CPU/mem/GPU) | Medium | Medium | P2 — runtime fail-fast keeps things correct, but oversubscription wastes a dispatch RPC per attempt |
+| Registry lineage enforcement (M3/M4, 2026-04-14) | Medium | Low | P3 — lineage is spec'd as soft; revisit when a deployment reports broken-link confusion or a model-delete UX needs cascade |
+| Registry indexed listing (L1, 2026-04-14) | Medium | Low | P3 — rate limiter + LSM scan keeps current size bands safe; revisit past 10k entries |
+| Registry integration test (L3, 2026-04-14) | Low | Low | P3 — handler tests cover end-to-end; step-10 iris example will drive real-coordinator path |

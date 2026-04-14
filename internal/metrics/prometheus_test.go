@@ -130,7 +130,7 @@ func TestNewRegistry_ReturnsRegistryAndHandler(t *testing.T) {
 	jobs := &mockJobCounter{byStatus: map[string]int{}, total: 0}
 	nodes := &mockNodeCounter{}
 
-	reg, handler := metrics.NewRegistry(jobs, nodes, nil)
+	reg, handler := metrics.NewRegistry(jobs, nodes, nil, nil)
 	if reg == nil {
 		t.Fatal("expected non-nil registry")
 	}
@@ -139,11 +139,59 @@ func TestNewRegistry_ReturnsRegistryAndHandler(t *testing.T) {
 	}
 }
 
+// mockRegistryCounter is the minimal RegistryCounter for scrape tests.
+type mockRegistryCounter struct {
+	datasets int
+	models   int
+	err      error
+}
+
+func (m *mockRegistryCounter) CountDatasets(_ context.Context) (int, error) {
+	return m.datasets, m.err
+}
+func (m *mockRegistryCounter) CountModels(_ context.Context) (int, error) {
+	return m.models, m.err
+}
+
+func TestNewRegistry_RegistryGauges_Emitted(t *testing.T) {
+	jobs := &mockJobCounter{byStatus: map[string]int{}, total: 0}
+	nodes := &mockNodeCounter{}
+	rc := &mockRegistryCounter{datasets: 3, models: 7}
+
+	_, handler := metrics.NewRegistry(jobs, nodes, nil, rc)
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+	if !strings.Contains(body, "helion_datasets_total 3") {
+		t.Errorf("expected helion_datasets_total 3, body: %s", body)
+	}
+	if !strings.Contains(body, "helion_models_total 7") {
+		t.Errorf("expected helion_models_total 7, body: %s", body)
+	}
+}
+
+func TestNewRegistry_RegistryGauges_OmittedWhenNilCounter(t *testing.T) {
+	jobs := &mockJobCounter{byStatus: map[string]int{}, total: 0}
+	nodes := &mockNodeCounter{}
+
+	_, handler := metrics.NewRegistry(jobs, nodes, nil, nil)
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+	if strings.Contains(body, "helion_datasets_total") {
+		t.Errorf("expected no registry gauges when counter is nil, body: %s", body)
+	}
+}
+
 func TestNewRegistry_Handler_Returns200(t *testing.T) {
 	jobs := &mockJobCounter{byStatus: map[string]int{}, total: 0}
 	nodes := &mockNodeCounter{}
 
-	_, handler := metrics.NewRegistry(jobs, nodes, nil)
+	_, handler := metrics.NewRegistry(jobs, nodes, nil, nil)
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rr := httptest.NewRecorder()

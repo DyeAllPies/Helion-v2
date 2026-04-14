@@ -130,6 +130,35 @@ func (s *BadgerStore) DeleteDataset(_ context.Context, name, version string) err
 	})
 }
 
+// CountDatasets walks the dataset prefix in key-only mode so the count
+// doesn't pay the JSON-decode cost. O(n) in the number of registered
+// datasets but cheap — BadgerDB prefix iteration with fetchValues=false
+// is essentially an LSM-level key scan.
+func (s *BadgerStore) CountDatasets(_ context.Context) (int, error) {
+	return s.countPrefix([]byte(datasetKeyPrefix))
+}
+
+// CountModels is the model-side counterpart to CountDatasets.
+func (s *BadgerStore) CountModels(_ context.Context) (int, error) {
+	return s.countPrefix([]byte(modelKeyPrefix))
+}
+
+func (s *BadgerStore) countPrefix(prefix []byte) (int, error) {
+	n := 0
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = prefix
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			n++
+		}
+		return nil
+	})
+	return n, err
+}
+
 func (s *BadgerStore) loadAllDatasets() ([]*Dataset, error) {
 	var out []*Dataset
 	prefix := []byte(datasetKeyPrefix)

@@ -309,19 +309,22 @@ func main() {
 	nodeRegistry := api.NewRegistryNodeAdapter(registry)
 	metricsProvider := api.NewRegistryMetricsAdapter(registry, jobs)
 
+	// Dataset + model registry rides the coordinator's existing
+	// BadgerDB under its own key prefix — metadata is small + low
+	// traffic, and a separate DB would be operational overhead for
+	// no isolation benefit. Built up-front so the Prometheus collector
+	// can pull entry counts on scrape.
+	registryStore := registrypkg.NewBadgerStore(persister.DB())
+
 	// ── Prometheus metrics ────────────────────────────────────────────────────
-	_, promHandler := metrics.NewRegistry(jobs, registry, jobsAdapter)
+	_, promHandler := metrics.NewRegistry(jobs, registry, jobsAdapter, registryStore)
 
 	readiness := &coordinatorReadiness{db: persister, reg: registry}
 	apiSrv := api.NewServer(jobsAdapter, nodeRegistry, metricsProvider, auditLogger, tokenManager, rateLimiter, readiness, promHandler)
 	apiSrv.SetWorkflowStore(workflows, jobs)
 	apiSrv.SetLogStore(logStore)
 	apiSrv.SetEventBus(eventBus)
-	// Dataset + model registry rides the coordinator's existing
-	// BadgerDB under its own key prefix — metadata is small + low
-	// traffic, and a separate DB would be operational overhead for
-	// no isolation benefit.
-	apiSrv.SetRegistryStore(registrypkg.NewBadgerStore(persister.DB()))
+	apiSrv.SetRegistryStore(registryStore)
 
 	// ── Analytics pipeline (opt-in) ──────────────────────────────────────
 	// Set HELION_ANALYTICS_DSN to a PostgreSQL connection string to enable
