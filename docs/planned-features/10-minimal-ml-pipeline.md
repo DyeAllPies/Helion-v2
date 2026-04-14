@@ -1109,6 +1109,35 @@ level (not through the runtime), no further Rust-side work is required
 for step-2 artifact handling — Rust-backed nodes with a stager
 configured stage artifacts correctly end-to-end.
 
+**Step-5 GPU parity, Go-side only.** The GPU allocator and
+`CUDA_VISIBLE_DEVICES` injection live entirely in
+[`internal/runtime/rust_client.go`](../../internal/runtime/rust_client.go):
+`RustClient.Run` claims device indices from a shared `GPUAllocator`
+*before* any IPC frame is built and stamps
+`CUDA_VISIBLE_DEVICES=<csv>` into `req.Env`. The Rust executor
+inherits the env unchanged — no `proto/runtime.proto` changes, no
+`runtime-rust/src/executor.rs` changes. CUDA-aware libraries inside
+the spawned subprocess see the standard env var regardless of which
+runtime Helion used to launch them.
+
+Why that's the right boundary: the Rust binary's job is process
+isolation (cgroup v2 limits, seccomp-bpf). GPU device pinning is
+universally a CUDA-runtime concern via the env var, not a kernel-
+isolation concern; pulling it into the Rust executor would have
+duplicated the allocator state, doubled the test surface, and
+required a Rust-side proto regeneration on every future allocator
+tweak. Doing it Go-side keeps the IPC schema stable and concentrates
+the "node owns N GPUs, allocates indices to jobs" logic in one
+place that both backends share via composition.
+
+Tests
+([`rust_client_gpu_test.go`](../../internal/runtime/rust_client_gpu_test.go),
+5 new): mock Rust server captures the encoded RunRequest payload
+and we assert `CUDA_VISIBLE_DEVICES` is present + correct on GPU
+jobs / absent on CPU jobs / oversubscription fails before IPC /
+no-capacity allocator fails before IPC / device claims released
+across back-to-back runs.
+
 ---
 
 ## Security plan

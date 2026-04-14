@@ -85,8 +85,15 @@ func loadNodeConfig(hostname string) nodeConfig {
 func selectRuntime(backend, socket string, totalGPUs uint32, log *slog.Logger) runtime.Runtime {
 	switch backend {
 	case "rust":
-		log.Info("using Rust runtime", slog.String("socket", socket))
-		return runtime.NewRustClient(socket)
+		log.Info("using Rust runtime",
+			slog.String("socket", socket),
+			slog.Uint64("total_gpus", uint64(totalGPUs)))
+		// GPU allocation lives Go-side: the RustClient claims
+		// device indices before IPC and stamps CUDA_VISIBLE_DEVICES
+		// into req.Env. The Rust executor inherits the env
+		// unchanged — no Rust-side wire schema or codepath
+		// changes needed.
+		return runtime.NewRustClientWithGPUs(socket, totalGPUs)
 	default:
 		log.Info("using Go runtime",
 			slog.Uint64("total_gpus", uint64(totalGPUs)))

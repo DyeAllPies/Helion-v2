@@ -19,17 +19,81 @@ import (
 // RustClient implements Runtime by delegating to the Rust runtime process.
 type RustClient struct {
 	socketPath string
+
+	// gpus is the per-node GPU device-index allocator. Allocation
+	// happens Go-side *before* the IPC frame is built; the chosen
+	// indices are appended to req.Env as CUDA_VISIBLE_DEVICES, which
+	// the Rust executor inherits unchanged. This keeps the Rust
+	// binary's wire schema and codepaths untouched while still
+	// giving GPU jobs the same per-device pinning the Go runtime
+	// provides — the env var is the universal CUDA isolation
+	// mechanism, recognised by every CUDA-aware library inside the
+	// subprocess regardless of which runtime spawned it.
+	//
+	// nil means "GPU scheduling disabled on this node" — a job with
+	// req.GPUs > 0 fails fast in Run rather than silently running
+	// without isolation.
+	gpus *GPUAllocator
 }
 
-// NewRustClient returns a RustClient pointing at socketPath.
-// The Rust helion-runtime binary must already be listening on that path.
+// NewRustClient returns a RustClient pointing at socketPath with GPU
+// scheduling disabled. The Rust helion-runtime binary must already
+// be listening on that path.
 func NewRustClient(socketPath string) *RustClient {
-	return &RustClient{socketPath: socketPath}
+	return NewRustClientWithGPUs(socketPath, 0)
+}
+
+// NewRustClientWithGPUs returns a RustClient wired to a GPU allocator
+// sized for totalGPUs whole devices. Pass 0 for CPU-only nodes (the
+// allocator is still installed but rejects any request > 0 devices,
+// matching the scheduler's filterByGPU contract). The Rust executor
+// receives the allocated indices via CUDA_VISIBLE_DEVICES on its
+// subprocess env — no Rust-side changes are required.
+func NewRustClientWithGPUs(socketPath string, totalGPUs uint32) *RustClient {
+	return &RustClient{
+		socketPath: socketPath,
+		gpus:       NewGPUAllocator(totalGPUs),
+	}
 }
 
 // Run sends a RunRequest to the Rust runtime and blocks until the job
 // completes or ctx is cancelled.
 func (c *RustClient) Run(ctx context.Context, req RunRequest) (RunResult, error) {
+	// Claim GPU device indices before any IPC so a contention
+	// failure short-circuits the dispatch the same way it would on
+	// the Go runtime. The chosen indices are stamped into req.Env;
+	// the Rust executor inherits the env unchanged, so the
+	// subprocess sees the standard CUDA_VISIBLE_DEVICES regardless
+	// of which runtime spawned it.
+	if req.GPUs > 0 {
+		if c.gpus == nil {
+			return RunResult{
+				ExitCode: -1,
+				Error:    "gpu: rust client has no allocator (node reported 0 GPUs)",
+			}, nil
+		}
+		indices, err := c.gpus.Allocate(req.JobID, req.GPUs)
+		if err != nil {
+			return RunResult{
+				ExitCode: -1,
+				Error:    "gpu: " + err.Error(),
+			}, nil
+		}
+		// Defensive copy of the env so we don't mutate the caller's
+		// map (the nodeserver's mergeEnv result is shared with the
+		// rest of the dispatch path).
+		env := make(map[string]string, len(req.Env)+1)
+		for k, v := range req.Env {
+			env[k] = v
+		}
+		env["CUDA_VISIBLE_DEVICES"] = VisibleDevicesEnv(indices)
+		req.Env = env
+		// Release on every exit path — IPC error, runtime error,
+		// successful completion, ctx cancel — same release-on-defer
+		// invariant the Go runtime upholds.
+		defer c.gpus.Release(req.JobID)
+	}
+
 	conn, err := net.Dial("unix", c.socketPath)
 	if err != nil {
 		return RunResult{}, fmt.Errorf("runtime socket: %w", err)
