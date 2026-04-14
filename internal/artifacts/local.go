@@ -43,7 +43,14 @@ func NewLocalStore(dir string) (*LocalStore, error) {
 		return nil, fmt.Errorf("artifacts: resolve root: %w", err)
 	}
 	abs = filepath.Clean(abs)
-	if err := os.MkdirAll(abs, 0o755); err != nil {
+	// 0o700: the artifact root may hold model checkpoints, training
+	// data, and the full set of job IDs on the host. World-readable
+	// permissions would leak that metadata to any unprivileged user
+	// on a shared machine. File contents inside the tree are written
+	// with os.CreateTemp (0o600 by default) so the files themselves
+	// were already owner-only — tightening the directory mode closes
+	// the enumeration gap.
+	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("artifacts: create root: %w", err)
 	}
 	return &LocalStore{root: abs}, nil
@@ -63,7 +70,7 @@ func (s *LocalStore) Put(ctx context.Context, key string, r io.Reader, size int6
 		return "", err
 	}
 	full := filepath.Join(s.root, rel)
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 		return "", fmt.Errorf("artifacts: mkdir: %w", err)
 	}
 

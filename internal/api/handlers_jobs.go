@@ -242,8 +242,10 @@ func validateArtifactBindings(kind string, bs []ArtifactBindingRequest, requireU
 		if len(b.URI) > maxArtifactURILen {
 			return fmt.Sprintf("%s[%d].uri must not exceed %d bytes", kind, i, maxArtifactURILen)
 		}
-		if strings.ContainsRune(b.URI, '\x00') {
-			return fmt.Sprintf("%s[%d].uri must not contain NUL", kind, i)
+		for j := 0; j < len(b.URI); j++ {
+			if c := b.URI[j]; c == 0 || c < 0x20 || c == 0x7f {
+				return fmt.Sprintf("%s[%d].uri must not contain NUL or control bytes", kind, i)
+			}
 		}
 		if requireURI && b.URI == "" {
 			return fmt.Sprintf("%s[%d].uri is required", kind, i)
@@ -251,8 +253,24 @@ func validateArtifactBindings(kind string, bs []ArtifactBindingRequest, requireU
 		if !requireURI && b.URI != "" {
 			return fmt.Sprintf("%s[%d].uri must be empty on submit (assigned by runtime)", kind, i)
 		}
+		// Input URIs are dereferenced by the node's stager: the
+		// command line to attach an attacker's malware to a training
+		// job is a Put + a submit pointing at `http://attacker/x`.
+		// Lock the scheme to what the configured artifact Store
+		// understands — everything else is rejected here, long before
+		// the node gets involved.
+		if requireURI && !isAllowedArtifactScheme(b.URI) {
+			return fmt.Sprintf("%s[%d].uri scheme must be file:// or s3://", kind, i)
+		}
 	}
 	return ""
+}
+
+// isAllowedArtifactScheme returns true iff uri starts with one of the
+// schemes the artifact Store understands. Kept separate from the URL
+// parser: we only need a prefix match and want no allocation.
+func isAllowedArtifactScheme(uri string) bool {
+	return strings.HasPrefix(uri, "file://") || strings.HasPrefix(uri, "s3://")
 }
 
 func firstDuplicateBindingName(bs []ArtifactBindingRequest) string {

@@ -140,6 +140,59 @@ func TestValidateSubmitRequest_NULInURI(t *testing.T) {
 	}
 }
 
+// Input URIs are dereferenced by the node's stager — locking the
+// scheme at submit time prevents a caller from weaponising a
+// downloaded-then-executed workload (e.g. "http://attacker/malware")
+// before the node ever sees it.
+func TestValidateSubmitRequest_InputURISchemeRestricted(t *testing.T) {
+	bad := []string{
+		"http://evil/x",
+		"https://evil/x",
+		"ftp://x",
+		"javascript:alert(1)",
+		"data:text/plain,x",
+		"gs://bucket/x",
+		"/absolute/path",
+		"bucket/key",
+	}
+	for _, u := range bad {
+		req := baseReq()
+		req.Inputs = []ArtifactBindingRequest{{Name: "X", URI: u, LocalPath: "a"}}
+		msg := validateSubmitRequest(req)
+		if !strings.Contains(msg, "scheme must be file:// or s3://") {
+			t.Errorf("URI %q: expected scheme rejection, got %q", u, msg)
+		}
+	}
+}
+
+func TestValidateSubmitRequest_InputURISchemeAccepts(t *testing.T) {
+	ok := []string{
+		"s3://bucket/key",
+		"file:///var/lib/helion/artifacts/a",
+	}
+	for _, u := range ok {
+		req := baseReq()
+		req.Inputs = []ArtifactBindingRequest{{Name: "X", URI: u, LocalPath: "a"}}
+		if msg := validateSubmitRequest(req); msg != "" {
+			t.Errorf("URI %q: unexpectedly rejected: %s", u, msg)
+		}
+	}
+}
+
+func TestValidateSubmitRequest_InputURIControlBytes(t *testing.T) {
+	// Tabs / newlines in URIs can confuse log parsers and S3 signing.
+	// Rejected alongside NUL.
+	bad := []string{"s3://b/has\nnewline", "s3://b/has\ttab", "s3://b/has\x01byte"}
+	for _, u := range bad {
+		req := baseReq()
+		req.Inputs = []ArtifactBindingRequest{{Name: "X", URI: u, LocalPath: "a"}}
+		msg := validateSubmitRequest(req)
+		if !strings.Contains(msg, "control bytes") && !strings.Contains(msg, "NUL") {
+			t.Errorf("URI %q: expected control/NUL rejection, got %q", u, msg)
+		}
+	}
+}
+
 // ── working_dir ──────────────────────────────────────────────────────────
 
 func TestValidateSubmitRequest_WorkingDir(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 
@@ -149,12 +150,36 @@ func (s *Server) ReportResult(
 		return nil, status.Errorf(codes.NotFound, "job not found: %v", err)
 	}
 
+	// A job's NodeID is pinned when the coordinator dispatches it. A
+	// node reporting a result for a job that was dispatched to a
+	// *different* node is either racing (very rare — dispatch loop is
+	// single-threaded per job) or malicious (compromised node
+	// attempting to poison another node's job with forged outputs).
+	// Reject either way; the legitimate node will retry on its next
+	// heartbeat if the job really was reassigned.
+	if job.NodeID != "" && result.NodeId != "" && job.NodeID != result.NodeId {
+		s.log.Warn("ReportResult node_id mismatch — rejecting",
+			slog.String("job_id", result.JobId),
+			slog.String("dispatched_to", job.NodeID),
+			slog.String("reported_by", result.NodeId),
+		)
+		if s.audit != nil {
+			// Security-violation channel so this surfaces on the
+			// same SIEM/alert path as Seccomp / OOMKilled.
+			if aerr := s.audit.LogSecurityViolation(ctx, result.NodeId, result.JobId, "node_id_mismatch"); aerr != nil {
+				s.log.Warn("audit node_id mismatch failed", slog.Any("err", aerr))
+			}
+		}
+		return nil, status.Errorf(codes.PermissionDenied,
+			"job %s was dispatched to a different node", result.JobId)
+	}
+
 	// Prepare transition options
 	var opts cluster.TransitionOptions
 	opts.NodeID = result.NodeId
 	opts.ExitCode = result.ExitCode
 	opts.Runtime = result.Runtime
-	opts.ResolvedOutputs = s.outputsFromProto(result.JobId, result.NodeId, result.Outputs)
+	opts.ResolvedOutputs = s.attestOutputs(result.JobId, result.NodeId, result.Outputs)
 
 	// If job is in dispatching state, transition to running first
 	// (required by the state machine: dispatching → running → completed)
@@ -238,17 +263,22 @@ var allowedOutputSchemes = map[string]struct{}{
 	"s3":   {},
 }
 
-// outputsFromProto lifts pb.ArtifactOutput slices (sent by the node
-// after a successful stager-finalize) onto the coordinator-internal
-// cpb.ArtifactOutput form that persists on the Job record.
+// attestOutputs is the coordinator's trust boundary for node-attested
+// artifact metadata. Reported entries are validated — shape, scheme,
+// and per-job key-prefix — and silently dropped if they violate any
+// rule. The coordinator logs each drop so operators can notice a
+// misbehaving (or compromised) node without failing the job's
+// terminal transition — the process still ran, only its declared
+// outputs are untrustworthy.
 //
-// The function is the trust boundary for node-attested artifact
-// metadata: reported entries are validated and silently dropped if
-// they violate shape or scheme rules. The coordinator logs each drop
-// so operators can notice a misbehaving (or compromised) node without
-// failing the job's terminal transition — the process still ran,
-// only its declared outputs are untrustworthy.
-func (s *Server) outputsFromProto(jobID, nodeID string, src []*pb.ArtifactOutput) []cpb.ArtifactOutput {
+// Prefix attestation is the key rule for the ML threat model: the
+// stager always writes outputs under `jobs/<job_id>/<local_path>`, so
+// any reported URI whose path lacks a `/jobs/<job_id>/` segment must
+// have been fabricated by the node. Without this check a compromised
+// node could report `s3://bucket/jobs/<other-job-id>/<stolen>` and
+// step-3 workflow resolution would happily pipe another job's output
+// (or a path entirely outside the jobs/ tree) into a downstream job.
+func (s *Server) attestOutputs(jobID, nodeID string, src []*pb.ArtifactOutput) []cpb.ArtifactOutput {
 	if len(src) == 0 {
 		return nil
 	}
@@ -274,6 +304,22 @@ func (s *Server) outputsFromProto(jobID, nodeID string, src []*pb.ArtifactOutput
 				slog.String("reason", reason))
 			continue
 		}
+		if !uriBelongsToJob(o.Uri, jobID, o.LocalPath) {
+			s.log.Warn("dropping reported output with mismatched job prefix",
+				slog.String("job_id", jobID),
+				slog.String("node_id", nodeID),
+				slog.String("name", o.Name),
+				slog.String("uri", o.Uri))
+			if s.audit != nil {
+				// Prefix mismatch is either a bug or a node trying to
+				// register someone else's artifact as its own output.
+				// Either way it's security-violation-worthy.
+				if aerr := s.audit.LogSecurityViolation(context.Background(), nodeID, jobID, "output_prefix_mismatch"); aerr != nil {
+					s.log.Warn("audit prefix mismatch failed", slog.Any("err", aerr))
+				}
+			}
+			continue
+		}
 		out = append(out, cpb.ArtifactOutput{
 			Name:      o.Name,
 			URI:       o.Uri,
@@ -283,6 +329,22 @@ func (s *Server) outputsFromProto(jobID, nodeID string, src []*pb.ArtifactOutput
 		})
 	}
 	return out
+}
+
+// uriBelongsToJob returns true iff the reported URI ends with the
+// exact key the stager would have minted for (jobID, localPath) — the
+// invariant `jobs/<job_id>/<local_path>` enforced in
+// internal/staging.Stager.upload. localPath has already passed the
+// submit-time validator (no "..", no absolute path, no NUL), so a
+// suffix match is a rigorous attestation: any URI pointing somewhere
+// else — another job's key space, a path outside the store, a host
+// scheme the coordinator never issued — fails here.
+func uriBelongsToJob(uri, jobID, localPath string) bool {
+	if jobID == "" || localPath == "" {
+		return false
+	}
+	suffix := "/jobs/" + jobID + "/" + localPath
+	return strings.HasSuffix(uri, suffix)
 }
 
 // outputsFromProto is the package-level convenience used by tests that

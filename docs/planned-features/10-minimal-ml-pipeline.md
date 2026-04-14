@@ -515,7 +515,10 @@ Security matrix applied in this step:
 | Absolute `local_path` tricks on Windows | Reject `/`, `\`, drive-letter prefix |
 | Submit-bomb via huge binding list | 64-per-direction cap |
 | Unconfigured nodes running ML jobs blind | Refuse dispatch when `stager == nil` |
-| **Compromised node reporting forged output URIs** | Coordinator-side `validateReportedOutput` in `grpcserver.handlers`: scheme pinned to `{file, s3}`, name regex `[A-Z_][A-Z0-9_]*`, URI length ≤2048, NUL/control rejected, count cap 64. Invalid entries dropped + warning-logged; the job still terminates because the process did run — only its declared outputs are untrustworthy. |
+| **Compromised node reporting forged output URIs** | Coordinator-side `attestOutputs` in `grpcserver.handlers`: scheme pinned to `{file, s3}`, name regex `[A-Z_][A-Z0-9_]*`, URI length ≤2048, NUL/control rejected, count cap 64. **Plus a strict suffix match** against `jobs/<job_id>/<local_path>` — since `local_path` is validated at submit time (no `..`, no absolute, no NUL), a URI that doesn't end with the exact stager-minted key was fabricated. Prefix-mismatch drops emit a `security_violation` audit event. |
+| **Compromised node reporting a result for a different node's job** | `ReportResult` cross-checks `result.NodeId` against `job.NodeID` (pinned at dispatch). Mismatch → `PermissionDenied` + `security_violation` audit. The legitimate node's job record is never mutated. |
+| **Attacker-controlled input URIs at submit time** | API validator `isAllowedArtifactScheme`: input URIs must start with `file://` or `s3://`. Rejects `http://`, `https://`, `ftp://`, `data:`, `javascript:`, `gs://`, absolute paths, relative paths, and anything else — long before the node's stager would dereference them. |
+| **Enumeration of artifact tree on a shared host** | `LocalStore` root + per-job subdirs created mode `0o700`; files inside remain `0o600` (default from `os.CreateTemp`). Owner-only end-to-end. |
 
 **Terminal-event plumbing (closed):** The node's stager-finalized
 output URIs now flow into `pb.JobResult.outputs`, through the
