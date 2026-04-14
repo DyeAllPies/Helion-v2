@@ -88,52 +88,88 @@ var (
 	ErrChecksumMismatch = errors.New("artifacts: sha256 mismatch")
 )
 
+// GetAndVerifyTo streams the artifact at uri into dst, computing a
+// rolling SHA-256 as each chunk passes through. On EOF the digest is
+// compared to expectedHex (case-insensitive); a mismatch returns
+// ErrChecksumMismatch. The number of bytes written is returned in
+// both the success and mismatch cases — callers are expected to
+// truncate / unlink dst on ErrChecksumMismatch (the stager uses a
+// tempfile → rename pattern so a partial write never becomes
+// visible as a finalised input).
+//
+// Memory use is O(chunkSize) — the 64 KiB copy buffer from io.Copy,
+// not the whole object. This is the primary reader for multi-GB ML
+// artifacts where the older all-in-memory GetAndVerify would OOM.
+//
+// maxBytes bounds the object size. Zero means "no caller cap" (the
+// Store's own backend caps still apply). A positive value returns
+// an error if the backend produces more bytes than expected — +1 in
+// the LimitedReader so an object exactly at the cap still produces
+// an "oversize" error, not a silent truncation.
+func GetAndVerifyTo(ctx context.Context, s Store, uri URI, expectedHex string, maxBytes int64, dst io.Writer) (int64, error) {
+	if expectedHex == "" {
+		return 0, errors.New("artifacts: GetAndVerifyTo requires expected sha256")
+	}
+	rc, err := s.Get(ctx, uri)
+	if err != nil {
+		return 0, err
+	}
+	defer rc.Close()
+
+	var src io.Reader = rc
+	var limit *io.LimitedReader
+	if maxBytes > 0 {
+		limit = &io.LimitedReader{R: rc, N: maxBytes + 1}
+		src = limit
+	}
+	h := sha256.New()
+	// TeeReader pipes every chunk io.Copy pulls from src into h, so
+	// the hash is computed as part of the stream — no second pass
+	// over the bytes, no buffering.
+	tee := io.TeeReader(src, h)
+	n, err := io.Copy(dst, tee)
+	if err != nil {
+		return n, fmt.Errorf("artifacts: GetAndVerifyTo copy: %w", err)
+	}
+	// LimitedReader stops at maxBytes+1, so if we managed to write
+	// more than maxBytes bytes the source was oversize.
+	if maxBytes > 0 && n > maxBytes {
+		return n, fmt.Errorf("artifacts: GetAndVerifyTo size > %d", maxBytes)
+	}
+	if !equalFoldHex(hex.EncodeToString(h.Sum(nil)), expectedHex) {
+		return n, ErrChecksumMismatch
+	}
+	return n, nil
+}
+
 // GetAndVerify reads the artifact at uri and returns its bytes only
 // if their SHA-256 matches expectedHex (case-insensitive lower-hex).
 // Mismatches return ErrChecksumMismatch and nil bytes so callers
 // cannot accidentally use corrupted data.
 //
-// Use this helper on any read where the digest is known in advance:
-// registered models looked up via the step-6 registry, workflow inputs
-// resolved from an upstream job's ResolvedOutputs (SHA-256 was recorded
-// when the node uploaded). Bare Get is appropriate when the caller has
-// no digest to compare against.
-//
-// maxBytes bounds the response size. Pass 0 for "no caller cap" (the
-// Store's own backend caps still apply); a positive value truncates
-// the verified-read at that size and returns an error if the backend
-// produces more bytes than expected.
+// Convenience wrapper around GetAndVerifyTo for small artifacts
+// where holding the bytes in memory is acceptable. For multi-GB
+// downloads, use GetAndVerifyTo with a file or tempfile writer to
+// avoid OOM. maxBytes bounds the response size; pass 0 for unlimited.
 func GetAndVerify(ctx context.Context, s Store, uri URI, expectedHex string, maxBytes int64) ([]byte, error) {
-	if expectedHex == "" {
-		return nil, errors.New("artifacts: GetAndVerify requires expected sha256")
-	}
-	rc, err := s.Get(ctx, uri)
+	var buf bytesBuffer
+	_, err := GetAndVerifyTo(ctx, s, uri, expectedHex, maxBytes, &buf)
 	if err != nil {
 		return nil, err
 	}
-	defer rc.Close()
-
-	var r io.Reader = rc
-	if maxBytes > 0 {
-		// +1 so an object exactly at the cap still produces an
-		// "oversize" error, not a silent truncation.
-		r = &io.LimitedReader{R: rc, N: maxBytes + 1}
-	}
-	h := sha256.New()
-	tee := io.TeeReader(r, h)
-	buf, err := io.ReadAll(tee)
-	if err != nil {
-		return nil, fmt.Errorf("artifacts: GetAndVerify read: %w", err)
-	}
-	if maxBytes > 0 && int64(len(buf)) > maxBytes {
-		return nil, fmt.Errorf("artifacts: GetAndVerify size > %d", maxBytes)
-	}
-	got := hex.EncodeToString(h.Sum(nil))
-	if !equalFoldHex(got, expectedHex) {
-		return nil, ErrChecksumMismatch
-	}
-	return buf, nil
+	return buf.Bytes(), nil
 }
+
+// bytesBuffer avoids pulling in bytes.Buffer just for this one call
+// path — keeps the import list minimal and the allocation pattern
+// clear (one grow cycle per digest-known read).
+type bytesBuffer struct{ b []byte }
+
+func (w *bytesBuffer) Write(p []byte) (int, error) {
+	w.b = append(w.b, p...)
+	return len(p), nil
+}
+func (w *bytesBuffer) Bytes() []byte { return w.b }
 
 // equalFoldHex is a hex-only case-insensitive compare. Hex.EncodeToString
 // produces lower case, so this is mostly defensive against callers who

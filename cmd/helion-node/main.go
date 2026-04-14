@@ -206,6 +206,19 @@ func main() {
 		cancel()
 		keep := os.Getenv("HELION_KEEP_WORKDIR") == "1"
 		stager = staging.NewStager(store, os.Getenv("HELION_WORK_ROOT"), keep, log)
+		// Reap anything the previous node-agent lifetime left behind.
+		// HELION_KEEP_WORKDIR=1 disables the sweep too (same opt-in
+		// switch operators already know for live cleanup).
+		if !keep {
+			if removed, serr := stager.SweepStaleWorkdirs(staging.DefaultSweepAge); serr != nil {
+				log.Warn("workdir sweep errors",
+					slog.Int("removed", removed), slog.Any("err", serr))
+			} else if removed > 0 {
+				log.Info("workdir sweep",
+					slog.Int("removed", removed),
+					slog.Duration("older_than", staging.DefaultSweepAge))
+			}
+		}
 		log.Info("artifact stager enabled",
 			slog.String("backend", os.Getenv("HELION_ARTIFACTS_BACKEND")))
 	}

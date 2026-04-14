@@ -488,12 +488,15 @@ Follow-ups landed on top of the initial step 1:
   `HELION_ARTIFACTS_BACKEND`). A misconfigured deployment (typo'd
   bucket, bad creds, unreachable endpoint, missing write permission)
   fails loud here rather than silently at the first job.
-- **`GetAndVerify(ctx, store, uri, expectedSHA256, maxBytes)`** —
-  read helper that returns bytes only if their SHA-256 matches the
-  caller-supplied digest. Step 3's workflow resolver and step 6's
-  registry both read URIs whose digests are known in advance; using
-  `GetAndVerify` there means a corrupted / swapped backend object is
-  detected before it reaches a downstream job.
+- **`GetAndVerify(ctx, store, uri, expectedSHA256, maxBytes)`** +
+  **`GetAndVerifyTo(ctx, store, uri, expectedSHA256, maxBytes, io.Writer)`** —
+  paired readers that return (or stream) bytes only if their
+  SHA-256 matches the caller-supplied digest. `GetAndVerifyTo` is
+  the primary reader for multi-GB ML artifacts: every chunk flows
+  through a TeeReader so memory use is O(64 KiB) regardless of
+  object size, avoiding the OOM that the older all-in-memory
+  helper would cause on large models. `GetAndVerify` is now a thin
+  wrapper for small digest-known callers.
 - **Docker Compose `minio` + `minio-bootstrap` services** under
   the `ml` profile. `docker compose --profile ml up` now ships a
   ready-to-use S3-compatible endpoint with the `helion` bucket
@@ -773,6 +776,36 @@ URI/From mutual exclusivity, DAG unknown-upstream / non-ancestor /
 unknown-output / malformed-shape rejection, resolver happy path +
 upstream-missing / not-completed / output-missing / nil-job /
 non-workflow-job / mixed-URI-and-From / multi-From round-trips.
+
+### Staging follow-ups
+
+Landed on top of the initial step-2 implementation after a second-pass
+audit identified two gaps that would have surfaced under production
+ML workloads:
+
+- **Streaming verified download
+  ([`staging.Stager.download`](../../internal/staging/staging.go)).**
+  The verified path used to call `GetAndVerify` (in-memory) then
+  `WriteFile` — a 5 GiB checkpoint would have OOM'd the node. Now
+  it opens a `.helion-stage-*.tmp` in the destination's parent dir,
+  streams the download through `GetAndVerifyTo` while the hash is
+  accumulated in-flight, fsyncs, and only renames onto the final
+  path on verification success. A mismatch removes the tempfile
+  before returning so no partial bytes ever appear at the staged
+  path; workdir-level rollback in `Prepare` catches anything this
+  misses.
+- **Stale workdir sweep
+  ([`staging.Stager.SweepStaleWorkdirs`](../../internal/staging/sweep.go)).**
+  If the node agent dies between `Prepare` and `Finalize` (OOM,
+  SIGKILL, host reboot), the per-job workdir previously stayed on
+  disk forever — long-running nodes accumulated orphans. The new
+  sweep walks `HELION_WORK_ROOT` and removes entries whose mtime
+  predates a configurable threshold (default 1 hour). Invoked once
+  from [`cmd/helion-node/main.go`](../../cmd/helion-node/main.go)
+  at node startup, skipped when `HELION_KEEP_WORKDIR=1`. Safe to
+  run concurrent with live traffic — active Prepare/Finalize cycles
+  keep workdir mtimes fresh, so only truly orphaned trees get
+  reaped.
 
 ### Rust runtime (parity landed)
 

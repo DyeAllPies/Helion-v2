@@ -314,19 +314,47 @@ func (s *Stager) download(ctx context.Context, uri artifacts.URI, expectedSHA256
 		return fmt.Errorf("mkdir: %w", err)
 	}
 
-	// Verified path: digest known up-front. GetAndVerify reads into
-	// memory (bounded by MaxInputDownloadBytes), checks the hash,
-	// and only then writes the bytes out to disk. The extra
-	// in-memory buffer is the cost of the integrity guarantee —
-	// acceptable given the cap.
+	// Verified path: digest known up-front. GetAndVerifyTo streams
+	// each chunk straight to a tempfile while the hash is computed
+	// in line — memory use is O(64 KiB) regardless of artifact size,
+	// so multi-GB ML checkpoints don't OOM the node. On mismatch the
+	// tempfile is removed so no partial bytes ever become visible
+	// under the final path; workdir-level rollback in Prepare
+	// catches anything the cleanup here misses.
 	if expectedSHA256 != "" {
-		buf, err := artifacts.GetAndVerify(ctx, s.store, uri, expectedSHA256, MaxInputDownloadBytes)
+		tmp, err := os.CreateTemp(filepath.Dir(dest), ".helion-stage-*.tmp")
 		if err != nil {
-			return fmt.Errorf("verified get: %w", err)
+			return fmt.Errorf("create stage tempfile: %w", err)
 		}
-		if err := os.WriteFile(dest, buf, 0o600); err != nil {
-			return fmt.Errorf("write verified dest: %w", err)
+		tmpPath := tmp.Name()
+		// Ensure the tempfile is *always* gone when we return, unless
+		// we explicitly Rename it into place below.
+		keepTmp := false
+		defer func() {
+			if !keepTmp {
+				_ = tmp.Close()
+				_ = os.Remove(tmpPath)
+			}
+		}()
+		// Tighten perms: CreateTemp lands at 0o600 on POSIX by
+		// default; making it explicit here so a future Go change
+		// can't silently widen the mode.
+		if err := tmp.Chmod(0o600); err != nil {
+			return fmt.Errorf("chmod stage tempfile: %w", err)
 		}
+		if _, err := artifacts.GetAndVerifyTo(ctx, s.store, uri, expectedSHA256, MaxInputDownloadBytes, tmp); err != nil {
+			return fmt.Errorf("verified stream: %w", err)
+		}
+		if err := tmp.Sync(); err != nil {
+			return fmt.Errorf("fsync stage tempfile: %w", err)
+		}
+		if err := tmp.Close(); err != nil {
+			return fmt.Errorf("close stage tempfile: %w", err)
+		}
+		if err := os.Rename(tmpPath, dest); err != nil {
+			return fmt.Errorf("rename stage tempfile: %w", err)
+		}
+		keepTmp = true // rename succeeded — don't delete it
 		return nil
 	}
 
