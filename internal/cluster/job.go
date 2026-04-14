@@ -96,8 +96,15 @@ type JobPersister interface {
 
 // allowedTransitions lists the valid (from → to) pairs for normal transitions.
 // The "lost" terminal is applied directly by MarkLost and bypasses this table.
+//
+// Pending → Failed exists for pre-dispatch validation failures where no
+// node was ever picked and no RPC flew — workflow-level artifact
+// resolution failures are the primary case. Because the coordinator
+// never handed the job to a node, the grpcserver.ReportResult path
+// (which is what triggers retry via RetryIfEligible) never fires for
+// these jobs, so Pending → Failed is *terminal*: the failure sticks.
 var allowedTransitions = map[cpb.JobStatus][]cpb.JobStatus{
-	cpb.JobStatusPending:     {cpb.JobStatusScheduled, cpb.JobStatusDispatching, cpb.JobStatusCancelled, cpb.JobStatusSkipped},
+	cpb.JobStatusPending:     {cpb.JobStatusScheduled, cpb.JobStatusDispatching, cpb.JobStatusCancelled, cpb.JobStatusSkipped, cpb.JobStatusFailed},
 	cpb.JobStatusScheduled:   {cpb.JobStatusDispatching, cpb.JobStatusCancelled, cpb.JobStatusPending},
 	cpb.JobStatusDispatching: {cpb.JobStatusRunning, cpb.JobStatusFailed},
 	cpb.JobStatusRunning:     {cpb.JobStatusCompleted, cpb.JobStatusFailed, cpb.JobStatusTimeout, cpb.JobStatusCancelled},

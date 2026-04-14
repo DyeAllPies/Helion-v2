@@ -621,6 +621,50 @@ the input side: a workflow job's binding can declare
 `from: "<upstream_name>.<output_name>"` instead of a concrete URI,
 and the coordinator rewrites the reference at dispatch time.
 
+A minimal end-to-end workflow that uses every step-3 primitive:
+
+```yaml
+id: iris-pipeline
+name: iris ml pipeline
+jobs:
+  - name: preprocess
+    command: python
+    args: ["/app/preprocess.py"]
+    outputs:
+      - name: TRAIN_PARQUET
+        local_path: out/train.parquet
+      - name: VAL_PARQUET
+        local_path: out/val.parquet
+
+  - name: train
+    command: python
+    args: ["/app/train.py"]
+    depends_on: [preprocess]
+    inputs:
+      - name: TRAIN_DATA
+        from: preprocess.TRAIN_PARQUET
+        local_path: in/train.parquet
+      - name: VAL_DATA
+        from: preprocess.VAL_PARQUET
+        local_path: in/val.parquet
+    outputs:
+      - name: MODEL
+        local_path: out/model.pt
+      - name: METRICS
+        local_path: out/metrics.json
+```
+
+At submit time the DAG validator checks that every `from:` resolves
+to an ancestor job declaring a matching output. At dispatch time, by
+the moment `train` becomes eligible, `preprocess` has completed and
+its `ResolvedOutputs` carries real URIs (`s3://bucket/jobs/iris-pipeline/preprocess/out/train.parquet`
+and similar). The resolver rewrites each `from:` into the
+corresponding URI, persists the rewrite onto the Job record, and
+sends the now-concrete `Inputs` to the node. The node's stager
+downloads each one into `in/…` and exports
+`HELION_INPUT_TRAIN_DATA` / `HELION_INPUT_VAL_DATA` for the python
+process to read.
+
 Data model:
 
 - [`cpb.ArtifactBinding`](../../internal/proto/coordinatorpb/types.go)
