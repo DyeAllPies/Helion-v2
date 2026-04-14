@@ -160,9 +160,18 @@ func (r *GoRuntime) Run(ctx context.Context, req RunRequest) (RunResult, error) 
 		}
 	}()
 
-	cmd := exec.CommandContext(jctx, req.Command, req.Args...)
+	// Build the subprocess env via a map first so a user-supplied
+	// entry cannot shadow an allocator-set value through OS env
+	// precedence (which is platform-dependent: POSIX says
+	// first-set wins, Windows says last-set wins). Since the GPU
+	// allocator's CUDA_VISIBLE_DEVICES is the security boundary
+	// for per-job device pinning, we want unambiguous "ours wins"
+	// semantics regardless of platform — a malicious or confused
+	// caller setting their own CUDA_VISIBLE_DEVICES must not
+	// escape the allocator's assignment.
+	env := make(map[string]string, len(req.Env)+1)
 	for k, v := range req.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+		env[k] = v
 	}
 	// Expose the allocated GPU indices to the subprocess via the
 	// CUDA runtime convention. Empty indices (non-GPU job) means we
@@ -171,9 +180,15 @@ func (r *GoRuntime) Run(ctx context.Context, req RunRequest) (RunResult, error) 
 	// process could see, which is the right default for CPU jobs
 	// but causes a startup error for accidental GPU code paths. The
 	// allocator only hands out indices for req.GPUs > 0, so this
-	// branch is strictly the GPU-job path.
+	// assignment is strictly the GPU-job path. Map assignment is
+	// the only place that override semantics lives — see the
+	// security note above.
 	if len(gpuIndices) > 0 {
-		cmd.Env = append(cmd.Env, "CUDA_VISIBLE_DEVICES="+VisibleDevicesEnv(gpuIndices))
+		env["CUDA_VISIBLE_DEVICES"] = VisibleDevicesEnv(gpuIndices)
+	}
+	cmd := exec.CommandContext(jctx, req.Command, req.Args...)
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	// When the staging layer has prepared a per-job working directory,
 	// cd into it before exec. Empty means "inherit the node agent's cwd"

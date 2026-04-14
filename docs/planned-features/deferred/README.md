@@ -176,6 +176,23 @@ JSON dashboard templates for Grafana showing job throughput, node health, queue 
 
 ## ML Pipeline (from feature 10)
 
+### Coordinator-side in-use resource tracking (CPU, memory, GPU)
+
+The scheduler's [`ResourceAwarePolicy`](../../../internal/cluster/policy_resource.go) already uses node-reported total CPU / memory / slots / GPUs as bin-packing dimensions, but it does **not** subtract resources currently claimed by jobs that have already been dispatched to a node. The `running_jobs` count is used as a coarse proxy ("each job uses DefaultResourceRequest().CpuMillicores"), which works because the existing CPU/memory tracking is itself coarse — but the proxy breaks down for GPUs, where each whole-device claim is exact and the coordinator should know what's free per node.
+
+**Today's behaviour, all dimensions:**
+
+- Node A reports `TotalGpus=4`. Four 1-GPU jobs are currently dispatched.
+- Scheduler picks Node A again for a fifth 1-GPU job (no in-use tracking → still looks free).
+- Runtime allocator on Node A correctly fails the dispatch ("insufficient devices"), the dispatch loop transitions the job to Failed, the retry policy re-enqueues, and eventually it lands on a node with capacity.
+- Net effect: one wasted RPC + retry round-trip per oversubscription. Correct outcome, slow path.
+
+**The fix:** before each `Pick`, walk `JobStore.NonTerminal()` and count the resource reservations of jobs whose `NodeID` matches each candidate. Subtract from the node's reported totals. Cache the per-node usage per dispatch tick to avoid O(jobs × nodes) cost — the dispatch loop runs at 100 ms today so a single per-tick pass is fine.
+
+Apply the same treatment to CPU millicores and memory bytes (the existing proxy logic was always a placeholder until proper tracking landed). GPU is the case that motivated the work — it's the dimension where the coordinator-side oversubscription cost is highest because every dispatched-then-failed GPU job ties up real device slots on the wrong node for a tick.
+
+**Why deferred:** the runtime-side allocator already provides correctness — bad scheduling decisions fail fast rather than producing duplicate device assignments. The fix is a UX/efficiency improvement, not a correctness one. Bundling it with the broader scheduler-tracking refactor (CPU + memory + GPU all at once) is cleaner than three separate slices.
+
 ### Hardware attestation of node labels
 
 The ML pipeline slice in [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) lets nodes self-report labels (`gpu=a100`, `cuda=12.4`, `zone=us-east`) that the scheduler uses for `node_selector` matching. The trust boundary today is mTLS + ML-DSA node certificates: "this is node X that we issued a cert for." It does **not** cover "this node actually owns the hardware it claims." A compromised node under the existing cert can register with `gpu=a100` on a CPU-only host, win GPU-targeted jobs, and either run them incorrectly or exfiltrate the artifacts they stage.
@@ -205,3 +222,4 @@ Proper mitigation needs hardware attestation — TPM quotes, Intel SGX / TDX, AM
 | Per-job resource tracking | Medium | Low | P3 — cardinality issues |
 | Alerting / Grafana templates | Low | Low | P3 — users own their stack |
 | Node label hardware attestation | High | High | P3 — needs TPM/SGX/SEV-SNP integration, deployment-specific |
+| In-use resource tracking (CPU/mem/GPU) | Medium | Medium | P2 — runtime fail-fast keeps things correct, but oversubscription wastes a dispatch RPC per attempt |

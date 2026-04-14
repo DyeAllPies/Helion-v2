@@ -1098,6 +1098,36 @@ What we did **not** do here (explicit deferrals):
 - Per-device metrics (SM utilisation, memory pressure, thermal
   throttling) — node reports only the total; runtime-side
   observability is step 7-adjacent work.
+- **Coordinator-side in-use GPU tracking.** `filterByGPU` checks
+  total capacity per node, not free capacity. An oversubscribed
+  candidate is caught at the runtime allocator (job fails fast,
+  retry policy re-dispatches elsewhere); the cost is one wasted
+  RPC + retry round-trip per attempt. The fix is the same shape
+  as the existing CPU/memory blind spot — capture them together
+  in the [in-use resource tracking entry](deferred/README.md#coordinator-side-in-use-resource-tracking-cpu-memory-gpu)
+  on the deferred backlog.
+
+Closed-here follow-ups from the second-pass audit (commit `<this slice>`):
+
+- **`CUDA_VISIBLE_DEVICES` override safety** — fixed in
+  [`go_runtime.go`](../../internal/runtime/go_runtime.go) by
+  building the subprocess env via a `map[string]string` so a
+  user-supplied `CUDA_VISIBLE_DEVICES` cannot shadow the
+  allocator's value. The Rust runtime path already used a
+  map-based override; the Go runtime now matches. Without this,
+  POSIX env precedence (first-set wins) let a malicious or
+  confused caller escape per-job device pinning by setting their
+  own value. Tests pin the invariant in both runtimes
+  ([`gpu_runtime_test.go`](../../internal/runtime/gpu_runtime_test.go)
+  + [`rust_client_gpu_test.go`](../../internal/runtime/rust_client_gpu_test.go)).
+- **BadgerDB roundtrip for `Node.TotalGpus`** — three new tests in
+  [`persistence_labels_test.go`](../../internal/cluster/persistence_labels_test.go)
+  pin Save→LoadAll for the field, omitempty on zero, and forward
+  compatibility with pre-GPU node rows. Symmetric to the
+  step-4 labels persistence tests; without it a JSON-tag typo
+  could silently zero out GPU capacity on coordinator restart
+  and every GPU job would become unschedulable until the next
+  heartbeat arrived.
 
 ### Rust runtime (parity landed)
 

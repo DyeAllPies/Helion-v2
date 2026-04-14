@@ -135,6 +135,74 @@ func TestGoRuntime_GPURequest_OversubscribedFails(t *testing.T) {
 	}
 }
 
+// TestGoRuntime_GPURequest_UserEnvCannotOverrideAllocator pins the
+// security boundary for per-job device pinning: a job that supplies
+// its own CUDA_VISIBLE_DEVICES in req.Env must NOT be able to
+// shadow the allocator's assignment. Without the map-based env
+// build, this test fails on Linux (POSIX env precedence is first-
+// set wins; the user's entry would have been appended first).
+func TestGoRuntime_GPURequest_UserEnvCannotOverrideAllocator(t *testing.T) {
+	rt := NewGoRuntimeWithGPUs(4)
+	defer rt.Close()
+
+	cmd, args := printEnvVar("CUDA_VISIBLE_DEVICES")
+	res, err := rt.Run(context.Background(), RunRequest{
+		JobID:   "escaping-job",
+		Command: cmd,
+		Args:    args,
+		Env: map[string]string{
+			// Attacker / confused caller: try to claim devices 5,6
+			// which the allocator never handed out.
+			"CUDA_VISIBLE_DEVICES": "5,6",
+		},
+		GPUs:           2,
+		TimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit=%d stderr=%s", res.ExitCode, res.Stderr)
+	}
+	got := strings.TrimSpace(string(res.Stdout))
+	// Allocator handed out 0,1 (lowest-index-first on a fresh
+	// runtime). The user's "5,6" must NOT have reached the
+	// subprocess.
+	if got != "0,1" {
+		t.Fatalf("user env shadowed allocator: subprocess saw CUDA_VISIBLE_DEVICES=%q (want 0,1)", got)
+	}
+}
+
+// TestGoRuntime_GPURequest_UnrelatedUserEnvPreserved confirms the
+// override is *targeted* — only CUDA_VISIBLE_DEVICES gets replaced,
+// everything else the caller passed makes it through.
+func TestGoRuntime_GPURequest_UnrelatedUserEnvPreserved(t *testing.T) {
+	rt := NewGoRuntimeWithGPUs(2)
+	defer rt.Close()
+
+	cmd, args := printEnvVar("MY_USER_VAR")
+	res, err := rt.Run(context.Background(), RunRequest{
+		JobID:   "preserve-env",
+		Command: cmd,
+		Args:    args,
+		Env: map[string]string{
+			"MY_USER_VAR":          "hello",
+			"CUDA_VISIBLE_DEVICES": "999", // overridden
+		},
+		GPUs:           1,
+		TimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit=%d", res.ExitCode)
+	}
+	if got := strings.TrimSpace(string(res.Stdout)); got != "hello" {
+		t.Fatalf("MY_USER_VAR not preserved: %q", got)
+	}
+}
+
 // TestGoRuntime_NonGPUJob_OnGPURuntime_Works asserts a CPU job runs
 // normally on a GPU-enabled runtime without touching the allocator
 // (GPUs: 0 in the request → no claim, no env var set).

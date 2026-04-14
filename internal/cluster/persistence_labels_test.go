@@ -72,6 +72,70 @@ func TestBadgerPersister_NodeLabels_EmptyOmitted(t *testing.T) {
 	}
 }
 
+// TestBadgerPersister_NodeTotalGpus_Roundtrip mirrors the
+// label-roundtrip test for the GPU-capacity field added in step 5.
+// Without this, a JSON-tag typo or struct-field rename on TotalGpus
+// would silently zero out GPU capacity on coordinator restart, and
+// every GPU job would suddenly become unschedulable until the next
+// heartbeat arrived. The roundtrip pins the contract.
+func TestBadgerPersister_NodeTotalGpus_Roundtrip(t *testing.T) {
+	p := newBadgerPersister(t)
+	ctx := context.Background()
+
+	want := &cpb.Node{
+		NodeID:    "gpu-host",
+		Address:   "10.0.0.7:9090",
+		TotalGpus: 8,
+	}
+	if err := p.SaveNode(ctx, want); err != nil {
+		t.Fatalf("SaveNode: %v", err)
+	}
+	got, err := p.LoadAllNodes(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllNodes: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 node, got %d", len(got))
+	}
+	if got[0].TotalGpus != 8 {
+		t.Fatalf("TotalGpus: got %d, want 8", got[0].TotalGpus)
+	}
+}
+
+// TestBadgerPersister_NodeTotalGpus_ZeroOmitted confirms the
+// omitempty JSON tag — a CPU-only node persists with no
+// total_gpus key. Keeps stored payloads compact and compatible
+// with older node records that predate the field.
+func TestBadgerPersister_NodeTotalGpus_ZeroOmitted(t *testing.T) {
+	p := newBadgerPersister(t)
+	ctx := context.Background()
+
+	if err := p.SaveNode(ctx, &cpb.Node{NodeID: "cpu-only", Address: "10.0.0.8:9090"}); err != nil {
+		t.Fatalf("SaveNode: %v", err)
+	}
+	got, _ := p.LoadAllNodes(ctx)
+	if got[0].TotalGpus != 0 {
+		t.Fatalf("zero TotalGpus came back as %d", got[0].TotalGpus)
+	}
+}
+
+// TestBadgerPersister_NodeTotalGpus_ForwardCompatFromPreGPUJSON
+// covers the migration case: a Node row written by a coordinator
+// version without the TotalGpus field must deserialize cleanly
+// (TotalGpus=0 — the JSON-default-zero behaviour) when a newer
+// coordinator reads it. Mirrors the equivalent labels test below.
+func TestBadgerPersister_NodeTotalGpus_ForwardCompatFromPreGPUJSON(t *testing.T) {
+	p := newBadgerPersister(t)
+	ctx := context.Background()
+	if err := p.SaveNode(ctx, &cpb.Node{NodeID: "legacy-cpu", Address: "10.0.0.10:9090"}); err != nil {
+		t.Fatalf("SaveNode: %v", err)
+	}
+	got, _ := p.LoadAllNodes(ctx)
+	if got[0].TotalGpus != 0 {
+		t.Fatalf("missing-field should load as 0, got %d", got[0].TotalGpus)
+	}
+}
+
 // TestBadgerPersister_NodeLabels_ForwardCompatFromPreLabelJSON covers
 // the migration case: a Node row written by a coordinator version
 // without the Labels field must deserialize cleanly (Labels=nil)

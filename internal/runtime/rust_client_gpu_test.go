@@ -184,6 +184,41 @@ func TestRustClient_GPURequest_OversubscribedFailsBeforeIPC(t *testing.T) {
 	}
 }
 
+// TestRustClient_GPURequest_UserEnvCannotOverrideAllocator mirrors
+// the GoRuntime invariant: a job supplying its own
+// CUDA_VISIBLE_DEVICES via req.Env must NOT be able to shadow the
+// allocator's assignment. The Rust client uses map-based env
+// override so the allocator value wins unconditionally — this test
+// pins that contract by inspecting the encoded IPC payload.
+func TestRustClient_GPURequest_UserEnvCannotOverrideAllocator(t *testing.T) {
+	captured := make(chan []byte, 1)
+	sock := captureRunRequest(t, captured)
+
+	c := NewRustClientWithGPUs(sock, 4)
+	_, err := c.Run(context.Background(), RunRequest{
+		JobID:   "escaping",
+		Command: "echo",
+		Env: map[string]string{
+			"CUDA_VISIBLE_DEVICES": "5,6", // attacker tries to hide allocation
+		},
+		GPUs: 2,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	payload := <-captured
+	got, ok := envContains(payload, "CUDA_VISIBLE_DEVICES")
+	if !ok {
+		t.Fatalf("CUDA_VISIBLE_DEVICES missing from IPC payload")
+	}
+	// Allocator's "0,1" must be the value on the wire — not
+	// the user's "5,6".
+	if !strings.Contains(got, "0,1") || strings.Contains(got, "5,6") {
+		t.Fatalf("user-env shadowed allocator on the wire: %q", got)
+	}
+}
+
 // TestRustClient_GPURequest_ReleasedOnExit verifies the per-job
 // device claim is returned to the free pool when Run finishes,
 // mirroring the GoRuntime invariant.
