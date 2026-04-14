@@ -287,6 +287,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build, test-dashboard, test-rust, e2e-images]
 
+    # The e2e-overlay coordinator depends_on the analytics-db service, which
+    # in the base compose file is gated behind `profiles: ["analytics"]`.
+    # Activating the profile here (job-scoped env) makes every `docker compose`
+    # invocation in this job — up, logs, down — see the service. Mirrors what
+    # scripts/run-e2e.sh does locally via its own COMPOSE_PROFILES export.
+    env:
+      COMPOSE_PROFILES: analytics
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4

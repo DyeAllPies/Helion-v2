@@ -16,7 +16,7 @@ GO_ENV := GOWORK=off
 
 .PHONY: proto build build-rust build-all test test-short test-race lint clean \
         test-dashboard lint-dashboard coverage-go test-all lint-all \
-        test-e2e test-e2e-headed test-e2e-ui bench check verify-repo \
+        test-e2e test-e2e-headed test-e2e-ui bench check check-full verify-repo \
         docker-smoke
 
 # ── protobuf ──────────────────────────────────────────────────────────────────
@@ -113,6 +113,20 @@ check: lint test test-race coverage-go verify-repo
 	./scripts/check-dashboard-coverage.sh
 	@echo ""
 	@echo "==> All local checks passed (Go lint + test + race + coverage, Angular lint + test + coverage, repo hygiene)."
+	@echo ""
+	@echo "NOTE: E2E tests are NOT part of \`make check\` (they take ~3 min and need Docker)."
+	@echo "If this change touches infrastructure (docker-compose*, Dockerfile*, .github/workflows,"
+	@echo "scripts/run-e2e.sh, or anything the cluster startup depends on), run \`make check-full\`"
+	@echo "before pushing — that adds the Playwright E2E suite."
+
+# check-full: check + the full Playwright E2E suite. Use this before pushing
+# changes that affect how the cluster boots or how the dashboard integrates
+# with the coordinator (compose files, Dockerfiles, CI workflow, cluster env
+# vars). The CI e2e job has historically been the first place such drift
+# surfaces; running check-full locally eliminates the round-trip.
+check-full: check test-e2e
+	@echo ""
+	@echo "==> All local checks passed, including Playwright E2E."
 
 # verify-repo: `go mod verify` + exec-bit checks on tracked shell
 # scripts. Cheap, part of the default `make check`.
