@@ -2,6 +2,13 @@
 .git
 .gitignore
 
+# Go workspace files — untracked and developer-local. Leaving them in
+# the build context puts the image in workspace mode (resolves modules
+# via go.work.sum), which can trip the pre-split/split genproto
+# ambiguity. CI never has go.work, so excluding matches CI behaviour.
+go.work
+go.work.sum
+
 # Local state and logs
 state/
 logs/
