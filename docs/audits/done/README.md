@@ -38,3 +38,4 @@ audit itself.
 | [2026-04-15-04](2026-04-15-04.md) | Feature-12 second-pass audit — output-size cap + stager-less refusal + Cleanup idempotency; declares feature 12 saturation |
 | [2026-04-15-05](2026-04-15-05.md) | Feature-12 third-pass audit — `attestOutputs` now cross-checks reported Names against `Job.Outputs`; production fix + 2 tests; recants prior saturation claim |
 | [2026-04-15-06](2026-04-15-06.md) | Feature-12 fourth-pass audit — empty-`workRoot` fallback test; 6 items dismissed; calibration note recommends moving to feature 13 |
+| [2026-04-15-07](2026-04-15-07.md) | Feature-13 first-pass audit — `ml.resolve_failed` event observer test; 11 items dismissed; recommends feature 14 or 15 next |

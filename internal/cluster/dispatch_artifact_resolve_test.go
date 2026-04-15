@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -126,6 +127,109 @@ func TestDispatchLoop_Step3_ResolvesFromRefEndToEnd(t *testing.T) {
 	// path in staging.download is a no-op.
 	if got := downstream.Inputs[0].SHA256; got != "deadbeef" {
 		t.Fatalf("SHA256 not propagated onto downstream: %q", got)
+	}
+}
+
+// TestDispatchLoop_Step3_ResolveFailure_EmitsMLResolveFailedEvent
+// verifies the feature-18 follow-up: when the dispatch loop's
+// artifact resolver fails, the coordinator emits an
+// `ml.resolve_failed` event on the bus so the dashboard's Pipelines
+// view can surface broken ML pipelines without log-grepping.
+//
+// The companion test below asserts the failed-transition path —
+// this one asserts the event path. Both need to fire on the same
+// failure; a regression that transitioned the job but dropped the
+// event would leave the dashboard blind to the break.
+//
+// Subscribes **before** starting the dispatch loop so the
+// publish-after-transition event lands in the subscriber's buffered
+// channel rather than being dropped. Reads with a generous timeout
+// — the dispatcher's tick is 20 ms but test scheduling on Windows
+// is flaky under load, so 3 s gives headroom without being a slow
+// test on happy runs.
+func TestDispatchLoop_Step3_ResolveFailure_EmitsMLResolveFailedEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	jobs := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+	wfs := cluster.NewWorkflowStore(cluster.NewMemWorkflowPersister(), nil)
+	bus := events.NewBus(16, slog.Default())
+	jobs.SetEventBus(bus)
+
+	// Subscribe to the ml.resolve_failed topic before the dispatch
+	// loop starts so we don't race the first publish.
+	sub := bus.Subscribe(events.TopicMLResolveFailed)
+	defer sub.Cancel()
+
+	sched, _ := newSchedulerWithNodes(t)
+	nd := &mockNodeDispatcher{}
+	loop := cluster.NewDispatchLoop(jobs, sched, nd, 20*time.Millisecond, slog.Default())
+	loop.SetWorkflowStore(wfs)
+
+	// Same bad-workflow shape as the TransitionsToFailed test: valid
+	// DAG, but upstream completes without the declared output, so
+	// the resolver fails at dispatch time.
+	wf := &cpb.Workflow{
+		ID: "wf-event",
+		Jobs: []cpb.WorkflowJob{
+			{
+				Name:    "a",
+				Command: "echo",
+				Outputs: []cpb.ArtifactBinding{{Name: "OUT", LocalPath: "out/o"}},
+			},
+			{
+				Name:      "b",
+				Command:   "echo",
+				DependsOn: []string{"a"},
+				Inputs: []cpb.ArtifactBinding{
+					{Name: "X", From: "a.OUT", LocalPath: "in/x"},
+				},
+			},
+		},
+	}
+	if err := wfs.Submit(ctx, wf); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if err := wfs.Start(ctx, "wf-event", jobs); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Upstream completes but reports no ResolvedOutputs.
+	_ = jobs.Transition(ctx, "wf-event/a", cpb.JobStatusDispatching,
+		cluster.TransitionOptions{NodeID: "node-1"})
+	_ = jobs.Transition(ctx, "wf-event/a", cpb.JobStatusRunning,
+		cluster.TransitionOptions{})
+	_ = jobs.Transition(ctx, "wf-event/a", cpb.JobStatusCompleted,
+		cluster.TransitionOptions{})
+
+	go loop.Run(ctx)
+
+	select {
+	case evt := <-sub.C:
+		if evt.Type != events.TopicMLResolveFailed {
+			t.Fatalf("wrong event topic: got %q want %q", evt.Type, events.TopicMLResolveFailed)
+		}
+		// Payload must carry the failing job's ID + workflow ID + the
+		// upstream/output names the dashboard needs to render a
+		// useful diagnostic. All of these are stringly-typed in the
+		// event Data map; assert presence and spot-check values.
+		if got := evt.Data["job_id"]; got != "wf-event/b" {
+			t.Errorf("event job_id: got %v, want %q", got, "wf-event/b")
+		}
+		if got := evt.Data["workflow_id"]; got != "wf-event" {
+			t.Errorf("event workflow_id: got %v, want %q", got, "wf-event")
+		}
+		if got := evt.Data["upstream"]; got != "a" {
+			t.Errorf("event upstream: got %v, want %q", got, "a")
+		}
+		if got := evt.Data["output_name"]; got != "OUT" {
+			t.Errorf("event output_name: got %v, want %q", got, "OUT")
+		}
+		reason, _ := evt.Data["reason"].(string)
+		if reason == "" {
+			t.Errorf("event reason should be non-empty; got %v", evt.Data["reason"])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ml.resolve_failed event never fired")
 	}
 }
 
