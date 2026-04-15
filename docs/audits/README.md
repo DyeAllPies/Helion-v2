@@ -16,6 +16,7 @@ Security & code-quality audits, one file per run.
 | [2026-04-11-01](2026-04-11-01.md) | Initial full-system audit — closed all 10 findings |
 | [2026-04-12-01](2026-04-12-01.md) | Second-pass audit after dispatch hardening — closed all 10 findings |
 | [2026-04-14-01](2026-04-14-01.md) | ML registry slice audit — M1/M2 fixed, M3/M4/L1/L3 deferred |
+| [2026-04-14-02](2026-04-14-02.md) | Inference-jobs slice audit — M2/M3/L2/L3/T2 fixed, M1/L1/T1 deferred |
 
 ## Workflow
 

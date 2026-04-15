@@ -37,5 +37,8 @@ resources → feature 10 step 5) replaces the entry here with a pointer.
 | 18 | [Registry indexed listing](./18-registry-indexed-listing.md) | feature 10 (audit 2026-04-14-01, L1) | P3 |
 | 19 | [Registry integration test](./19-registry-integration-test.md) | feature 10 (audit 2026-04-14-01, L3) | P3 |
 | 20 | [Rust runtime parity for inference services](./20-rust-runtime-service-parity.md) | feature 17 | P2 |
+| 21 | [Service jobs in workflow specs](./21-service-jobs-in-workflow.md) | feature 17 (audit 2026-04-14-02, M1) | P3 |
+| 22 | [Rate-limit ReportServiceEvent](./22-report-service-event-rate-limit.md) | feature 17 (audit 2026-04-14-02, L1) | P3 |
+| 23 | [Service integration e2e test](./23-service-integration-e2e.md) | feature 17 (audit 2026-04-14-02, T1) | P3 |
 
 > **GPU / accelerator resources:** moved to [feature 10 step 5](../10-minimal-ml-pipeline.md) — GPU as a first-class resource. The pointer is retained so older commits and audits still resolve.

@@ -326,7 +326,7 @@ func main() {
 	registryStore := registrypkg.NewBadgerStore(persister.DB())
 
 	// ── Prometheus metrics ────────────────────────────────────────────────────
-	_, promHandler := metrics.NewRegistry(jobs, registry, jobsAdapter, registryStore)
+	_, promHandler := metrics.NewRegistry(jobs, registry, jobsAdapter, registryStore, serviceRegistry)
 
 	readiness := &coordinatorReadiness{db: persister, reg: registry}
 	apiSrv := api.NewServer(jobsAdapter, nodeRegistry, metricsProvider, auditLogger, tokenManager, rateLimiter, readiness, promHandler)

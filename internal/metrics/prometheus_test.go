@@ -40,7 +40,11 @@ func TestCollector_Describe_SendsDescriptors(t *testing.T) {
 	nodes := &mockNodeCounter{}
 	c := metrics.NewCollector(jobs, nodes, nil)
 
-	ch := make(chan *prometheus.Desc, 10)
+	// Buffer sized above the current descriptor count (11 at the time
+	// of writing: jobs counter + 3 job gauges + 2 node gauges + duration
+	// histogram + 2 registry gauges + services gauge). Grow when new
+	// descriptors land.
+	ch := make(chan *prometheus.Desc, 32)
 	c.Describe(ch)
 	close(ch)
 
@@ -130,7 +134,7 @@ func TestNewRegistry_ReturnsRegistryAndHandler(t *testing.T) {
 	jobs := &mockJobCounter{byStatus: map[string]int{}, total: 0}
 	nodes := &mockNodeCounter{}
 
-	reg, handler := metrics.NewRegistry(jobs, nodes, nil, nil)
+	reg, handler := metrics.NewRegistry(jobs, nodes, nil, nil, nil)
 	if reg == nil {
 		t.Fatal("expected non-nil registry")
 	}
@@ -158,7 +162,7 @@ func TestNewRegistry_RegistryGauges_Emitted(t *testing.T) {
 	nodes := &mockNodeCounter{}
 	rc := &mockRegistryCounter{datasets: 3, models: 7}
 
-	_, handler := metrics.NewRegistry(jobs, nodes, nil, rc)
+	_, handler := metrics.NewRegistry(jobs, nodes, nil, rc, nil)
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -176,7 +180,7 @@ func TestNewRegistry_RegistryGauges_OmittedWhenNilCounter(t *testing.T) {
 	jobs := &mockJobCounter{byStatus: map[string]int{}, total: 0}
 	nodes := &mockNodeCounter{}
 
-	_, handler := metrics.NewRegistry(jobs, nodes, nil, nil)
+	_, handler := metrics.NewRegistry(jobs, nodes, nil, nil, nil)
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -191,7 +195,7 @@ func TestNewRegistry_Handler_Returns200(t *testing.T) {
 	jobs := &mockJobCounter{byStatus: map[string]int{}, total: 0}
 	nodes := &mockNodeCounter{}
 
-	_, handler := metrics.NewRegistry(jobs, nodes, nil, nil)
+	_, handler := metrics.NewRegistry(jobs, nodes, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rr := httptest.NewRecorder()

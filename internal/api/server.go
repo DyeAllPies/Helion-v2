@@ -36,6 +36,15 @@
 //     POST   /admin/tokens
 //     DELETE /admin/tokens/{jti}
 //
+//   Feature-flagged (registered only when the backing store is injected):
+//     POST   /api/datasets                      (SetRegistryStore)
+//     GET    /api/datasets, /api/datasets/{name}/{version}
+//     DELETE /api/datasets/{name}/{version}
+//     POST   /api/models
+//     GET    /api/models, /api/models/{name}/latest, /api/models/{name}/{version}
+//     DELETE /api/models/{name}/{version}
+//     GET    /api/services/{job_id}             (SetServiceRegistry; feature 17)
+//
 //   WebSocket (JWT via query param or Authorization header):
 //     GET /ws/jobs/{id}/logs
 //     GET /ws/metrics

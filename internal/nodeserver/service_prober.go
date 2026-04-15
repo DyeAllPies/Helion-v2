@@ -25,6 +25,7 @@ package nodeserver
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -83,7 +84,12 @@ func (s *Server) probeService(ctx context.Context, jobID string, spec *pb.Servic
 		if err != nil {
 			return false
 		}
-		defer resp.Body.Close()
+		// Drain + close so the HTTP transport can reuse the
+		// connection across probe ticks. Cap the drain at 4 KiB so a
+		// misbehaving /healthz that streams megabytes of body cannot
+		// slow the prober down.
+		_, _ = io.CopyN(io.Discard, resp.Body, 4<<10)
+		_ = resp.Body.Close()
 		return resp.StatusCode >= 200 && resp.StatusCode < 300
 	}
 

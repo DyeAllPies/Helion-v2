@@ -44,12 +44,21 @@ type RegistryCounter interface {
 	CountModels(ctx context.Context) (int, error)
 }
 
+// ServiceCounter reports the count of live inference-service
+// endpoints (feature 17). Backs the helion_services_total gauge.
+// Optional on the collector; absent on deployments that do not
+// enable inference services.
+type ServiceCounter interface {
+	Count() int
+}
+
 // Collector implements prometheus.Collector for Helion cluster metrics.
 type Collector struct {
 	jobs      JobCounter
 	nodes     NodeCounter
 	durations DurationSource
 	registry  RegistryCounter // optional — nil means registry not wired
+	services  ServiceCounter  // optional — nil means feature-17 services not wired
 
 	descJobsTotal          *prometheus.Desc
 	descRunningJobs        *prometheus.Desc
@@ -61,6 +70,7 @@ type Collector struct {
 	descScheduledJobs      *prometheus.Desc
 	descDatasetsTotal      *prometheus.Desc
 	descModelsTotal        *prometheus.Desc
+	descServicesTotal      *prometheus.Desc
 }
 
 // SetRegistryCounter attaches a dataset/model counter after
@@ -68,6 +78,10 @@ type Collector struct {
 // don't use the registry don't need to change. Calling with nil
 // disables registry gauges.
 func (c *Collector) SetRegistryCounter(r RegistryCounter) { c.registry = r }
+
+// SetServiceCounter attaches the feature-17 service-endpoint counter
+// so helion_services_total appears on scrape. Nil disables it.
+func (c *Collector) SetServiceCounter(s ServiceCounter) { c.services = s }
 
 // NewCollector creates a Collector backed by the given counters and duration source.
 func NewCollector(jobs JobCounter, nodes NodeCounter, dur DurationSource) *Collector {
@@ -125,6 +139,11 @@ func NewCollector(jobs JobCounter, nodes NodeCounter, dur DurationSource) *Colle
 			"Number of models currently registered in the registry.",
 			nil, nil,
 		),
+		descServicesTotal: prometheus.NewDesc(
+			"helion_services_total",
+			"Number of live inference-service endpoints currently tracked by the coordinator.",
+			nil, nil,
+		),
 	}
 }
 
@@ -140,6 +159,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.descScheduledJobs
 	ch <- c.descDatasetsTotal
 	ch <- c.descModelsTotal
+	ch <- c.descServicesTotal
 }
 
 // Collect computes current metric values and sends them to ch.
@@ -194,6 +214,11 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			ch <- prometheus.MustNewConstMetric(c.descModelsTotal, prometheus.GaugeValue, float64(n))
 		}
 	}
+
+	// Feature-17 live service count.
+	if c.services != nil {
+		ch <- prometheus.MustNewConstMetric(c.descServicesTotal, prometheus.GaugeValue, float64(c.services.Count()))
+	}
 }
 
 // buckets are the upper bounds used for helion_job_duration_seconds.
@@ -230,10 +255,11 @@ func (c *Collector) collectDurationHistogram(ctx context.Context, ch chan<- prom
 // the /metrics endpoint. Pass a non-nil registryCounter to also emit
 // helion_datasets_total / helion_models_total — pass nil on deployments
 // that don't enable the dataset/model registry.
-func NewRegistry(jobs JobCounter, nodes NodeCounter, dur DurationSource, registryCounter RegistryCounter) (*prometheus.Registry, http.Handler) {
+func NewRegistry(jobs JobCounter, nodes NodeCounter, dur DurationSource, registryCounter RegistryCounter, serviceCounter ServiceCounter) (*prometheus.Registry, http.Handler) {
 	reg := prometheus.NewRegistry()
 	coll := NewCollector(jobs, nodes, dur)
 	coll.SetRegistryCounter(registryCounter)
+	coll.SetServiceCounter(serviceCounter)
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),

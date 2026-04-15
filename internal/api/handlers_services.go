@@ -17,7 +17,7 @@ package api
 
 import (
 	"fmt"
-	"log/slog"
+	"net"
 	"net/http"
 
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
@@ -83,28 +83,19 @@ func toServiceEndpointResponse(ep cpb.ServiceEndpoint) ServiceEndpointResponse {
 
 // buildUpstreamURL stitches NodeAddress + Port into the canonical
 // http:// URL. NodeAddress is the "host:port" the node registered at;
-// we strip its port and substitute the service port. Falls back to a
-// best-effort "host:port" concatenation if NodeAddress doesn't parse
-// as host:port (e.g. a bare IPv6 literal without brackets).
+// we keep its host component and substitute the service port.
+// Uses net.SplitHostPort so IPv6 literals (`[::1]:9090`) are handled
+// correctly. On parse failure we fall back to the raw NodeAddress
+// as a host — the lookup will likely 404 at the caller, but that is
+// better than emitting a URL the caller cannot parse either.
 func buildUpstreamURL(ep cpb.ServiceEndpoint) string {
-	host := ep.NodeAddress
-	// Strip trailing ":<port>" if present. Not using net.SplitHostPort
-	// here because it rejects bare hostnames and empty strings — both
-	// of which can happen transiently during node registration.
-	for i := len(host) - 1; i >= 0; i-- {
-		if host[i] == ':' {
-			host = host[:i]
-			break
-		}
-		// Non-digit past the last colon means the string doesn't end
-		// in a port suffix — keep it whole.
-		if host[i] < '0' || host[i] > '9' {
-			slog.Warn("unexpected node address format", slog.String("addr", ep.NodeAddress))
-			break
-		}
-	}
-	if host == "" {
+	host, _, err := net.SplitHostPort(ep.NodeAddress)
+	if err != nil || host == "" {
 		host = ep.NodeAddress
+	}
+	// Re-wrap IPv6 literals in brackets when composing the final URL.
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		return fmt.Sprintf("http://[%s]:%d%s", host, ep.Port, ep.HealthPath)
 	}
 	return fmt.Sprintf("http://%s:%d%s", host, ep.Port, ep.HealthPath)
 }
