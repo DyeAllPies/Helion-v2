@@ -145,6 +145,101 @@ func TestGetAndVerify_CompatWrapperStillWorks(t *testing.T) {
 	}
 }
 
+// ── Context cancellation mid-stream ──────────────────────────────────
+//
+// The Stager cancels downloads when a job is cancelled mid-staging
+// (operator hits DELETE /jobs/{id}, or a workflow failure cascades
+// through the parent). `GetAndVerifyTo` must observe ctx on the copy
+// loop and return a cancellation error promptly — not run to
+// completion and only fail at the digest check.
+//
+// We drive this via a Store wrapper that yields bytes slowly enough
+// for a mid-stream cancel to land inside io.Copy's chunk loop.
+
+type slowReadCloser struct {
+	data []byte
+	pos  int
+	hint chan struct{} // closed once we've returned a chunk (signals the test to cancel)
+}
+
+func (r *slowReadCloser) Read(p []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, io.EOF
+	}
+	// 4 KiB at a time, far smaller than the payload, so io.Copy
+	// iterates many times and ctx cancellation has a clean window.
+	chunk := 4096
+	if rem := len(r.data) - r.pos; rem < chunk {
+		chunk = rem
+	}
+	copy(p, r.data[r.pos:r.pos+chunk])
+	r.pos += chunk
+	// Signal the first chunk so the test can cancel mid-stream.
+	select {
+	case <-r.hint:
+		// already closed
+	default:
+		close(r.hint)
+	}
+	return chunk, nil
+}
+
+func (r *slowReadCloser) Close() error { return nil }
+
+type slowStore struct {
+	Store
+	reader *slowReadCloser
+}
+
+func (s *slowStore) Get(_ context.Context, _ URI) (io.ReadCloser, error) {
+	return s.reader, nil
+}
+
+func (s *slowStore) Stat(_ context.Context, _ URI) (Metadata, error) {
+	return Metadata{Size: int64(len(s.reader.data))}, nil
+}
+
+func TestGetAndVerifyTo_ContextCancelledMidStream(t *testing.T) {
+	// 256 KiB payload served in 4 KiB chunks via the slow reader.
+	// Enough iterations that a cancel issued after the first chunk
+	// lands inside the copy loop, not before or after.
+	payload := bytes.Repeat([]byte("X"), 256*1024)
+	slow := &slowStore{
+		reader: &slowReadCloser{data: payload, hint: make(chan struct{})},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Goroutine: wait for the first chunk to be read, then cancel.
+	// This simulates the operator hitting DELETE /jobs/{id} after
+	// the download is already in flight.
+	go func() {
+		<-slow.reader.hint
+		cancel()
+	}()
+
+	var dst bytes.Buffer
+	_, err := GetAndVerifyTo(ctx, slow, URI("file:///whatever"), shaBytes(payload), 0, &dst)
+	if err == nil {
+		t.Fatal("GetAndVerifyTo should return an error after ctx cancellation")
+	}
+	// The error should be a cancellation or wrap one. `io.Copy`
+	// returns ctx.Err() when the reader observes the cancellation;
+	// if a future implementation rewraps that, errors.Is still works.
+	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "context") {
+		t.Fatalf("want context-cancellation error, got %v", err)
+	}
+	// A cancelled download must NOT be reported as a digest mismatch —
+	// the hash comparison only runs after a clean EOF, and we cancelled
+	// before that. If a mismatch error leaks here the code is falsely
+	// accusing the artifact store of tampering every time a user
+	// cancels.
+	if errors.Is(err, ErrChecksumMismatch) {
+		t.Fatal("ctx cancellation should not be reported as checksum mismatch")
+	}
+}
+
 // ── Stager streaming integration: tempfile pattern ──────────────────────
 //
 // Verifies the atomic-on-success property the Stager relies on:

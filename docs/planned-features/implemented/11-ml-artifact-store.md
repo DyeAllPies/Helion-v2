@@ -116,6 +116,32 @@ MinIO flow (upload-on-finalize, resolve-and-download-on-next-job)
 lives in features 12/13's surface, not feature 11's — reviewed
 separately when those features get their coverage pass.
 
+**Second-pass coverage additions** — follow-up audit found three
+remaining gaps the original suite didn't explicitly assert against.
+Each is now covered:
+
+- [`local_test.go:TestConcurrentPuts_SameKey_NoOrphanTempfile`](../../../internal/artifacts/local_test.go)
+  — 16 goroutines race to Put the same key; asserts (a) no error,
+  (b) exactly one resolved file remains, (c) no orphan
+  `.helion-artifact-*.tmp` survives, (d) the final bytes equal one
+  of the submitted payloads verbatim. Locks in the invariant
+  `local.go:82-108` claims and the "Deliberately not fixed" #2
+  entry below depends on.
+- [`verify_stream_test.go:TestGetAndVerifyTo_ContextCancelledMidStream`](../../../internal/artifacts/verify_stream_test.go)
+  — 256 KiB payload via a slow reader that signals after the first
+  4 KiB chunk; test cancels ctx mid-copy, asserts the helper
+  returns a `context.Canceled`-wrapped error and **not** an
+  `ErrChecksumMismatch` (so an operator cancel never looks like
+  artifact-store tampering on the audit trail).
+- [`dashboard/e2e/specs/ml-artifacts.spec.ts`](../../../dashboard/e2e/specs/ml-artifacts.spec.ts)
+  — Playwright pass that exercises the dashboard → REST → registry
+  chain with `HELION_ARTIFACTS_BACKEND=s3` in place. Registers a
+  dataset with an `s3://helion/...` URI, verifies list + tag-filter
+  + delete, and asserts the server-side URI-scheme validator
+  surfaces clearly when an `http://` URI is attempted. Indirect
+  coverage of the artifact store's URI contract through the same
+  handler path a real user would hit.
+
 ### Deliberately not fixed, with rationale
 
 A second-pass audit flagged three concerns in the artifact-store

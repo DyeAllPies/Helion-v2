@@ -305,6 +305,91 @@ func (r *slowReader) Read(p []byte) (int, error) {
 	return 1, nil
 }
 
+// TestConcurrentPuts_SameKey_NoOrphanTempfile locks in the
+// invariant documented in feature 11's "Deliberately not fixed" #2:
+// racing Puts on the same key each materialise + rename their own
+// tempfile, last-writer-wins on the destination, and neither tempfile
+// survives because os.Rename consumes the source.
+//
+// If this test ever starts finding a `.helion-artifact-*.tmp` file
+// left behind after all goroutines have returned, the invariant has
+// regressed and the feature 11 doc's claim is wrong — either the
+// claim needs updating or the Put path needs a cleanup fix.
+func TestConcurrentPuts_SameKey_NoOrphanTempfile(t *testing.T) {
+	s := newStore(t)
+	const n = 16
+	const key = "same-key/target.bin"
+
+	// Each goroutine writes a unique payload (the byte == its index)
+	// so we can verify afterwards which one won the rename race. Any
+	// one of them is an acceptable "winner" — the invariant we care
+	// about is (a) no goroutine returned an error, (b) the final file
+	// contains one of the submitted payloads in full, (c) no stray
+	// tempfile remains alongside it.
+	var wg sync.WaitGroup
+	payloads := make([][]byte, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		payloads[i] = bytes.Repeat([]byte{byte(i)}, 4096)
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = s.Put(context.Background(), key,
+				bytes.NewReader(payloads[i]), int64(len(payloads[i])))
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("put %d: %v", i, err)
+		}
+	}
+
+	// (c) The parent directory must contain exactly one file
+	// (the rename target) + no tempfiles. os.CreateTemp's pattern
+	// is ".helion-artifact-*.tmp" so anything matching is an orphan.
+	dir := filepath.Dir(filepath.Join(s.Root(), key))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	var orphans []string
+	nonTempCount := 0
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".helion-artifact-") && strings.HasSuffix(name, ".tmp") {
+			orphans = append(orphans, name)
+			continue
+		}
+		nonTempCount++
+	}
+	if len(orphans) > 0 {
+		t.Errorf("orphan tempfiles left after concurrent Put race: %v", orphans)
+	}
+	if nonTempCount != 1 {
+		t.Errorf("want exactly 1 resolved file in dir, got %d", nonTempCount)
+	}
+
+	// (b) The final bytes must equal one of the submitted payloads
+	// in full. If the rename swapped halfway through, we'd see a
+	// mix and this would fail.
+	finalBytes, err := os.ReadFile(filepath.Join(s.Root(), key))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(finalBytes) != 4096 {
+		t.Fatalf("final file truncated or corrupt: %d bytes", len(finalBytes))
+	}
+	winningIdx := int(finalBytes[0]) // payload bytes are all == i
+	if winningIdx < 0 || winningIdx >= n {
+		t.Fatalf("final file has unrecognised winning index byte %d", winningIdx)
+	}
+	if !bytes.Equal(finalBytes, payloads[winningIdx]) {
+		t.Fatal("final file is a mix of payloads — rename was not atomic")
+	}
+}
+
 func TestConcurrentPuts_DistinctKeys(t *testing.T) {
 	s := newStore(t)
 	const n = 32
