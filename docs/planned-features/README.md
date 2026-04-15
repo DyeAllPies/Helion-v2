@@ -25,14 +25,14 @@ relates to `audits/` and `deferred/`.
 | 07 | Observability improvements | **Done** | P2 | [07-observability.md](07-observability.md) |
 | 08 | Deferred-enhancements index (legacy) | Archived | — | [08-deferred-enhancements.md](08-deferred-enhancements.md) |
 | 09 | Analytics pipeline (BadgerDB → PostgreSQL) | **Done** | P1 | [09-analytics-pipeline.md](09-analytics-pipeline.md) |
-| 10 | Minimal ML pipeline (umbrella) | In progress (steps 1–8 done; 9–10 pending) | P1 | [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) |
-| 11 | ML — Artifact store abstraction | **Done** | P1 | [11-ml-artifact-store.md](11-ml-artifact-store.md) |
-| 12 | ML — Job spec: inputs/outputs/working_dir | **Done** | P1 | [12-ml-job-io-staging.md](12-ml-job-io-staging.md) |
-| 13 | ML — Inter-job artifact passing in workflows | **Done** | P1 | [13-ml-workflow-artifact-passing.md](13-ml-workflow-artifact-passing.md) |
-| 14 | ML — Node labels and selectors | **Done** | P1 | [14-ml-node-labels-and-selectors.md](14-ml-node-labels-and-selectors.md) |
-| 15 | ML — GPU as a first-class resource | **Done** | P1 | [15-ml-gpu-first-class-resource.md](15-ml-gpu-first-class-resource.md) |
-| 16 | ML — Dataset and model registry | **Done** | P1 | [16-ml-dataset-model-registry.md](16-ml-dataset-model-registry.md) |
-| 17 | ML — Inference jobs | **Done** (Go runtime; Rust parity deferred) | P1 | [17-ml-inference-jobs.md](17-ml-inference-jobs.md) |
+| 10 | Minimal ML pipeline (umbrella) | In progress (steps 1–8 done; 9 written-awaiting-acceptance; 10 pending) | P1 | [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) |
+| ~~11~~ | ~~ML — Artifact store abstraction~~ | **Implemented**; moved to [`implemented/11-ml-artifact-store.md`](implemented/11-ml-artifact-store.md) | P1 | — |
+| ~~12~~ | ~~ML — Job spec: inputs/outputs/working_dir~~ | **Implemented**; moved to [`implemented/12-ml-job-io-staging.md`](implemented/12-ml-job-io-staging.md) | P1 | — |
+| ~~13~~ | ~~ML — Inter-job artifact passing in workflows~~ | **Implemented**; moved to [`implemented/13-ml-workflow-artifact-passing.md`](implemented/13-ml-workflow-artifact-passing.md) | P1 | — |
+| ~~14~~ | ~~ML — Node labels and selectors~~ | **Implemented**; moved to [`implemented/14-ml-node-labels-and-selectors.md`](implemented/14-ml-node-labels-and-selectors.md) | P1 | — |
+| ~~15~~ | ~~ML — GPU as a first-class resource~~ | **Implemented**; moved to [`implemented/15-ml-gpu-first-class-resource.md`](implemented/15-ml-gpu-first-class-resource.md) | P1 | — |
+| ~~16~~ | ~~ML — Dataset and model registry~~ | **Implemented** (Go runtime; audit 2026-04-14-01 M3/M4/L1/L3 deferred); moved to [`implemented/16-ml-dataset-model-registry.md`](implemented/16-ml-dataset-model-registry.md) | P1 | — |
+| ~~17~~ | ~~ML — Inference jobs~~ | **Implemented** (Go runtime; Rust parity deferred/20); moved to [`implemented/17-ml-inference-jobs.md`](implemented/17-ml-inference-jobs.md) | P1 | — |
 | ~~18~~ | ~~ML — Dashboard module~~ | **Implemented + audited**; moved to [`implemented/18-ml-dashboard-module.md`](implemented/18-ml-dashboard-module.md) | P2 | — |
 | 19 | ML — End-to-end iris demo | Written; awaiting acceptance run against live cluster | P1 | [19-ml-end-to-end-demo.md](19-ml-end-to-end-demo.md) |
 | 20 | ML — Documentation | Pending | P2 | [20-ml-documentation.md](20-ml-documentation.md) |

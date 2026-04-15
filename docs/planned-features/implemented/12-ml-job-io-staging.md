@@ -3,7 +3,7 @@
 **Priority:** P1
 **Status:** Done
 **Affected files:** `internal/api/types.go`, `internal/staging/` (new), `internal/runtime/`, `runtime-rust/`, `internal/nodeserver/server.go`, `cmd/helion-node/main.go`, `proto/node.proto`, `internal/proto/coordinatorpb/types.go`.
-**Parent slice:** [feature 10 — ML pipeline](10-minimal-ml-pipeline.md)
+**Parent slice:** [feature 10 — ML pipeline](../10-minimal-ml-pipeline.md)
 
 ## Job spec: inputs, outputs, working directory
 
@@ -47,18 +47,18 @@ verbatim and forwards it on dispatch.
 
 Data model:
 
-- [`proto/node.proto`](../../proto/node.proto) — new `ArtifactBinding`
+- [`proto/node.proto`](../../../proto/node.proto) — new `ArtifactBinding`
   message; `DispatchRequest` extended with `working_dir`, `inputs`,
   `outputs`, `node_selector`. Protos regenerated.
-- [`internal/proto/coordinatorpb/types.go`](../../internal/proto/coordinatorpb/types.go) —
+- [`internal/proto/coordinatorpb/types.go`](../../../internal/proto/coordinatorpb/types.go) —
   `cpb.Job` gets the same four fields plus a new `cpb.ArtifactBinding`
   struct. JSON-serialised, so existing BadgerDB rows deserialize
   forward-compatibly.
-- [`internal/api/types.go`](../../internal/api/types.go) — `SubmitRequest`
+- [`internal/api/types.go`](../../../internal/api/types.go) — `SubmitRequest`
   gets the same fields plus `ArtifactBindingRequest`.
 
 API validation
-([`internal/api/handlers_jobs.go`](../../internal/api/handlers_jobs.go)):
+([`internal/api/handlers_jobs.go`](../../../internal/api/handlers_jobs.go)):
 
 - Binding name must match `[A-Z_][A-Z0-9_]*` so `HELION_INPUT_<NAME>`
   is always a safe env var.
@@ -70,7 +70,7 @@ API validation
   **must** supply a URI; outputs **must not** (the runtime assigns it).
   Duplicate names rejected per direction.
 
-Staging ([`internal/staging/`](../../internal/staging/)):
+Staging ([`internal/staging/`](../../../internal/staging/)):
 
 - `Stager.Prepare` — mints a 0o700 workdir under
   `HELION_WORK_ROOT` (or `$TMPDIR/helion-jobs`), downloads each input
@@ -85,16 +85,16 @@ Staging ([`internal/staging/`](../../internal/staging/)):
 
 Wiring:
 
-- [`internal/cluster/node_dispatcher.go`](../../internal/cluster/node_dispatcher.go) —
+- [`internal/cluster/node_dispatcher.go`](../../../internal/cluster/node_dispatcher.go) —
   forwards bindings on the wire.
-- [`internal/runtime/runtime.go`](../../internal/runtime/runtime.go) +
-  [`go_runtime.go`](../../internal/runtime/go_runtime.go) — `RunRequest.WorkingDir`
+- [`internal/runtime/runtime.go`](../../../internal/runtime/runtime.go) +
+  [`go_runtime.go`](../../../internal/runtime/go_runtime.go) — `RunRequest.WorkingDir`
   sets `cmd.Dir`.
-- [`internal/nodeserver/server.go`](../../internal/nodeserver/server.go) —
+- [`internal/nodeserver/server.go`](../../../internal/nodeserver/server.go) —
   calls `Prepare → rt.Run → Finalize`. Stager-less nodes **reject**
   jobs that carry bindings rather than running blind. Env merge gives
   stager values precedence so a caller cannot shadow `HELION_INPUT_*`.
-- [`cmd/helion-node/main.go`](../../cmd/helion-node/main.go) — opt-in:
+- [`cmd/helion-node/main.go`](../../../cmd/helion-node/main.go) — opt-in:
   stager wires up only when `HELION_ARTIFACTS_BACKEND` is set.
 
 Security matrix applied in this step:
@@ -129,7 +129,7 @@ persisted URIs to resolve `from: <upstream>.<output_name>` references.
 **Workflow template plumbing (closed):** `cpb.WorkflowJob` now carries
 `WorkingDir`, `Inputs`, `Outputs`, `NodeSelector`; `workflow_submit.Start`
 copies them onto each materialised Job. The workflow API handler
-([`internal/api/handlers_workflows.go`](../../internal/api/handlers_workflows.go))
+([`internal/api/handlers_workflows.go`](../../../internal/api/handlers_workflows.go))
 validates per-job bindings through the same validators as
 `SubmitRequest` — `validateArtifactBindings`, `validateNodeSelector`,
 `firstDuplicateBindingName`, `convertBindings` — so a workflow job
@@ -142,14 +142,14 @@ events (`artifact.put`, `staging.prepared`, `staging.uploaded`),
 direct transfer.
 
 Tests: **62 new, all passing**
-([`handlers_jobs_step2_test.go`](../../internal/api/handlers_jobs_step2_test.go),
-[`handlers_workflows_ml_test.go`](../../internal/api/handlers_workflows_ml_test.go),
-[`staging_test.go`](../../internal/staging/staging_test.go),
-[`go_runtime_workdir_test.go`](../../internal/runtime/go_runtime_workdir_test.go),
-[`ml_outputs_test.go`](../../internal/cluster/ml_outputs_test.go),
-[`workflow_ml_test.go`](../../internal/cluster/workflow_ml_test.go),
-[`outputs_from_proto_test.go`](../../internal/grpcserver/outputs_from_proto_test.go),
-[`outputs_to_proto_test.go`](../../internal/nodeserver/outputs_to_proto_test.go)).
+([`handlers_jobs_step2_test.go`](../../../internal/api/handlers_jobs_step2_test.go),
+[`handlers_workflows_ml_test.go`](../../../internal/api/handlers_workflows_ml_test.go),
+[`staging_test.go`](../../../internal/staging/staging_test.go),
+[`go_runtime_workdir_test.go`](../../../internal/runtime/go_runtime_workdir_test.go),
+[`ml_outputs_test.go`](../../../internal/cluster/ml_outputs_test.go),
+[`workflow_ml_test.go`](../../../internal/cluster/workflow_ml_test.go),
+[`outputs_from_proto_test.go`](../../../internal/grpcserver/outputs_from_proto_test.go),
+[`outputs_to_proto_test.go`](../../../internal/nodeserver/outputs_to_proto_test.go)).
 
 ### Staging follow-ups
 
@@ -158,7 +158,7 @@ audit identified two gaps that would have surfaced under production
 ML workloads:
 
 - **Streaming verified download
-  ([`staging.Stager.download`](../../internal/staging/staging.go)).**
+  ([`staging.Stager.download`](../../../internal/staging/staging.go)).**
   The verified path used to call `GetAndVerify` (in-memory) then
   `WriteFile` — a 5 GiB checkpoint would have OOM'd the node. Now
   it opens a `.helion-stage-*.tmp` in the destination's parent dir,
@@ -169,13 +169,13 @@ ML workloads:
   path; workdir-level rollback in `Prepare` catches anything this
   misses.
 - **Stale workdir sweep
-  ([`staging.Stager.SweepStaleWorkdirs`](../../internal/staging/sweep.go)).**
+  ([`staging.Stager.SweepStaleWorkdirs`](../../../internal/staging/sweep.go)).**
   If the node agent dies between `Prepare` and `Finalize` (OOM,
   SIGKILL, host reboot), the per-job workdir previously stayed on
   disk forever — long-running nodes accumulated orphans. The new
   sweep walks `HELION_WORK_ROOT` and removes entries whose mtime
   predates a configurable threshold (default 1 hour). Invoked once
-  from [`cmd/helion-node/main.go`](../../cmd/helion-node/main.go)
+  from [`cmd/helion-node/main.go`](../../../cmd/helion-node/main.go)
   at node startup, skipped when `HELION_KEEP_WORKDIR=1`. Safe to
   run concurrent with live traffic — active Prepare/Finalize cycles
   keep workdir mtimes fresh, so only truly orphaned trees get

@@ -39,4 +39,11 @@ slice — "what we planned" → "what we cut" → "what we shipped."
 
 | #  | Feature | Implemented |
 |---:|---------|-------------|
+| 11 | [ML — Artifact store abstraction](./11-ml-artifact-store.md) | `internal/artifacts/` Store interface with Local + S3 backends, unit + integration tests green |
+| 12 | [ML — Job I/O staging](./12-ml-job-io-staging.md) | `SubmitRequest` inputs/outputs/working_dir; node-side Stager uploads outputs only on success, cleans workdir unconditionally |
+| 13 | [ML — Workflow artifact passing](./13-ml-workflow-artifact-passing.md) | `from: upstream.OUTPUT` references resolved at dispatch time; fail-closed on resolver errors with transition to Failed |
+| 14 | [ML — Node labels and selectors](./14-ml-node-labels-and-selectors.md) | Node-side `HELION_LABEL_*` env + auto-detection; scheduler filter; `job.unschedulable` event with debounce |
+| 15 | [ML — GPU as a first-class resource](./15-ml-gpu-first-class-resource.md) | Whole-GPU scheduling + per-node allocator + `CUDA_VISIBLE_DEVICES` pinning; hardware attestation tracked as deferred |
+| 16 | [ML — Dataset and model registry](./16-ml-dataset-model-registry.md) | `/api/datasets` + `/api/models` with lineage metadata; audit 2026-04-14-01 deferrals filed as M3/M4/L1/L3 |
+| 17 | [ML — Inference jobs](./17-ml-inference-jobs.md) | `ServiceSpec` long-running jobs with readiness probes (Go runtime); audit 2026-04-14-02 landed; Rust parity deferred/20 |
 | 18 | [ML — Dashboard module](./18-ml-dashboard-module.md) | All four views (Datasets / Models / Services / Pipelines) shipped; three audit-pass items deferred to backlog |

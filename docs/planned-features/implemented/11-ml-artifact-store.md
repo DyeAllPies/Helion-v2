@@ -3,7 +3,7 @@
 **Priority:** P1
 **Status:** Done
 **Affected files:** `internal/artifacts/` (new package), `docker-compose.yml` (MinIO service).
-**Parent slice:** [feature 10 — ML pipeline](10-minimal-ml-pipeline.md)
+**Parent slice:** [feature 10 — ML pipeline](../10-minimal-ml-pipeline.md)
 
 ## Artifact store abstraction
 
@@ -48,7 +48,7 @@ the registry when computing checksums.
 
 ## Implementation notes — artifact store (done)
 
-Landed in [`internal/artifacts/`](../../internal/artifacts/) with two
+Landed in [`internal/artifacts/`](../../../internal/artifacts/) with two
 backends behind a single `Store` interface:
 
 - `LocalStore` — filesystem root, `file://` URIs, atomic writes
@@ -94,10 +94,10 @@ Follow-ups landed on top of the initial step 1:
   pre-created.
 
 Tests: **47 pass + 1 skipped live integration**
-([`local_test.go`](../../internal/artifacts/local_test.go),
-[`s3_test.go`](../../internal/artifacts/s3_test.go),
-[`config_test.go`](../../internal/artifacts/config_test.go),
-[`verify_test.go`](../../internal/artifacts/verify_test.go)).
+([`local_test.go`](../../../internal/artifacts/local_test.go),
+[`s3_test.go`](../../../internal/artifacts/s3_test.go),
+[`config_test.go`](../../../internal/artifacts/config_test.go),
+[`verify_test.go`](../../../internal/artifacts/verify_test.go)).
 
 ### Deliberately not fixed, with rationale
 
@@ -106,7 +106,7 @@ surface that were *not* addressed. Each is recorded here so a future
 auditor doesn't re-raise it as an oversight:
 
 1. **`S3Store.Delete` TOCTOU race.** The current implementation
-   ([s3.go:213-216](../../internal/artifacts/s3.go#L213-L216)) calls
+   ([s3.go:213-216](../../../internal/artifacts/s3.go#L213-L216)) calls
    `StatObject` to probe existence, then `RemoveObject`. Between the
    two, another caller (or an operator using `mc`) could remove the
    object — our RemoveObject still succeeds silently (minio-go
@@ -126,7 +126,7 @@ auditor doesn't re-raise it as an oversight:
 2. **`LocalStore.Put` concurrent-same-key tempfile orphans.** The
    audit asserted that racing Puts on the same key leave orphaned
    tempfiles. **This is not actually true.** Every error path in
-   [local.go:82-108](../../internal/artifacts/local.go#L82-L108)
+   [local.go:82-108](../../../internal/artifacts/local.go#L82-L108)
    cleans up the tempfile explicitly, and a successful
    `os.Rename(tmpPath, full)` *consumes* the tempfile (the tempfile
    no longer exists post-rename). Two racing Puts each produce their
@@ -140,7 +140,7 @@ auditor doesn't re-raise it as an oversight:
    call `JobStore.Submit` directly, bypassing
    `validateArtifactBindings`. This is a real bypass at the API
    boundary, but the Stager's
-   [`safeJoin`](../../internal/staging/staging.go) re-validates
+   [`safeJoin`](../../../internal/staging/staging.go) re-validates
    every `local_path` before touching disk — a belt-and-braces guard
    that refuses traversal at the point it would matter. Any library
    caller would still fail at `Prepare` with "local_path escapes

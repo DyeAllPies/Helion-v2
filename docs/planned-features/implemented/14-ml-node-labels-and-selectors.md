@@ -3,7 +3,7 @@
 **Priority:** P1
 **Status:** Done
 **Affected files:** `internal/cluster/registry_node.go`, `internal/cluster/scheduler.go`, `internal/cluster/dispatch.go`, `internal/cluster/dag.go`, `cmd/helion-node/labels.go`.
-**Parent slice:** [feature 10 — ML pipeline](10-minimal-ml-pipeline.md)
+**Parent slice:** [feature 10 — ML pipeline](../10-minimal-ml-pipeline.md)
 
 ## Node labels and selectors
 
@@ -56,7 +56,7 @@ exact-match filtering before the configured policy runs its
 bin-packing / round-robin logic.
 
 Node-agent label sources
-([`cmd/helion-node/labels.go`](../../cmd/helion-node/labels.go)):
+([`cmd/helion-node/labels.go`](../../../cmd/helion-node/labels.go)):
 
 - **Auto-detected baseline** — `os=<goos>`, `arch=<goarch>`, and
   `gpu=<model>` when `nvidia-smi --query-gpu=name` succeeds. The GPU
@@ -69,7 +69,7 @@ Node-agent label sources
   physical card from the scheduler.
 
 Coordinator sanitisation
-([`registry_node.go`](../../internal/cluster/registry_node.go)):
+([`registry_node.go`](../../../internal/cluster/registry_node.go)):
 NUL / C0 / DEL rejection, `=` in keys rejected (would break env
 round-trips), k8s-compatible caps (≤32 entries, ≤63-byte keys,
 ≤253-byte values). A malicious or misconfigured node sending
@@ -77,7 +77,7 @@ oversize or malformed labels has them dropped silently — the node
 stays addressable, only the bad labels are stripped.
 
 Scheduler
-([`scheduler.go`](../../internal/cluster/scheduler.go)): new
+([`scheduler.go`](../../../internal/cluster/scheduler.go)): new
 `PickForSelector(selector)` filters healthy nodes by exact-equality
 label match before delegating to the configured Policy
 (RoundRobin / LeastLoaded / ResourceAware — all untouched). Two
@@ -91,16 +91,16 @@ distinct sentinels make dispatch-time handling precise:
   `job.unschedulable`).
 
 Dispatch + event
-([`dispatch.go`](../../internal/cluster/dispatch.go)): on
+([`dispatch.go`](../../../internal/cluster/dispatch.go)): on
 `ErrNoNodeMatchesSelector` the dispatch loop publishes a
-[`TopicJobUnschedulable`](../../internal/events/topics.go) event
+[`TopicJobUnschedulable`](../../../internal/events/topics.go) event
 carrying `job_id` + `unsatisfied_selector`, then moves on. A
 per-job debounce (`unschedulableEmitCooldown = 30s`) prevents event
 spam while a job is stuck; the debounce state clears the moment a
 successful pick happens, so recovery is observable.
 
 DAG validator — step-3 follow-up landed here
-([`dag.go`](../../internal/cluster/dag.go)):
+([`dag.go`](../../../internal/cluster/dag.go)):
 `ErrDAGFromConditionUnreachable` rejects a workflow at submit time
 when a job has `from:` references but its dependency condition is
 `on_failure` or `on_complete`. The stager only uploads on success,
@@ -116,13 +116,13 @@ passed through shell / env-var expansion, only compared with
 `string ==` and rendered in structured log / event fields.
 
 Tests: **24 across the slice**
-([`scheduler_selector_test.go`](../../internal/cluster/scheduler_selector_test.go),
-[`registry_labels_test.go`](../../internal/cluster/registry_labels_test.go),
-[`dispatch_unschedulable_test.go`](../../internal/cluster/dispatch_unschedulable_test.go),
-[`dispatch_debounce_internal_test.go`](../../internal/cluster/dispatch_debounce_internal_test.go),
-[`persistence_labels_test.go`](../../internal/cluster/persistence_labels_test.go),
-[`dag_from_condition_test.go`](../../internal/cluster/dag_from_condition_test.go),
-[`cmd/helion-node/labels_test.go`](../../cmd/helion-node/labels_test.go)).
+([`scheduler_selector_test.go`](../../../internal/cluster/scheduler_selector_test.go),
+[`registry_labels_test.go`](../../../internal/cluster/registry_labels_test.go),
+[`dispatch_unschedulable_test.go`](../../../internal/cluster/dispatch_unschedulable_test.go),
+[`dispatch_debounce_internal_test.go`](../../../internal/cluster/dispatch_debounce_internal_test.go),
+[`persistence_labels_test.go`](../../../internal/cluster/persistence_labels_test.go),
+[`dag_from_condition_test.go`](../../../internal/cluster/dag_from_condition_test.go),
+[`cmd/helion-node/labels_test.go`](../../../cmd/helion-node/labels_test.go)).
 Coverage: selector match / no-match / partial-match / empty-selector,
 registry re-registration replacing labels, sanitiser drops for
 bad entries, debounce window + recovery + cleanup on successful
@@ -151,7 +151,7 @@ them up without having to re-discover the context:
   view, not for the dispatch loop itself.
 - **Hardware attestation of node labels** — out of scope for
   feature 10 entirely; recorded in the backlog at
-  [deferred/README.md § ML Pipeline / Hardware attestation of node labels](deferred/README.md#hardware-attestation-of-node-labels)
+  [deferred/README.md § ML Pipeline / Hardware attestation of node labels](../deferred/README.md#hardware-attestation-of-node-labels)
   with the mitigation operators can apply in the meantime
   (deployment-supplied labels via `HELION_LABEL_*`).
 

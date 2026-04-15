@@ -3,7 +3,7 @@
 **Priority:** P1
 **Status:** Done
 **Affected files:** `internal/registry/` (new), `internal/api/handlers_registry.go` (new), `cmd/helion-coordinator/main.go`.
-**Parent slice:** [feature 10 — ML pipeline](10-minimal-ml-pipeline.md)
+**Parent slice:** [feature 10 — ML pipeline](../10-minimal-ml-pipeline.md)
 
 ## Dataset and model registries
 
@@ -66,13 +66,13 @@ from artifact URIs.
 ## Implementation notes — dataset + model registries (done)
 
 Two parallel resources, metadata only — the bytes stay in the
-artifact store ([step 1](11-ml-artifact-store.md)). The registry answers "what does this
+artifact store ([step 1](11-ml-artifact-store.md), sibling in this folder). The registry answers "what does this
 named model look like, by whom and when?"; the artifact store
 answers "how do I fetch its bytes?" Same split you'd find in
 MLflow / W&B / CometML, minimal cut.
 
 Data + persistence
-([`internal/registry/`](../../internal/registry/)):
+([`internal/registry/`](../../../internal/registry/)):
 
 - `Dataset` and `Model` structs carry URI + size + SHA256 (copied
   from the artifact store's Stat so downstream callers can verify
@@ -97,7 +97,7 @@ Data + persistence
   newer one, the newer one wins.
 
 REST surface
-([`internal/api/handlers_registry.go`](../../internal/api/handlers_registry.go)):
+([`internal/api/handlers_registry.go`](../../../internal/api/handlers_registry.go)):
 
 ```
 POST   /api/datasets
@@ -122,7 +122,7 @@ deployment that didn't opt in returns 404 from the mux rather
 than exposing phantom endpoints.
 
 Validation
-([`internal/registry/validate.go`](../../internal/registry/validate.go)):
+([`internal/registry/validate.go`](../../../internal/registry/validate.go)):
 
 - **Name:** lowercase alnum + `-._` (k8s DNS label charset). Shell-
   / URL- / BadgerDB-key-safe without escaping at any layer.
@@ -153,7 +153,7 @@ inherits mTLS + hybrid PQ channel):
 - Delete of an active model's registry entry does *not* delete
   the underlying artifact bytes — the registry holds pointers,
   not the data. Artifact GC is a step-6-adjacent deferred item
-  (see the [deferred backlog](deferred/README.md)).
+  (see the [deferred backlog](../deferred/README.md)).
 
 Deliberately deferred in this slice (recorded for clarity):
 
@@ -177,17 +177,17 @@ Deliberately deferred in this slice (recorded for clarity):
 
 Tests (33 new, all CI-safe):
 
-- [`registry/validate_test.go`](../../internal/registry/validate_test.go)
+- [`registry/validate_test.go`](../../../internal/registry/validate_test.go)
   — name / version / URI / tags / metrics / dataset / model
   validators, including partial-lineage rejection + NaN/±Inf +
   oversize + control-byte rejection.
-- [`registry/badger_test.go`](../../internal/registry/badger_test.go)
+- [`registry/badger_test.go`](../../../internal/registry/badger_test.go)
   — Dataset and Model roundtrips, `ErrAlreadyExists` on dup
   version, `ErrNotFound` on missing, list newest-first +
   pagination, delete-is-version-specific, `LatestModel`
   chronological (not semantic), cross-type isolation
   (dataset "x" doesn't collide with model "x").
-- [`api/handlers_registry_test.go`](../../internal/api/handlers_registry_test.go)
+- [`api/handlers_registry_test.go`](../../../internal/api/handlers_registry_test.go)
   — HTTP surface: register/get/list/delete for both
   resources, 409 on dup, 404 on missing, 400 on bad scheme /
   partial lineage / NaN metric, pagination, `/latest`

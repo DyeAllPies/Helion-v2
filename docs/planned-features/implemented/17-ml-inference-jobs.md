@@ -1,7 +1,7 @@
 # Feature: ML Inference Jobs
 
 **Priority:** P1
-**Status:** Done (Go runtime; Rust-runtime parity deferred to [deferred/20](deferred/20-rust-runtime-service-parity.md))
+**Status:** Done (Go runtime; Rust-runtime parity deferred to [deferred/20](../deferred/20-rust-runtime-service-parity.md))
 **Affected files:**
 `proto/node.proto` (ServiceSpec + DispatchRequest.service),
 `proto/coordinator.proto` (ServiceEvent + ReportServiceEvent RPC),
@@ -19,7 +19,7 @@
 `internal/grpcclient/client.go` (ReportServiceEvent client call),
 `internal/audit/logger.go` (LogServiceEvent),
 `cmd/helion-coordinator/main.go` + `cmd/helion-node/main.go` (wiring + advertise address).
-**Parent slice:** [feature 10 — ML pipeline](10-minimal-ml-pipeline.md)
+**Parent slice:** [feature 10 — ML pipeline](../10-minimal-ml-pipeline.md)
 
 ## Inference jobs
 
@@ -54,7 +54,7 @@ of this step is "you can train a model and serve it without leaving Helion."
 
 ## Security plan (this step)
 
-See [`docs/SECURITY.md` § Inference service surface](../SECURITY.md#inference-service-surface-feature-17) for the authoritative write-up. Summary:
+See [`docs/SECURITY.md` § Inference service surface](../../SECURITY.md#inference-service-surface-feature-17) for the authoritative write-up. Summary:
 
 - Prober binds to `127.0.0.1` only; coordinator never proxies.
 - `ReportServiceEvent` validates the reporting node against the dispatched job's `NodeID` — same cross-node-poison defence as `ReportResult`.
@@ -134,4 +134,4 @@ Full race suite + golangci-lint green on commit.
 
 ## Deferred
 
-- [deferred/20](deferred/20-rust-runtime-service-parity.md) — Rust runtime `IsService` handling. The Go backend is the default and covers feature 17 fully; the Rust backend needs a matching `proto/runtime.proto` field and a cooperative timeout-skip in the Rust process supervisor.
+- [deferred/20](../deferred/20-rust-runtime-service-parity.md) — Rust runtime `IsService` handling. The Go backend is the default and covers feature 17 fully; the Rust backend needs a matching `proto/runtime.proto` field and a cooperative timeout-skip in the Rust process supervisor.

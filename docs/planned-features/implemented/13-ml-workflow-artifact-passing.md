@@ -3,7 +3,7 @@
 **Priority:** P1
 **Status:** Done
 **Affected files:** `internal/cluster/dag.go`, `internal/cluster/workflow_resolve.go`, `internal/cluster/dispatch.go`, `internal/api/handlers_jobs.go`, `internal/api/types.go`, `internal/proto/coordinatorpb/types.go`.
-**Parent slice:** [feature 10 — ML pipeline](10-minimal-ml-pipeline.md)
+**Parent slice:** [feature 10 — ML pipeline](../10-minimal-ml-pipeline.md)
 
 ## Inter-job artifact passing in workflows
 
@@ -95,15 +95,15 @@ process to read.
 
 Data model:
 
-- [`cpb.ArtifactBinding`](../../internal/proto/coordinatorpb/types.go)
+- [`cpb.ArtifactBinding`](../../../internal/proto/coordinatorpb/types.go)
   gains a `From` field (JSON `from,omitempty`). The persisted Job
   record carries both `From` and the resolved `URI` once the
   coordinator rewrites — preserves lineage for audit and for retries.
-- [`api.ArtifactBindingRequest`](../../internal/api/types.go) mirrors
+- [`api.ArtifactBindingRequest`](../../../internal/api/types.go) mirrors
   it; plain-job submits still reject any `From` (no upstream context).
 
 API validation
-([`validateArtifactBindingsCtx`](../../internal/api/handlers_jobs.go)):
+([`validateArtifactBindingsCtx`](../../../internal/api/handlers_jobs.go)):
 
 - `From` only accepted when `allowFrom=true` and `requireURI=true` —
   i.e. workflow-job **inputs**. Outputs and plain submits reject it.
@@ -115,7 +115,7 @@ API validation
   ≤ 256, NUL/control rejected.
 
 DAG validation
-([`internal/cluster/dag.go`](../../internal/cluster/dag.go)):
+([`internal/cluster/dag.go`](../../../internal/cluster/dag.go)):
 
 After cycle detection, `validateFromReferences` walks every input
 with a `From`:
@@ -129,12 +129,12 @@ with a `From`:
    `ErrDAGFromUnknownOutput`.
 
 Dispatch-time resolution
-([`internal/cluster/workflow_resolve.go`](../../internal/cluster/workflow_resolve.go)):
+([`internal/cluster/workflow_resolve.go`](../../../internal/cluster/workflow_resolve.go)):
 
 `ResolveJobInputs(job, JobLookup)` returns a defensive copy of the
 Job with every `From` rewritten to the upstream's
 `ResolvedOutputs[n].URI`. Hooked into
-[`DispatchLoop.dispatchPending`](../../internal/cluster/dispatch.go)
+[`DispatchLoop.dispatchPending`](../../../internal/cluster/dispatch.go)
 just after the eligibility gate and before the first transition:
 failures (`ErrResolveUpstreamMissing`, `ErrResolveUpstreamNotCompleted`,
 `ErrResolveOutputMissing`) transition the downstream to Failed with
@@ -157,8 +157,8 @@ made it onto the upstream's record in the first place. The
 step 3 just trusts what it previously blessed.
 
 Cross-job integrity attestation
-([`cpb.ArtifactBinding.SHA256`](../../internal/proto/coordinatorpb/types.go) +
-[`artifacts.GetAndVerify`](../../internal/artifacts/store.go)):
+([`cpb.ArtifactBinding.SHA256`](../../../internal/proto/coordinatorpb/types.go) +
+[`artifacts.GetAndVerify`](../../../internal/artifacts/store.go)):
 
 The resolver also copies the upstream's committed SHA-256 onto the
 downstream's input. The digest travels over the wire via the new
@@ -170,7 +170,7 @@ workdir if the digest matches. Mismatches return
 workdir, failing the downstream job.
 
 This is defence-in-depth on top of the hybrid PQ channel
-([`docs/SECURITY.md` §3](../SECURITY.md)): the ML-KEM-768 / X25519
+([`docs/SECURITY.md` §3](../../SECURITY.md)): the ML-KEM-768 / X25519
 key exchange already protects the coordinator↔node wire from
 tampering, and the artifact store is typically accessed over TLS.
 The digest check catches three scenarios those layers don't
@@ -192,10 +192,10 @@ streaming Get so no verification overhead is paid when no digest is
 available to check against.
 
 Tests: **21 new, all passing**
-([`handlers_jobs_step3_test.go`](../../internal/api/handlers_jobs_step3_test.go),
-[`handlers_workflows_step3_test.go`](../../internal/api/handlers_workflows_step3_test.go),
-[`dag_step3_test.go`](../../internal/cluster/dag_step3_test.go),
-[`workflow_resolve_test.go`](../../internal/cluster/workflow_resolve_test.go)).
+([`handlers_jobs_step3_test.go`](../../../internal/api/handlers_jobs_step3_test.go),
+[`handlers_workflows_step3_test.go`](../../../internal/api/handlers_workflows_step3_test.go),
+[`dag_step3_test.go`](../../../internal/cluster/dag_step3_test.go),
+[`workflow_resolve_test.go`](../../../internal/cluster/workflow_resolve_test.go)).
 Coverage includes: `From` shape happy path + 9 rejection cases,
 URI/From mutual exclusivity, DAG unknown-upstream / non-ancestor /
 unknown-output / malformed-shape rejection, resolver happy path +

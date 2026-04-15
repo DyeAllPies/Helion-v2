@@ -3,11 +3,11 @@
 **Priority:** P1
 **Status:** Done
 **Affected files:** `internal/proto/coordinatorpb/types.go`, `internal/api/types.go`, `internal/cluster/scheduler.go`, `internal/cluster/registry_node.go`, `internal/runtime/gpu_alloc.go`, `internal/runtime/go_runtime.go`, `internal/runtime/rust_client.go`, `cmd/helion-node/labels.go`.
-**Parent slice:** [feature 10 — ML pipeline](10-minimal-ml-pipeline.md)
+**Parent slice:** [feature 10 — ML pipeline](../10-minimal-ml-pipeline.md)
 
 ## GPU as a first-class resource
 
-Promoted from the [`deferred/`](deferred/) backlog. Minimal scope:
+Promoted from the [`deferred/`](../deferred/) backlog. Minimal scope:
 
 - `nodeEntry.Resources` gains `GPUs int` (whole-GPU count, no fractional
   sharing, no MIG slicing).
@@ -47,24 +47,24 @@ device indices."
 
 Data flow:
 
-- [`cpb.ResourceRequest.GPUs`](../../internal/proto/coordinatorpb/types.go) +
-  [`api.ResourceRequestAPI.GPUs`](../../internal/api/types.go) mirror
+- [`cpb.ResourceRequest.GPUs`](../../../internal/proto/coordinatorpb/types.go) +
+  [`api.ResourceRequestAPI.GPUs`](../../../internal/api/types.go) mirror
   each other; API validator caps requests at `maxGPUs = 16`.
 - `pb.HeartbeatMessage.total_gpus` (new field 9) +
   `pb.DispatchRequest.gpus` (new field 11) carry the capacity and
   the per-job reservation on the wire.
-- Node agent ([`cmd/helion-node/labels.go`](../../cmd/helion-node/labels.go))
+- Node agent ([`cmd/helion-node/labels.go`](../../../cmd/helion-node/labels.go))
   probes `nvidia-smi --list-gpus` once at startup via the `gpuCountProbe`
   injection seam; the count feeds both the runtime's device-index
   allocator and the heartbeat capacity report so coordinator
   scheduling matches what the runtime can actually satisfy.
 - Coordinator
-  ([`cpb.Node.TotalGpus`](../../internal/proto/coordinatorpb/types.go),
-  [`nodeEntry._totalGpus`](../../internal/cluster/registry_node.go))
+  ([`cpb.Node.TotalGpus`](../../../internal/proto/coordinatorpb/types.go),
+  [`nodeEntry._totalGpus`](../../../internal/cluster/registry_node.go))
   persists and snapshots total-GPU capacity per node.
 
 Scheduler
-([`filterByGPU`](../../internal/cluster/scheduler.go)): the new
+([`filterByGPU`](../../../internal/cluster/scheduler.go)): the new
 `PickForJob(selector, gpusRequested)` entry point layers a GPU
 filter on top of the existing label-selector filter. A node with
 `TotalGpus < gpusRequested` is invisible to the job — same semantics
@@ -74,7 +74,7 @@ the filter entirely so legacy CPU jobs see every healthy node
 regardless of GPU count.
 
 GPU allocator
-([`internal/runtime/gpu_alloc.go`](../../internal/runtime/gpu_alloc.go)):
+([`internal/runtime/gpu_alloc.go`](../../../internal/runtime/gpu_alloc.go)):
 per-node device-index tracker, lowest-index-first allocation,
 whole-device reservations only (no MIG slicing, no memory-fraction
 tracking — deferred). `GoRuntime.Run` claims indices before exec,
@@ -95,16 +95,16 @@ counter.
 Testing:
 
 - **Pure-Go tests run on CI** (no GPU needed, 19 new):
-  [`gpu_alloc_test.go`](../../internal/runtime/gpu_alloc_test.go)
+  [`gpu_alloc_test.go`](../../../internal/runtime/gpu_alloc_test.go)
   covers allocator happy path / oversubscription rejection / zero
   request no-op / release-and-reuse / concurrent distinct
   allocations / zero-total fail / env string formatting;
-  [`gpu_runtime_test.go`](../../internal/runtime/gpu_runtime_test.go)
+  [`gpu_runtime_test.go`](../../../internal/runtime/gpu_runtime_test.go)
   end-to-end runs through a stub echo command asserting
   `CUDA_VISIBLE_DEVICES` is set on GPU jobs and not on CPU jobs;
-  [`scheduler_gpu_test.go`](../../internal/cluster/scheduler_gpu_test.go)
+  [`scheduler_gpu_test.go`](../../../internal/cluster/scheduler_gpu_test.go)
   covers filter semantics;
-  [`roundrobin_per_selector_test.go`](../../internal/cluster/roundrobin_per_selector_test.go)
+  [`roundrobin_per_selector_test.go`](../../../internal/cluster/roundrobin_per_selector_test.go)
   pins the per-set fairness invariant.
 - **Real-GPU harness, local only**, under
   [`tests/gpu/`](../../tests/gpu/) gated by `//go:build gpu` so CI
@@ -119,7 +119,7 @@ Security (matches [step-4](14-ml-node-labels-and-selectors.md)'s posture — no 
 hybrid PQ channel). A compromised node can still over-report
 `total_gpus` and win GPU jobs it can't serve; defending that needs
 hardware attestation, already captured in the
-[deferred backlog](deferred/README.md#hardware-attestation-of-node-labels).
+[deferred backlog](../deferred/README.md#hardware-attestation-of-node-labels).
 The per-job allocator on the node itself catches the subset of
 this failure where a *friendly-but-misconfigured* node reports
 more GPUs than it really has: the first over-commit attempt fails
@@ -140,13 +140,13 @@ What we did **not** do here (explicit deferrals):
   retry policy re-dispatches elsewhere); the cost is one wasted
   RPC + retry round-trip per attempt. The fix is the same shape
   as the existing CPU/memory blind spot — capture them together
-  in the [in-use resource tracking entry](deferred/README.md#coordinator-side-in-use-resource-tracking-cpu-memory-gpu)
+  in the [in-use resource tracking entry](../deferred/README.md#coordinator-side-in-use-resource-tracking-cpu-memory-gpu)
   on the deferred backlog.
 
 Closed-here follow-ups from the second-pass audit (commit `<this slice>`):
 
 - **`CUDA_VISIBLE_DEVICES` override safety** — fixed in
-  [`go_runtime.go`](../../internal/runtime/go_runtime.go) by
+  [`go_runtime.go`](../../../internal/runtime/go_runtime.go) by
   building the subprocess env via a `map[string]string` so a
   user-supplied `CUDA_VISIBLE_DEVICES` cannot shadow the
   allocator's value. The Rust runtime path already used a
@@ -154,8 +154,8 @@ Closed-here follow-ups from the second-pass audit (commit `<this slice>`):
   POSIX env precedence (first-set wins) let a malicious or
   confused caller escape per-job device pinning by setting their
   own value. Tests pin the invariant in both runtimes
-  ([`gpu_runtime_test.go`](../../internal/runtime/gpu_runtime_test.go)
-  + [`rust_client_gpu_test.go`](../../internal/runtime/rust_client_gpu_test.go)).
+  ([`gpu_runtime_test.go`](../../../internal/runtime/gpu_runtime_test.go)
+  + [`rust_client_gpu_test.go`](../../../internal/runtime/rust_client_gpu_test.go)).
 - **CPU jobs on GPU-equipped nodes can no longer see GPUs.**
   Both runtimes now stamp `CUDA_VISIBLE_DEVICES=""` for
   `req.GPUs == 0` whenever the node's allocator capacity is
@@ -172,7 +172,7 @@ Closed-here follow-ups from the second-pass audit (commit `<this slice>`):
   → untouched) plus user-override blocked on the hide path
   for both runtimes.
 - **BadgerDB roundtrip for `Node.TotalGpus`** — three new tests in
-  [`persistence_labels_test.go`](../../internal/cluster/persistence_labels_test.go)
+  [`persistence_labels_test.go`](../../../internal/cluster/persistence_labels_test.go)
   pin Save→LoadAll for the field, omitempty on zero, and forward
   compatibility with pre-GPU node rows. Symmetric to the
   step-4 labels persistence tests; without it a JSON-tag typo
@@ -184,7 +184,7 @@ Closed-here follow-ups from the second-pass audit (commit `<this slice>`):
 
 **Step-5 GPU parity, Go-side only.** The GPU allocator and
 `CUDA_VISIBLE_DEVICES` injection live entirely in
-[`internal/runtime/rust_client.go`](../../internal/runtime/rust_client.go):
+[`internal/runtime/rust_client.go`](../../../internal/runtime/rust_client.go):
 `RustClient.Run` claims device indices from a shared `GPUAllocator`
 *before* any IPC frame is built and stamps
 `CUDA_VISIBLE_DEVICES=<csv>` into `req.Env`. The Rust executor
@@ -204,7 +204,7 @@ the "node owns N GPUs, allocates indices to jobs" logic in one
 place that both backends share via composition.
 
 Tests
-([`rust_client_gpu_test.go`](../../internal/runtime/rust_client_gpu_test.go),
+([`rust_client_gpu_test.go`](../../../internal/runtime/rust_client_gpu_test.go),
 5 new): mock Rust server captures the encoded RunRequest payload
 and we assert `CUDA_VISIBLE_DEVICES` is present + correct on GPU
 jobs / absent on CPU jobs / oversubscription fails before IPC /

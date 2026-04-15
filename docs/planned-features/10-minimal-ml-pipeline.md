@@ -93,13 +93,13 @@ enumerated below.
 
 | # | Feature file | One-line summary | Status |
 |---|-------------|------------------|--------|
-| 1 | [11-ml-artifact-store.md](11-ml-artifact-store.md) | `internal/artifacts/` Store interface with Local + S3 backends | Done |
-| 2 | [12-ml-job-io-staging.md](12-ml-job-io-staging.md) | `SubmitRequest` inputs/outputs/working_dir + node-side Stager | Done |
-| 3 | [13-ml-workflow-artifact-passing.md](13-ml-workflow-artifact-passing.md) | `from: upstream.OUTPUT` references resolved at dispatch time | Done |
-| 4 | [14-ml-node-labels-and-selectors.md](14-ml-node-labels-and-selectors.md) | Node labels + `node_selector` scheduler filter | Done |
-| 5 | [15-ml-gpu-first-class-resource.md](15-ml-gpu-first-class-resource.md) | Whole-GPU scheduling + `CUDA_VISIBLE_DEVICES` pinning | Done |
-| 6 | [16-ml-dataset-model-registry.md](16-ml-dataset-model-registry.md) | `/api/datasets` + `/api/models` with lineage metadata | Done |
-| 7 | [17-ml-inference-jobs.md](17-ml-inference-jobs.md) | `ServiceSpec` long-running jobs with readiness probes | Done |
+| 1 | [11-ml-artifact-store.md](implemented/11-ml-artifact-store.md) | `internal/artifacts/` Store interface with Local + S3 backends | Done |
+| 2 | [12-ml-job-io-staging.md](implemented/12-ml-job-io-staging.md) | `SubmitRequest` inputs/outputs/working_dir + node-side Stager | Done |
+| 3 | [13-ml-workflow-artifact-passing.md](implemented/13-ml-workflow-artifact-passing.md) | `from: upstream.OUTPUT` references resolved at dispatch time | Done |
+| 4 | [14-ml-node-labels-and-selectors.md](implemented/14-ml-node-labels-and-selectors.md) | Node labels + `node_selector` scheduler filter | Done |
+| 5 | [15-ml-gpu-first-class-resource.md](implemented/15-ml-gpu-first-class-resource.md) | Whole-GPU scheduling + `CUDA_VISIBLE_DEVICES` pinning | Done |
+| 6 | [16-ml-dataset-model-registry.md](implemented/16-ml-dataset-model-registry.md) | `/api/datasets` + `/api/models` with lineage metadata | Done |
+| 7 | [17-ml-inference-jobs.md](implemented/17-ml-inference-jobs.md) | `ServiceSpec` long-running jobs with readiness probes | Done |
 | 8 | [implemented/18-ml-dashboard-module.md](implemented/18-ml-dashboard-module.md) | Angular ML module: Datasets / Models / Services / Pipelines (all four views shipped) | Done |
 | 9 | [19-ml-end-to-end-demo.md](19-ml-end-to-end-demo.md) | `examples/ml-iris/` worked example + acceptance test | Written, awaiting acceptance run |
 | 10 | [20-ml-documentation.md](20-ml-documentation.md) | Architecture / Components / persistence / ml-pipelines docs | Pending |
@@ -164,7 +164,7 @@ findings if they ship before the mitigation lands:
   provenance attestation (SLSA / Sigstore). Deferred; registry hooks
   are an obvious place to add them.
 - **Staging audit events.** The staging/output taxonomy in
-  [step 2](12-ml-job-io-staging.md) is designed but not yet emitted.
+  [step 2](implemented/12-ml-job-io-staging.md) is designed but not yet emitted.
   A small follow-up commit wires `s.audit.Log(...)` calls into
   `Stager.Prepare/Finalize` and the coordinator's
   `validateReportedOutput` drop path. Low risk; purely additive.

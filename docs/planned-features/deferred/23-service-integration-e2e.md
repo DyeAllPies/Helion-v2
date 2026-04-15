@@ -2,7 +2,7 @@
 
 **Priority:** P3
 **Status:** Deferred
-**Originating feature:** [feature 17 — ML inference jobs](../17-ml-inference-jobs.md)
+**Originating feature:** [feature 17 — ML inference jobs](../implemented/17-ml-inference-jobs.md)
 **Audit reference:** [2026-04-14-02](../../audits/2026-04-14-02.md) finding T1
 
 ## Context
