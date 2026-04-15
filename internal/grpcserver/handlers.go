@@ -180,7 +180,17 @@ func (s *Server) ReportResult(
 	opts.NodeID = result.NodeId
 	opts.ExitCode = result.ExitCode
 	opts.Runtime = result.Runtime
-	opts.ResolvedOutputs = s.attestOutputs(result.JobId, result.NodeId, result.Outputs)
+	// Build the declared-Name set from the Job's submit-time Outputs
+	// spec so attestOutputs can drop any reported entry that smuggled
+	// in a Name the operator never asked for. nil-safe — a Job with
+	// no declared outputs simply has an empty set, which makes
+	// attestOutputs drop everything (correct: a job that didn't
+	// declare outputs shouldn't be reporting any).
+	declared := make(map[string]struct{}, len(job.Outputs))
+	for _, o := range job.Outputs {
+		declared[o.Name] = struct{}{}
+	}
+	opts.ResolvedOutputs = s.attestOutputs(result.JobId, result.NodeId, result.Outputs, declared)
 
 	// If job is in dispatching state, transition to running first
 	// (required by the state machine: dispatching → running → completed)
@@ -279,7 +289,17 @@ var allowedOutputSchemes = map[string]struct{}{
 // node could report `s3://bucket/jobs/<other-job-id>/<stolen>` and
 // step-3 workflow resolution would happily pipe another job's output
 // (or a path entirely outside the jobs/ tree) into a downstream job.
-func (s *Server) attestOutputs(jobID, nodeID string, src []*pb.ArtifactOutput) []cpb.ArtifactOutput {
+// declaredNames is the optional set of output Names from the Job's
+// own Outputs declaration. attestOutputs cross-checks every reported
+// Name against it and drops anything not declared — a defence
+// against a compromised node smuggling fabricated output names into
+// a job's ResolvedOutputs (which the dashboard surfaces, the audit
+// log records, and downstream resolvers may match against).
+//
+// Pass nil to disable the check (e.g. when the caller doesn't have
+// the Job spec available); existing tests that exercise attestOutputs
+// in isolation use this path.
+func (s *Server) attestOutputs(jobID, nodeID string, src []*pb.ArtifactOutput, declaredNames map[string]struct{}) []cpb.ArtifactOutput {
 	if len(src) == 0 {
 		return nil
 	}
@@ -320,6 +340,30 @@ func (s *Server) attestOutputs(jobID, nodeID string, src []*pb.ArtifactOutput) [
 				}
 			}
 			continue
+		}
+		// Name-attestation: drop any output whose Name was not in the
+		// Job's submit-time Outputs declaration. The prefix check above
+		// proves the URI lives under this job's key space, but a
+		// compromised node can write whatever bytes it likes to its own
+		// prefix and report them under any Name it pleases. Without
+		// this check the dashboard's Pipelines / Models view + the
+		// audit log would carry node-fabricated entries that no Job
+		// spec ever asked for. Skipped when declaredNames is nil so
+		// the unit tests that invoke attestOutputs without a Job spec
+		// continue to work.
+		if declaredNames != nil {
+			if _, ok := declaredNames[o.Name]; !ok {
+				s.log.Warn("dropping reported output not in Job.Outputs declaration",
+					slog.String("job_id", jobID),
+					slog.String("node_id", nodeID),
+					slog.String("name", o.Name))
+				if s.audit != nil {
+					if aerr := s.audit.LogSecurityViolation(context.Background(), nodeID, jobID, "output_name_undeclared"); aerr != nil {
+						s.log.Warn("audit undeclared name failed", slog.Any("err", aerr))
+					}
+				}
+				continue
+			}
 		}
 		out = append(out, cpb.ArtifactOutput{
 			Name:      o.Name,

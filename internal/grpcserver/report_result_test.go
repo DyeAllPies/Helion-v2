@@ -267,11 +267,18 @@ func TestReportResult_DispatchingJob_TransitionsToRunningThenCompleted(t *testin
 func TestReportResult_AttestsOutputs_DropsForgedEntries(t *testing.T) {
 	coordBundle, _ := auth.NewCoordinatorBundle()
 	js := newMockJobStore()
-	// Running → Completed path; job pinned to a specific node.
+	// Running → Completed path; job pinned to a specific node. The
+	// Job declares "LEGIT" in Outputs so the audit-2026-04-15-05
+	// declared-name attestation lets it through; the FORGED entry
+	// below is dropped on the prefix check (its URI names another
+	// job's prefix), which is what this test was written to assert.
 	js.jobs["legit-job"] = &cpb.Job{
 		ID:     "legit-job",
 		Status: cpb.JobStatusRunning,
 		NodeID: "worker-node",
+		Outputs: []cpb.ArtifactBinding{
+			{Name: "LEGIT", LocalPath: "out.bin"},
+		},
 	}
 
 	srv, _ := grpcserver.New(coordBundle, grpcserver.WithJobStore(js))
@@ -348,6 +355,149 @@ func TestReportResult_AttestsOutputs_DropsForgedEntries(t *testing.T) {
 	persisted, _ := js.Get("legit-job")
 	if len(persisted.ResolvedOutputs) != 1 {
 		t.Errorf("persisted Job.ResolvedOutputs: got %d, want 1", len(persisted.ResolvedOutputs))
+	}
+}
+
+// TestReportResult_AttestsOutputs_DropsUndeclaredName covers the
+// declared-name cross-check added in audit 2026-04-15-05.
+//
+// A compromised node has full control over its own jobs/<id>/ key
+// space — it can write arbitrary bytes there. What it should NOT
+// be able to do is **register those bytes under arbitrary Names**
+// in the coordinator's Job.ResolvedOutputs record, because the
+// dashboard surfaces Names verbatim and downstream resolvers may
+// look up by Name.
+//
+// Production fix in handlers.go: ReportResult builds a set of
+// Names declared in Job.Outputs at submit time and passes it to
+// attestOutputs, which drops any reported entry whose Name isn't
+// in that set. The previous prefix check still applies (this is
+// belt-and-braces).
+//
+// This test exercises the path: the Job declares only "MODEL";
+// the node reports "MODEL" + "EVIL" (both with valid prefix +
+// shape); only "MODEL" survives.
+func TestReportResult_AttestsOutputs_DropsUndeclaredName(t *testing.T) {
+	coordBundle, _ := auth.NewCoordinatorBundle()
+	js := newMockJobStore()
+	js.jobs["smuggler-job"] = &cpb.Job{
+		ID:     "smuggler-job",
+		Status: cpb.JobStatusRunning,
+		NodeID: "compromised-node",
+		// Only MODEL is declared at submit time.
+		Outputs: []cpb.ArtifactBinding{
+			{Name: "MODEL", LocalPath: "model.bin"},
+		},
+	}
+
+	srv, _ := grpcserver.New(coordBundle, grpcserver.WithJobStore(js))
+
+	lis, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := lis.Addr().String()
+	lis.Close()
+
+	go func() { _ = srv.Serve(addr) }()
+	t.Cleanup(srv.Stop)
+	time.Sleep(40 * time.Millisecond)
+
+	nb, _ := auth.NewNodeBundle(coordBundle.CA, "compromised-node")
+	client, err := grpcclient.New(addr, "helion-coordinator", nb)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Both reported outputs have the correct jobs/smuggler-job/
+	// prefix — they pass the URI prefix check. The defence is
+	// purely on Name vs declared.
+	if err := client.ReportResult(ctx, &pb.JobResult{
+		JobId:   "smuggler-job",
+		NodeId:  "compromised-node",
+		Success: true,
+		Outputs: []*pb.ArtifactOutput{
+			{
+				Name:      "MODEL",
+				Uri:       "s3://helion/jobs/smuggler-job/model.bin",
+				LocalPath: "model.bin",
+				Size:      42,
+				Sha256:    "deadbeef",
+			},
+			{
+				Name:      "EVIL",
+				Uri:       "s3://helion/jobs/smuggler-job/evil.bin",
+				LocalPath: "evil.bin",
+				Size:      99,
+				Sha256:    "feedface",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("ReportResult: %v", err)
+	}
+
+	got := js.lastTransitionOpts.ResolvedOutputs
+	if len(got) != 1 {
+		t.Fatalf("want 1 attested output (only declared), got %d: %+v", len(got), got)
+	}
+	if got[0].Name != "MODEL" {
+		t.Errorf("attested name: got %q, want %q", got[0].Name, "MODEL")
+	}
+}
+
+// TestReportResult_AttestsOutputs_NoOutputsDeclared_DropsAll covers
+// the edge case where a Job declares no Outputs at all but the node
+// reports some anyway. The empty declared-set should drop everything;
+// a job that didn't ask for outputs has no business reporting any.
+func TestReportResult_AttestsOutputs_NoOutputsDeclared_DropsAll(t *testing.T) {
+	coordBundle, _ := auth.NewCoordinatorBundle()
+	js := newMockJobStore()
+	// No Outputs declaration at all.
+	js.jobs["batch-job"] = &cpb.Job{
+		ID:     "batch-job",
+		Status: cpb.JobStatusRunning,
+		NodeID: "node-a",
+	}
+
+	srv, _ := grpcserver.New(coordBundle, grpcserver.WithJobStore(js))
+
+	lis, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := lis.Addr().String()
+	lis.Close()
+
+	go func() { _ = srv.Serve(addr) }()
+	t.Cleanup(srv.Stop)
+	time.Sleep(40 * time.Millisecond)
+
+	nb, _ := auth.NewNodeBundle(coordBundle.CA, "node-a")
+	client, err := grpcclient.New(addr, "helion-coordinator", nb)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := client.ReportResult(ctx, &pb.JobResult{
+		JobId:   "batch-job",
+		NodeId:  "node-a",
+		Success: true,
+		Outputs: []*pb.ArtifactOutput{
+			{
+				Name:      "SURPRISE",
+				Uri:       "s3://helion/jobs/batch-job/surprise.bin",
+				LocalPath: "surprise.bin",
+				Sha256:    "deadbeef",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("ReportResult: %v", err)
+	}
+
+	if got := js.lastTransitionOpts.ResolvedOutputs; len(got) != 0 {
+		t.Fatalf("undeclared-only outputs should produce empty ResolvedOutputs, got %+v", got)
 	}
 }
 

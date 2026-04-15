@@ -199,9 +199,39 @@ closed:
 The same audit [declares feature 12 coverage
 saturated](../../audits/done/2026-04-15-04.md#recommendation) —
 seven considered items didn't clear the "would catch a real
-regression" bar. Future audits on this slice will find contrived
-gaps, not real ones; next recommended audit is feature 13
-(workflow artifact passing).
+regression" bar. *(That declaration was premature; audit
+2026-04-15-05 found a real production gap on the next pass.
+See below.)*
+
+**Third coverage audit + production fix** — audit
+[`2026-04-15-05`](../../audits/done/2026-04-15-05.md) reopened
+feature 12's attestation surface and found a real defence-in-depth
+gap: `attestOutputs` enforced shape + scheme + per-job key prefix
+but did **not** cross-check the reported output Names against the
+Job's submit-time `Outputs` declaration. A compromised node
+controls bytes under its own `jobs/<id>/` prefix; under the prior
+behaviour it could register those bytes under arbitrary Names,
+polluting the dashboard's Pipelines / Models view + the audit
+trail. (Cross-job data exfiltration was already blocked by the DAG
+validator on the downstream side, so this was Low severity rather
+than High — but real.)
+
+Fix: `attestOutputs` now takes a `declaredNames` set, populated by
+the `ReportResult` handler from `job.Outputs`. Reported entries
+whose Name isn't in the set are dropped, logged as a Warn, and
+emit a `LogSecurityViolation` audit event with reason
+`output_name_undeclared` (parallel to the existing
+`output_prefix_mismatch`). nil-safe so the legacy unit-level
+attestOutputs tests in `security_test.go` keep working unchanged.
+
+Two new tests cover the path:
+
+- [`report_result_test.go:TestReportResult_AttestsOutputs_DropsUndeclaredName`](../../../internal/grpcserver/report_result_test.go)
+  — Job declares only `MODEL`; node reports `MODEL` + `EVIL`
+  with valid prefixes; only `MODEL` persists.
+- [`report_result_test.go:TestReportResult_AttestsOutputs_NoOutputsDeclared_DropsAll`](../../../internal/grpcserver/report_result_test.go)
+  — batch job with empty `Outputs`; the empty declared-set drops
+  every reported entry. Locks in the fail-closed default.
 
 ### Staging follow-ups
 

@@ -73,7 +73,10 @@ func TestAttestOutputs_DropsPrefixMismatch(t *testing.T) {
 		// different file than it declared.
 		{Name: "LYING", Uri: "s3://b/jobs/job-x/out/other", LocalPath: "out/declared"},
 	}
-	got := s.attestOutputs("job-x", "node-1", in)
+	// declaredNames=nil keeps this test focused on the prefix-mismatch
+	// path; the new declared-Names cross-check has its own dedicated
+	// test in report_result_test.go.
+	got := s.attestOutputs("job-x", "node-1", in, nil)
 	if len(got) != 1 || got[0].Name != "OK" {
 		t.Fatalf("expected only OK to survive attestation: %+v", got)
 	}
@@ -89,7 +92,7 @@ func TestAttestOutputs_TruncatesAboveCap(t *testing.T) {
 			LocalPath: "out/x",
 		}
 	}
-	got := s.attestOutputs("j", "n", many)
+	got := s.attestOutputs("j", "n", many, nil)
 	if len(got) > maxReportedOutputs {
 		t.Fatalf("attestOutputs returned %d > cap %d", len(got), maxReportedOutputs)
 	}

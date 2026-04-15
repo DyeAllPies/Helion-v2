@@ -36,3 +36,4 @@ audit itself.
 | [2026-04-15-02](2026-04-15-02.md) | Feature-11 fourth-pass coverage audit — cross-backend contract lock added; declares coverage saturation |
 | [2026-04-15-03](2026-04-15-03.md) | Feature-12 coverage audit — 2 test gaps fixed (ReportResult attestation wiring + live-MinIO Stager upload) |
 | [2026-04-15-04](2026-04-15-04.md) | Feature-12 second-pass audit — output-size cap + stager-less refusal + Cleanup idempotency; declares feature 12 saturation |
+| [2026-04-15-05](2026-04-15-05.md) | Feature-12 third-pass audit — `attestOutputs` now cross-checks reported Names against `Job.Outputs`; production fix + 2 tests; recants prior saturation claim |
