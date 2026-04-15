@@ -381,6 +381,43 @@ func TestFinalize_SymlinkOutputRejected(t *testing.T) {
 
 // ── workdir lifecycle ───────────────────────────────────────────────────
 
+// TestNewStager_EmptyWorkRoot_FallsBackToTempDir locks in the
+// documented fallback behaviour at staging.go:68-70 — if the caller
+// passes an empty workRoot (the common "HELION_WORK_ROOT unset"
+// case in production), the Stager synthesises one under
+// `os.TempDir() + /helion-jobs`. A regression here is loud in
+// production (MkdirAll on a bad path fails the first Prepare) but
+// silent in tests, which always pass explicit workRoot paths.
+// This test is the alarm.
+func TestNewStager_EmptyWorkRoot_FallsBackToTempDir(t *testing.T) {
+	store, err := artifacts.NewLocalStore(filepath.Join(t.TempDir(), "store"))
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+	// Explicitly pass "" as workRoot — this is the unset-env case.
+	s := NewStager(store, "", false, slog.Default())
+
+	job := &cpb.Job{ID: "empty-workroot-fallback"}
+	p, err := s.Prepare(context.Background(), job)
+	if err != nil {
+		t.Fatalf("Prepare with empty workRoot: %v", err)
+	}
+	defer p.Cleanup()
+
+	wantPrefix := filepath.Join(os.TempDir(), "helion-jobs")
+	// Accept either a direct prefix match (POSIX) or a case-
+	// insensitive match (Windows' TempDir casing varies across
+	// environments). The important invariant is: fallback resolved
+	// under TempDir, not under the process cwd or some other
+	// surprise location.
+	abs, _ := filepath.Abs(p.WorkingDir)
+	absPrefix, _ := filepath.Abs(wantPrefix)
+	if !strings.HasPrefix(strings.ToLower(abs), strings.ToLower(absPrefix)) {
+		t.Fatalf("workdir not under TempDir/helion-jobs fallback:\n  got:    %s\n  want under: %s",
+			abs, absPrefix)
+	}
+}
+
 func TestPrepare_WorkdirUnderWorkRoot(t *testing.T) {
 	s, _, workRoot := newStager(t)
 	job := &cpb.Job{ID: "wd-under"}

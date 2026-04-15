@@ -37,6 +37,7 @@ Security & code-quality audits, one file per run.
 | [done/2026-04-15-03](done/2026-04-15-03.md) | Feature-12 coverage audit — 2 test gaps fixed (ReportResult attestation wiring + live-MinIO Stager upload); no production-code defects |
 | [done/2026-04-15-04](done/2026-04-15-04.md) | Feature-12 second-pass audit — 1 Medium + 1 Low + 1 Test Gap fixed (output-size cap, stager-less refusal, Cleanup idempotency); declares feature 12 saturation |
 | [done/2026-04-15-05](done/2026-04-15-05.md) | Feature-12 third-pass audit — production fix: `attestOutputs` now cross-checks reported output Names against `Job.Outputs` declaration; 1 Low + 2 Test Gaps; recants the prior pass's saturation claim |
+| [done/2026-04-15-06](done/2026-04-15-06.md) | Feature-12 fourth-pass audit — 1 Test Gap fixed (empty-`workRoot` fallback); six items considered and dismissed; calibration-based recommendation to move on to feature 13 |
 
 ## Workflow
 
