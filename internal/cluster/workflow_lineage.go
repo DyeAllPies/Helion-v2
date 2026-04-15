@@ -209,13 +209,19 @@ func BuildWorkflowLineage(
 	return lineage, nil
 }
 
-// splitFromRef splits "<upstream>.<output>" into its two halves.
-// Mirrors firstFromRef in dispatch.go; kept separate so a rename
-// or format change in one doesn't silently desync the other.
+// splitFromRef splits "<upstream>.<output>" into its two halves at
+// the LAST '.', matching api.SplitFromRef / cluster.splitDotRef /
+// firstFromRef. Workflow job names may contain dots, so a first-dot
+// split would misattribute upstream vs. output. Returns ("", "") for
+// malformed refs (empty, leading/trailing dot) — the caller skips
+// those so the lineage edge is simply omitted.
 func splitFromRef(ref string) (upstream, outputName string) {
-	idx := strings.IndexByte(ref, '.')
-	if idx < 0 {
-		return ref, ""
+	if ref == "" {
+		return "", ""
 	}
-	return ref[:idx], ref[idx+1:]
+	dot := strings.LastIndexByte(ref, '.')
+	if dot <= 0 || dot == len(ref)-1 {
+		return "", ""
+	}
+	return ref[:dot], ref[dot+1:]
 }

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/events"
@@ -80,14 +81,15 @@ func firstFromRef(inputs []cpb.ArtifactBinding) (upstream, outputName string) {
 		if b.From == "" {
 			continue
 		}
-		// From format: "<upstream_job>.<output_name>" — matches
-		// ResolveJobInputs's split rule. A malformed From string
-		// returns the whole thing as upstream so the event still
-		// carries the raw value for operator inspection.
-		for i := 0; i < len(b.From); i++ {
-			if b.From[i] == '.' {
-				return b.From[:i], b.From[i+1:]
-			}
+		// From format: "<upstream_job>.<output_name>". Split at the
+		// LAST '.' to match api.SplitFromRef / cluster.splitDotRef —
+		// workflow job names may contain dots, so first-dot split
+		// would misattribute the upstream and leave the output_name
+		// carrying a leftover prefix. A malformed From string
+		// (no dot, leading/trailing dot) returns the raw value as
+		// upstream so the event still surfaces something to operators.
+		if dot := strings.LastIndexByte(b.From, '.'); dot > 0 && dot < len(b.From)-1 {
+			return b.From[:dot], b.From[dot+1:]
 		}
 		return b.From, ""
 	}

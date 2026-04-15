@@ -39,6 +39,7 @@ Security & code-quality audits, one file per run.
 | [done/2026-04-15-05](done/2026-04-15-05.md) | Feature-12 third-pass audit — production fix: `attestOutputs` now cross-checks reported output Names against `Job.Outputs` declaration; 1 Low + 2 Test Gaps; recants the prior pass's saturation claim |
 | [done/2026-04-15-06](done/2026-04-15-06.md) | Feature-12 fourth-pass audit — 1 Test Gap fixed (empty-`workRoot` fallback); six items considered and dismissed; calibration-based recommendation to move on to feature 13 |
 | [done/2026-04-15-07](done/2026-04-15-07.md) | Feature-13 first-pass audit — 1 Test Gap fixed (`ml.resolve_failed` event observer); 11 items dismissed; recommends feature 14 or 15 next |
+| [done/2026-04-15-08](done/2026-04-15-08.md) | Feature-13 second-pass audit — production fix: two sibling `<upstream>.<output>` splitters converted from first-dot to last-dot to match the canonical contract; 1 Low + 2 Test Gaps; recants 07's saturation claim |
 
 ## Workflow
 

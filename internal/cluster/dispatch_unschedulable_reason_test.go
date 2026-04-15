@@ -88,6 +88,29 @@ func TestFirstFromRef(t *testing.T) {
 			wantUpstream:   "nodothere",
 			wantOutputName: "",
 		},
+		{
+			// Pins the last-dot split rule: workflow job names may
+			// contain dots, so "a.b.c.OUT" must split as upstream
+			// "a.b.c" / output "OUT" to match the resolver and the
+			// DAG validator. A first-dot split would misroute the
+			// ml.resolve_failed event's upstream/output_name fields.
+			name: "multi-dot From splits at last dot",
+			inputs: []cpb.ArtifactBinding{
+				{Name: "D", From: "model.v2.TRAIN"},
+			},
+			wantUpstream:   "model.v2",
+			wantOutputName: "TRAIN",
+		},
+		{
+			// Trailing dot is malformed; fall back to raw value so
+			// the event still carries something useful.
+			name: "trailing dot returns raw as upstream",
+			inputs: []cpb.ArtifactBinding{
+				{Name: "D", From: "upstream."},
+			},
+			wantUpstream:   "upstream.",
+			wantOutputName: "",
+		},
 	}
 
 	for _, tc := range cases {

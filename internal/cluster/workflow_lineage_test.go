@@ -207,6 +207,52 @@ func TestBuildWorkflowLineage_MalformedFromRef_Skipped(t *testing.T) {
 	}
 }
 
+// TestBuildWorkflowLineage_MultiDotFromRef_LastDotSplit pins the
+// contract that From refs split at the LAST '.', not the first.
+// Workflow job names may contain dots (no regex forbids them); a
+// downstream input `from: "model.v2.TRAIN"` must resolve to upstream
+// "model.v2" / output "TRAIN", not upstream "model" / output
+// "v2.TRAIN". Mirrors api.SplitFromRef and cluster.splitDotRef so
+// the lineage edges agree with what the resolver / DAG validator see.
+func TestBuildWorkflowLineage_MultiDotFromRef_LastDotSplit(t *testing.T) {
+	wf := &cpb.Workflow{
+		ID: "wf-1",
+		Jobs: []cpb.WorkflowJob{
+			{
+				Name:    "model.v2",
+				Outputs: []cpb.ArtifactBinding{{Name: "TRAIN", LocalPath: "out/t"}},
+			},
+			{
+				Name:      "train",
+				DependsOn: []string{"model.v2"},
+				Inputs: []cpb.ArtifactBinding{
+					{Name: "DATA", From: "model.v2.TRAIN", LocalPath: "in/d"},
+				},
+			},
+		},
+	}
+	got, err := cluster.BuildWorkflowLineage(
+		context.Background(), "wf-1",
+		&fakeWorkflowReader{wf: wf},
+		&fakeJobReader{jobs: map[string]*cpb.Job{}},
+		&fakeModelReader{},
+	)
+	if err != nil {
+		t.Fatalf("BuildWorkflowLineage: %v", err)
+	}
+	if len(got.ArtifactEdges) != 1 {
+		t.Fatalf("want 1 edge, got %d: %+v", len(got.ArtifactEdges), got.ArtifactEdges)
+	}
+	e := got.ArtifactEdges[0]
+	if e.FromJob != "model.v2" || e.FromOutput != "TRAIN" {
+		t.Errorf("edge split wrong: got FromJob=%q FromOutput=%q, want (\"model.v2\",\"TRAIN\")",
+			e.FromJob, e.FromOutput)
+	}
+	if e.ToJob != "train" || e.ToInput != "DATA" {
+		t.Errorf("edge target wrong: got (%q,%q)", e.ToJob, e.ToInput)
+	}
+}
+
 func TestBuildWorkflowLineage_PropagatesModelStoreError(t *testing.T) {
 	wf := &cpb.Workflow{
 		ID:   "wf-1",
