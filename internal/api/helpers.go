@@ -64,6 +64,13 @@ func jobToResponse(j *cpb.Job) JobResponse {
 		t := j.RetryAfter
 		resp.RetryAfter = &t
 	}
+	if j.Service != nil {
+		resp.Service = &ServiceSpecRequest{
+			Port:            j.Service.Port,
+			HealthPath:      j.Service.HealthPath,
+			HealthInitialMs: j.Service.HealthInitialMS,
+		}
+	}
 	return resp
 }
 

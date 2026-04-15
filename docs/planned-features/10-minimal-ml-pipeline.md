@@ -1,7 +1,7 @@
 # Feature: Minimal ML Pipeline
 
 **Priority:** P1
-**Status:** In progress (steps 1–6 implemented; 7–10 pending)
+**Status:** In progress (steps 1–7 implemented; 8–10 pending)
 **Affected files:**
 `internal/api/types.go`,
 `internal/cluster/registry_node.go`,
@@ -99,7 +99,7 @@ enumerated below.
 | 4 | [14-ml-node-labels-and-selectors.md](14-ml-node-labels-and-selectors.md) | Node labels + `node_selector` scheduler filter | Done |
 | 5 | [15-ml-gpu-first-class-resource.md](15-ml-gpu-first-class-resource.md) | Whole-GPU scheduling + `CUDA_VISIBLE_DEVICES` pinning | Done |
 | 6 | [16-ml-dataset-model-registry.md](16-ml-dataset-model-registry.md) | `/api/datasets` + `/api/models` with lineage metadata | Done |
-| 7 | [17-ml-inference-jobs.md](17-ml-inference-jobs.md) | `ServiceSpec` long-running jobs with readiness probes | Pending |
+| 7 | [17-ml-inference-jobs.md](17-ml-inference-jobs.md) | `ServiceSpec` long-running jobs with readiness probes | Done |
 | 8 | [18-ml-dashboard-module.md](18-ml-dashboard-module.md) | Angular ML module: Datasets / Models / Pipelines / Services | Pending |
 | 9 | [19-ml-end-to-end-demo.md](19-ml-end-to-end-demo.md) | `examples/ml-iris/` worked example + acceptance test | Pending |
 | 10 | [20-ml-documentation.md](20-ml-documentation.md) | Architecture / Components / persistence / ml-pipelines docs | Pending |
@@ -116,7 +116,7 @@ enumerated below.
 | 4    | Node labels + node_selector scheduling           | —            | Small  | Done   |
 | 5    | GPU as a scheduling resource                     | 4            | Medium | Done   |
 | 6    | Dataset + model registries (API + storage)       | 1            | Medium | Done   |
-| 7    | Inference jobs (Service spec + readiness)        | 2            | Small  | Pending |
+| 7    | Inference jobs (Service spec + readiness)        | 2            | Small  | Done    |
 | 8    | Dashboard ML module                              | 6, 7         | Medium | Pending |
 | 9    | Iris end-to-end example                          | 2, 3, 6, 7   | Small  | Pending |
 | 10   | Documentation                                    | All          | Small  | Pending |

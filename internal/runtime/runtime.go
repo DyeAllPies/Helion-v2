@@ -52,6 +52,15 @@ type RunRequest struct {
 	// The indices are released when the subprocess exits (success,
 	// failure, timeout, or context cancel).
 	GPUs uint32
+
+	// IsService marks this job as a long-running inference service
+	// (feature 17). When true, the runtime skips default-timeout
+	// enforcement — the process runs until the caller cancels ctx
+	// or the service exits on its own. TimeoutSeconds is ignored.
+	// The probe loop that watches the service's health endpoint is
+	// owned by the caller (nodeserver), not the runtime, because the
+	// runtime does not know the service port.
+	IsService bool
 }
 
 // ResourceLimits constrains a job's CPU and memory usage via cgroup v2.

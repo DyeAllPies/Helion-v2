@@ -82,6 +82,10 @@ const (
 	maxNodeSelectorKeyLen  = 63
 	maxNodeSelectorValLen  = 253
 	maxWorkingDirLen       = 512
+
+	// Feature 17 — inference service spec.
+	maxHealthPathLen         = 256          // bytes in service.health_path
+	maxServiceHealthInitialMs = 30 * 60 * 1000 // 30 min grace cap
 )
 
 // validateArtifactName enforces that Name is a valid shell identifier.
@@ -233,6 +237,47 @@ func validateSubmitRequest(req *SubmitRequest) string {
 	}
 	if msg := validateNodeSelector(req.NodeSelector); msg != "" {
 		return msg
+	}
+	if msg := validateServiceSpec(req.Service); msg != "" {
+		return msg
+	}
+	return ""
+}
+
+// validateServiceSpec runs the feature-17 inference-job submit checks.
+// A nil Service is valid (the job is a normal batch job); when set,
+// the port must be in the user range and the health path must be a
+// syntactically conservative absolute path. Grace period is bounded
+// by maxServiceHealthInitialMs so a misconfigured job cannot delay
+// its own failure detection indefinitely.
+func validateServiceSpec(s *ServiceSpecRequest) string {
+	if s == nil {
+		return ""
+	}
+	if s.Port < 1 || s.Port > 65535 {
+		return "service.port must be in [1, 65535]"
+	}
+	// Reject privileged ports — the node-agent runs as a non-root
+	// DaemonSet in production and binding below 1024 would fail
+	// anyway; catching it at submit gives a crisp 400 rather than a
+	// spawn-time crash.
+	if s.Port < 1024 {
+		return "service.port must be ≥ 1024 (privileged ports are not bindable by the node agent)"
+	}
+	if s.HealthPath == "" {
+		return "service.health_path is required when service is set"
+	}
+	if !strings.HasPrefix(s.HealthPath, "/") {
+		return "service.health_path must start with '/'"
+	}
+	if len(s.HealthPath) > maxHealthPathLen {
+		return fmt.Sprintf("service.health_path must not exceed %d bytes", maxHealthPathLen)
+	}
+	if strings.ContainsAny(s.HealthPath, " \t\r\n\x00") {
+		return "service.health_path must not contain whitespace or NUL"
+	}
+	if s.HealthInitialMs > maxServiceHealthInitialMs {
+		return fmt.Sprintf("service.health_initial_ms must not exceed %d (30 min)", maxServiceHealthInitialMs)
 	}
 	return ""
 }
@@ -448,6 +493,13 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		Inputs:       convertBindings(req.Inputs),
 		Outputs:      convertBindings(req.Outputs),
 		NodeSelector: req.NodeSelector,
+	}
+	if req.Service != nil {
+		job.Service = &cpb.ServiceSpec{
+			Port:            req.Service.Port,
+			HealthPath:      req.Service.HealthPath,
+			HealthInitialMS: req.Service.HealthInitialMs,
+		}
 	}
 
 	// Parse optional priority.

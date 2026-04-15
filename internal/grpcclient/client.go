@@ -172,6 +172,14 @@ func (c *Client) ReportResult(ctx context.Context, result *pb.JobResult) error {
 	return err
 }
 
+// ReportServiceEvent emits a feature-17 readiness transition for a
+// long-running service job. Low-frequency edge-triggered RPC —
+// the prober only calls this on state flips, not every tick.
+func (c *Client) ReportServiceEvent(ctx context.Context, evt *pb.ServiceEvent) error {
+	_, err := c.Client.ReportServiceEvent(ctx, evt)
+	return err
+}
+
 // StreamLogs sends captured stdout and stderr for a completed job to the
 // coordinator.  Each non-empty slice is sent as one LogChunk.
 func (c *Client) StreamLogs(ctx context.Context, jobID, nodeID string, stdout, stderr []byte) error {

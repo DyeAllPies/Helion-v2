@@ -116,6 +116,11 @@ type Server struct {
 	// phantom endpoints.
 	datasets registry.DatasetStore
 	models   registry.ModelStore
+
+	// Feature 17 — inference-service endpoint registry. nil on
+	// deployments that don't opt into services; the /api/services/{id}
+	// route is only registered by SetServiceRegistry.
+	services *cluster.ServiceRegistry
 }
 
 // DisableAuth turns off authentication for this Server. Intended ONLY for

@@ -34,10 +34,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CoordinatorService_Register_FullMethodName     = "/helion.CoordinatorService/Register"
-	CoordinatorService_Heartbeat_FullMethodName    = "/helion.CoordinatorService/Heartbeat"
-	CoordinatorService_ReportResult_FullMethodName = "/helion.CoordinatorService/ReportResult"
-	CoordinatorService_StreamLogs_FullMethodName   = "/helion.CoordinatorService/StreamLogs"
+	CoordinatorService_Register_FullMethodName           = "/helion.CoordinatorService/Register"
+	CoordinatorService_Heartbeat_FullMethodName          = "/helion.CoordinatorService/Heartbeat"
+	CoordinatorService_ReportResult_FullMethodName       = "/helion.CoordinatorService/ReportResult"
+	CoordinatorService_StreamLogs_FullMethodName         = "/helion.CoordinatorService/StreamLogs"
+	CoordinatorService_ReportServiceEvent_FullMethodName = "/helion.CoordinatorService/ReportServiceEvent"
 )
 
 // CoordinatorServiceClient is the client API for CoordinatorService service.
@@ -62,6 +63,11 @@ type CoordinatorServiceClient interface {
 	// time as the job runs.  The coordinator stores them and forwards to the
 	// dashboard WebSocket.
 	StreamLogs(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[LogChunk, Ack], error)
+	// ReportServiceEvent is called by the node on service readiness state
+	// transitions for long-running jobs (feature 17 inference services).
+	// Unary rather than streaming because events are edge-triggered
+	// (ready <-> unhealthy) and low-frequency compared to log/heartbeat.
+	ReportServiceEvent(ctx context.Context, in *ServiceEvent, opts ...grpc.CallOption) (*Ack, error)
 }
 
 type coordinatorServiceClient struct {
@@ -118,6 +124,16 @@ func (c *coordinatorServiceClient) StreamLogs(ctx context.Context, opts ...grpc.
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type CoordinatorService_StreamLogsClient = grpc.ClientStreamingClient[LogChunk, Ack]
 
+func (c *coordinatorServiceClient) ReportServiceEvent(ctx context.Context, in *ServiceEvent, opts ...grpc.CallOption) (*Ack, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Ack)
+	err := c.cc.Invoke(ctx, CoordinatorService_ReportServiceEvent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CoordinatorServiceServer is the server API for CoordinatorService service.
 // All implementations must embed UnimplementedCoordinatorServiceServer
 // for forward compatibility.
@@ -140,6 +156,11 @@ type CoordinatorServiceServer interface {
 	// time as the job runs.  The coordinator stores them and forwards to the
 	// dashboard WebSocket.
 	StreamLogs(grpc.ClientStreamingServer[LogChunk, Ack]) error
+	// ReportServiceEvent is called by the node on service readiness state
+	// transitions for long-running jobs (feature 17 inference services).
+	// Unary rather than streaming because events are edge-triggered
+	// (ready <-> unhealthy) and low-frequency compared to log/heartbeat.
+	ReportServiceEvent(context.Context, *ServiceEvent) (*Ack, error)
 	mustEmbedUnimplementedCoordinatorServiceServer()
 }
 
@@ -161,6 +182,9 @@ func (UnimplementedCoordinatorServiceServer) ReportResult(context.Context, *JobR
 }
 func (UnimplementedCoordinatorServiceServer) StreamLogs(grpc.ClientStreamingServer[LogChunk, Ack]) error {
 	return status.Error(codes.Unimplemented, "method StreamLogs not implemented")
+}
+func (UnimplementedCoordinatorServiceServer) ReportServiceEvent(context.Context, *ServiceEvent) (*Ack, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportServiceEvent not implemented")
 }
 func (UnimplementedCoordinatorServiceServer) mustEmbedUnimplementedCoordinatorServiceServer() {}
 func (UnimplementedCoordinatorServiceServer) testEmbeddedByValue()                            {}
@@ -233,6 +257,24 @@ func _CoordinatorService_StreamLogs_Handler(srv interface{}, stream grpc.ServerS
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type CoordinatorService_StreamLogsServer = grpc.ClientStreamingServer[LogChunk, Ack]
 
+func _CoordinatorService_ReportServiceEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ServiceEvent)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServiceServer).ReportServiceEvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoordinatorService_ReportServiceEvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServiceServer).ReportServiceEvent(ctx, req.(*ServiceEvent))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CoordinatorService_ServiceDesc is the grpc.ServiceDesc for CoordinatorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -247,6 +289,10 @@ var CoordinatorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportResult",
 			Handler:    _CoordinatorService_ReportResult_Handler,
+		},
+		{
+			MethodName: "ReportServiceEvent",
+			Handler:    _CoordinatorService_ReportServiceEvent_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

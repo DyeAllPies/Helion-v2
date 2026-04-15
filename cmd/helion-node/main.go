@@ -252,6 +252,10 @@ func main() {
 
 	// ── gRPC server (NodeService) ─────────────────────────────────────────────
 	nodeSrv := nodeserver.New(rt, stager, client, nodeID, runtimeBackend, log)
+	// Feature 17 — the service prober stamps ServiceEvent RPCs with
+	// the node's advertised address so the coordinator can build the
+	// upstream URL returned by GET /api/services/{id}.
+	nodeSrv.SetAdvertiseAddress(nodeAddr)
 
 	serverCreds, err := bundle.ServerCredentials()
 	if err != nil {

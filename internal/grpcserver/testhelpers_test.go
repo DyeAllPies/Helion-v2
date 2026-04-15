@@ -50,6 +50,7 @@ func (m *mockRateLimiter) GetRate() float64 { return m.rate }
 type mockAuditLogger struct {
 	rateLimitHits      int
 	securityViolations int
+	serviceEvents      int
 }
 
 func (m *mockAuditLogger) LogJobSubmit(_ context.Context, _, _, _ string) error { return nil }
@@ -59,6 +60,10 @@ func (m *mockAuditLogger) LogRateLimitHit(_ context.Context, _ string, _ float64
 }
 func (m *mockAuditLogger) LogSecurityViolation(_ context.Context, _, _, _ string) error {
 	m.securityViolations++
+	return nil
+}
+func (m *mockAuditLogger) LogServiceEvent(_ context.Context, _, _ string, _ bool, _ uint32, _ string, _ uint32) error {
+	m.serviceEvents++
 	return nil
 }
 

@@ -36,5 +36,6 @@ resources → feature 10 step 5) replaces the entry here with a pointer.
 | 17 | [Registry lineage enforcement](./17-registry-lineage-enforcement.md) | feature 10 (audit 2026-04-14-01, M3/M4) | P3 |
 | 18 | [Registry indexed listing](./18-registry-indexed-listing.md) | feature 10 (audit 2026-04-14-01, L1) | P3 |
 | 19 | [Registry integration test](./19-registry-integration-test.md) | feature 10 (audit 2026-04-14-01, L3) | P3 |
+| 20 | [Rust runtime parity for inference services](./20-rust-runtime-service-parity.md) | feature 17 | P2 |
 
 > **GPU / accelerator resources:** moved to [feature 10 step 5](../10-minimal-ml-pipeline.md) — GPU as a first-class resource. The pointer is retained so older commits and audits still resolve.

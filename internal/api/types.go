@@ -76,6 +76,22 @@ type SubmitRequest struct {
 	Inputs       []ArtifactBindingRequest `json:"inputs,omitempty"`        // artifact-store objects to stage before run
 	Outputs      []ArtifactBindingRequest `json:"outputs,omitempty"`       // paths to upload after run
 	NodeSelector map[string]string        `json:"node_selector,omitempty"` // exact-match label selector (step 4 wires scheduling)
+
+	// Feature 17 — long-running inference service. When set, the job
+	// bypasses timeout enforcement and the node probes its health
+	// endpoint after HealthInitialMs. Mutually compatible with Inputs
+	// (model bytes staged before serve start).
+	Service *ServiceSpecRequest `json:"service,omitempty"`
+}
+
+// ServiceSpecRequest is the JSON shape of the optional Service block
+// on SubmitRequest. Mirrors cpb.ServiceSpec but lives in the api
+// package so a future protocol tweak doesn't leak into the public
+// HTTP contract.
+type ServiceSpecRequest struct {
+	Port            uint32 `json:"port"`                         // 1-65535; required
+	HealthPath      string `json:"health_path"`                  // must start with "/"
+	HealthInitialMs uint32 `json:"health_initial_ms,omitempty"`  // grace before first probe
 }
 
 // JobResponse is the JSON body returned by POST /jobs and GET /jobs/{id}.
@@ -96,6 +112,7 @@ type JobResponse struct {
 	Priority       uint32            `json:"priority,omitempty"`
 	Attempt        uint32            `json:"attempt,omitempty"`
 	RetryAfter     *time.Time        `json:"retry_after,omitempty"`
+	Service        *ServiceSpecRequest `json:"service,omitempty"`
 }
 
 // ErrorResponse is the JSON body for error responses.

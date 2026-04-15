@@ -245,6 +245,11 @@ func main() {
 	log.Info("rate limiter initialized",
 		slog.Float64("limit_rps", rateLimiter.GetRate()))
 
+	// Feature 17 — inference-service endpoint registry, shared
+	// between gRPC (populates it on ReportServiceEvent) and HTTP
+	// (reads it at GET /api/services/{id}).
+	serviceRegistry := cluster.NewServiceRegistry()
+
 	// ── gRPC server with Phase 4 security ────────────────────────────────
 	grpcSrv, err := grpcserver.New(bundle,
 		grpcserver.WithRegistry(registry),
@@ -255,9 +260,13 @@ func main() {
 		grpcserver.WithRevocationChecker(registry),
 		grpcserver.WithJobCompletionCallback(func(cbCtx context.Context, jobID string, status cpb.JobStatus) {
 			workflows.OnJobCompleted(cbCtx, jobID, status, jobs)
+			// Terminal job transitions clear the service registry entry
+			// so /api/services/{id} stops returning a stale upstream URL.
+			serviceRegistry.Delete(jobID)
 		}),
 		grpcserver.WithRetryChecker(jobs),
 		grpcserver.WithLogStore(logStore),
+		grpcserver.WithServiceRegistry(serviceRegistry),
 	)
 	if err != nil {
 		log.Error("create gRPC server", slog.Any("err", err))
@@ -325,6 +334,7 @@ func main() {
 	apiSrv.SetLogStore(logStore)
 	apiSrv.SetEventBus(eventBus)
 	apiSrv.SetRegistryStore(registryStore)
+	apiSrv.SetServiceRegistry(serviceRegistry)
 
 	// ── Analytics pipeline (opt-in) ──────────────────────────────────────
 	// Set HELION_ANALYTICS_DSN to a PostgreSQL connection string to enable

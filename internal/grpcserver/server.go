@@ -78,6 +78,11 @@ type AuditLoggerIface interface {
 	LogJobSubmit(ctx context.Context, actor, jobID, command string) error
 	LogRateLimitHit(ctx context.Context, nodeID string, limit float64) error
 	LogSecurityViolation(ctx context.Context, nodeID, jobID, violation string) error
+	// LogServiceEvent records a feature-17 readiness transition
+	// (service.ready / service.unhealthy). Emitted from
+	// ReportServiceEvent on edge triggers only, so one event per
+	// state flip per job.
+	LogServiceEvent(ctx context.Context, nodeID, jobID string, ready bool, port uint32, healthPath string, consecutiveFailures uint32) error
 }
 
 // JobCompletionCallback is called after a job reaches a terminal state.
@@ -105,6 +110,7 @@ type Server struct {
 	onJobCompleted    JobCompletionCallback // nil means no workflow integration
 	retryChecker      RetryChecker          // nil means no retry support
 	logStore          logstore.Store        // nil means logs are discarded
+	services          *cluster.ServiceRegistry // nil means feature-17 service lookup is not wired
 	log               *slog.Logger
 
 	// Active heartbeat streams: nodeID → done channel.
@@ -162,6 +168,16 @@ func WithRetryChecker(rc RetryChecker) Option {
 // WithLogStore injects a log store for persisting job stdout/stderr.
 func WithLogStore(ls logstore.Store) Option {
 	return func(s *Server) { s.logStore = ls }
+}
+
+// WithServiceRegistry injects a feature-17 service-endpoint registry.
+// ReportServiceEvent RPCs from nodes populate entries here; the HTTP
+// handler at GET /api/services/{id} reads them. Absent on deployments
+// that haven't opted into inference services — the RPC handler then
+// accepts events but does nothing, so nodes that erroneously emit
+// them don't fail.
+func WithServiceRegistry(sr *cluster.ServiceRegistry) Option {
+	return func(s *Server) { s.services = sr }
 }
 
 // WithLogger injects a structured logger.

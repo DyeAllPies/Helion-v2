@@ -183,7 +183,11 @@ type DispatchRequest struct {
 	// Whole-GPU reservation. The node-side runtime's GPU allocator
 	// claims `gpus` device indices from the free pool and sets
 	// CUDA_VISIBLE_DEVICES on the subprocess env. 0 on CPU jobs.
-	Gpus          uint32 `protobuf:"varint,11,opt,name=gpus,proto3" json:"gpus,omitempty"`
+	Gpus uint32 `protobuf:"varint,11,opt,name=gpus,proto3" json:"gpus,omitempty"`
+	// Feature 17 — long-running service spec. When set, the node
+	// runs the job without timeout enforcement and instead health-
+	// probes the bound port every 5 s. Absent on batch jobs.
+	Service       *ServiceSpec `protobuf:"bytes,12,opt,name=service,proto3" json:"service,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -295,6 +299,76 @@ func (x *DispatchRequest) GetGpus() uint32 {
 	return 0
 }
 
+func (x *DispatchRequest) GetService() *ServiceSpec {
+	if x != nil {
+		return x.Service
+	}
+	return nil
+}
+
+// ServiceSpec turns a job into a long-running inference service.
+// The node binds the child to a port, waits HealthInitialMS, then
+// probes http://127.0.0.1:<Port><HealthPath> every 5 s.
+type ServiceSpec struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Port            uint32                 `protobuf:"varint,1,opt,name=port,proto3" json:"port,omitempty"`                                                // port the child binds to (required, 1-65535)
+	HealthPath      string                 `protobuf:"bytes,2,opt,name=health_path,json=healthPath,proto3" json:"health_path,omitempty"`                   // e.g. "/healthz" (required, leading "/")
+	HealthInitialMs uint32                 `protobuf:"varint,3,opt,name=health_initial_ms,json=healthInitialMs,proto3" json:"health_initial_ms,omitempty"` // grace period before first probe
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ServiceSpec) Reset() {
+	*x = ServiceSpec{}
+	mi := &file_node_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServiceSpec) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServiceSpec) ProtoMessage() {}
+
+func (x *ServiceSpec) ProtoReflect() protoreflect.Message {
+	mi := &file_node_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServiceSpec.ProtoReflect.Descriptor instead.
+func (*ServiceSpec) Descriptor() ([]byte, []int) {
+	return file_node_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ServiceSpec) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *ServiceSpec) GetHealthPath() string {
+	if x != nil {
+		return x.HealthPath
+	}
+	return ""
+}
+
+func (x *ServiceSpec) GetHealthInitialMs() uint32 {
+	if x != nil {
+		return x.HealthInitialMs
+	}
+	return 0
+}
+
 type DispatchAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
@@ -306,7 +380,7 @@ type DispatchAck struct {
 
 func (x *DispatchAck) Reset() {
 	*x = DispatchAck{}
-	mi := &file_node_proto_msgTypes[3]
+	mi := &file_node_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -318,7 +392,7 @@ func (x *DispatchAck) String() string {
 func (*DispatchAck) ProtoMessage() {}
 
 func (x *DispatchAck) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[3]
+	mi := &file_node_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -331,7 +405,7 @@ func (x *DispatchAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DispatchAck.ProtoReflect.Descriptor instead.
 func (*DispatchAck) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{3}
+	return file_node_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DispatchAck) GetJobId() string {
@@ -365,7 +439,7 @@ type CancelRequest struct {
 
 func (x *CancelRequest) Reset() {
 	*x = CancelRequest{}
-	mi := &file_node_proto_msgTypes[4]
+	mi := &file_node_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -377,7 +451,7 @@ func (x *CancelRequest) String() string {
 func (*CancelRequest) ProtoMessage() {}
 
 func (x *CancelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[4]
+	mi := &file_node_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -390,7 +464,7 @@ func (x *CancelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRequest.ProtoReflect.Descriptor instead.
 func (*CancelRequest) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{4}
+	return file_node_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CancelRequest) GetJobId() string {
@@ -421,7 +495,7 @@ type NodeMetrics struct {
 
 func (x *NodeMetrics) Reset() {
 	*x = NodeMetrics{}
-	mi := &file_node_proto_msgTypes[5]
+	mi := &file_node_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -433,7 +507,7 @@ func (x *NodeMetrics) String() string {
 func (*NodeMetrics) ProtoMessage() {}
 
 func (x *NodeMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[5]
+	mi := &file_node_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -446,7 +520,7 @@ func (x *NodeMetrics) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeMetrics.ProtoReflect.Descriptor instead.
 func (*NodeMetrics) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{5}
+	return file_node_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *NodeMetrics) GetNodeId() string {
@@ -499,7 +573,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_node_proto_msgTypes[6]
+	mi := &file_node_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -511,7 +585,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[6]
+	mi := &file_node_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -524,7 +598,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{6}
+	return file_node_proto_rawDescGZIP(), []int{7}
 }
 
 var File_node_proto protoreflect.FileDescriptor
@@ -543,7 +617,7 @@ const file_node_proto_rawDesc = "" +
 	"\x03uri\x18\x02 \x01(\tR\x03uri\x12\x1d\n" +
 	"\n" +
 	"local_path\x18\x03 \x01(\tR\tlocalPath\x12\x16\n" +
-	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"\xc5\x04\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"\xf4\x04\n" +
 	"\x0fDispatchRequest\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x12\n" +
@@ -557,13 +631,19 @@ const file_node_proto_rawDesc = "" +
 	"\aoutputs\x18\t \x03(\v2\x17.helion.ArtifactBindingR\aoutputs\x12N\n" +
 	"\rnode_selector\x18\n" +
 	" \x03(\v2).helion.DispatchRequest.NodeSelectorEntryR\fnodeSelector\x12\x12\n" +
-	"\x04gpus\x18\v \x01(\rR\x04gpus\x1a6\n" +
+	"\x04gpus\x18\v \x01(\rR\x04gpus\x12-\n" +
+	"\aservice\x18\f \x01(\v2\x13.helion.ServiceSpecR\aservice\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a?\n" +
 	"\x11NodeSelectorEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"V\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"n\n" +
+	"\vServiceSpec\x12\x12\n" +
+	"\x04port\x18\x01 \x01(\rR\x04port\x12\x1f\n" +
+	"\vhealth_path\x18\x02 \x01(\tR\n" +
+	"healthPath\x12*\n" +
+	"\x11health_initial_ms\x18\x03 \x01(\rR\x0fhealthInitialMs\"V\n" +
 	"\vDispatchAck\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1a\n" +
 	"\baccepted\x18\x02 \x01(\bR\baccepted\x12\x14\n" +
@@ -600,36 +680,38 @@ func file_node_proto_rawDescGZIP() []byte {
 	return file_node_proto_rawDescData
 }
 
-var file_node_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_node_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_node_proto_goTypes = []any{
 	(*ResourceLimits)(nil),  // 0: helion.ResourceLimits
 	(*ArtifactBinding)(nil), // 1: helion.ArtifactBinding
 	(*DispatchRequest)(nil), // 2: helion.DispatchRequest
-	(*DispatchAck)(nil),     // 3: helion.DispatchAck
-	(*CancelRequest)(nil),   // 4: helion.CancelRequest
-	(*NodeMetrics)(nil),     // 5: helion.NodeMetrics
-	(*Empty)(nil),           // 6: helion.Empty
-	nil,                     // 7: helion.DispatchRequest.EnvEntry
-	nil,                     // 8: helion.DispatchRequest.NodeSelectorEntry
-	(*Ack)(nil),             // 9: helion.Ack
+	(*ServiceSpec)(nil),     // 3: helion.ServiceSpec
+	(*DispatchAck)(nil),     // 4: helion.DispatchAck
+	(*CancelRequest)(nil),   // 5: helion.CancelRequest
+	(*NodeMetrics)(nil),     // 6: helion.NodeMetrics
+	(*Empty)(nil),           // 7: helion.Empty
+	nil,                     // 8: helion.DispatchRequest.EnvEntry
+	nil,                     // 9: helion.DispatchRequest.NodeSelectorEntry
+	(*Ack)(nil),             // 10: helion.Ack
 }
 var file_node_proto_depIdxs = []int32{
-	7, // 0: helion.DispatchRequest.env:type_name -> helion.DispatchRequest.EnvEntry
-	0, // 1: helion.DispatchRequest.limits:type_name -> helion.ResourceLimits
-	1, // 2: helion.DispatchRequest.inputs:type_name -> helion.ArtifactBinding
-	1, // 3: helion.DispatchRequest.outputs:type_name -> helion.ArtifactBinding
-	8, // 4: helion.DispatchRequest.node_selector:type_name -> helion.DispatchRequest.NodeSelectorEntry
-	2, // 5: helion.NodeService.Dispatch:input_type -> helion.DispatchRequest
-	4, // 6: helion.NodeService.Cancel:input_type -> helion.CancelRequest
-	6, // 7: helion.NodeService.GetMetrics:input_type -> helion.Empty
-	3, // 8: helion.NodeService.Dispatch:output_type -> helion.DispatchAck
-	9, // 9: helion.NodeService.Cancel:output_type -> helion.Ack
-	5, // 10: helion.NodeService.GetMetrics:output_type -> helion.NodeMetrics
-	8, // [8:11] is the sub-list for method output_type
-	5, // [5:8] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	8,  // 0: helion.DispatchRequest.env:type_name -> helion.DispatchRequest.EnvEntry
+	0,  // 1: helion.DispatchRequest.limits:type_name -> helion.ResourceLimits
+	1,  // 2: helion.DispatchRequest.inputs:type_name -> helion.ArtifactBinding
+	1,  // 3: helion.DispatchRequest.outputs:type_name -> helion.ArtifactBinding
+	9,  // 4: helion.DispatchRequest.node_selector:type_name -> helion.DispatchRequest.NodeSelectorEntry
+	3,  // 5: helion.DispatchRequest.service:type_name -> helion.ServiceSpec
+	2,  // 6: helion.NodeService.Dispatch:input_type -> helion.DispatchRequest
+	5,  // 7: helion.NodeService.Cancel:input_type -> helion.CancelRequest
+	7,  // 8: helion.NodeService.GetMetrics:input_type -> helion.Empty
+	4,  // 9: helion.NodeService.Dispatch:output_type -> helion.DispatchAck
+	10, // 10: helion.NodeService.Cancel:output_type -> helion.Ack
+	6,  // 11: helion.NodeService.GetMetrics:output_type -> helion.NodeMetrics
+	9,  // [9:12] is the sub-list for method output_type
+	6,  // [6:9] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_node_proto_init() }
@@ -644,7 +726,7 @@ func file_node_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_node_proto_rawDesc), len(file_node_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

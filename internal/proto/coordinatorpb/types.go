@@ -233,6 +233,41 @@ type Job struct {
 	// Step 3's workflow artifact-passing resolves `from: job.output`
 	// references against this slice.
 	ResolvedOutputs []ArtifactOutput `json:"resolved_outputs,omitempty"`
+
+	// ── Feature 17: inference service ───────────────────────────────────
+	//
+	// Service, when non-nil, marks this job as a long-running inference
+	// service. The runtime skips timeout enforcement; the node-side
+	// prober polls http://127.0.0.1:<Port><HealthPath> every 5 s and
+	// emits ServiceEvent RPCs to the coordinator on readiness
+	// transitions. The coordinator records the (node_address, port)
+	// mapping on the first `ready` event so clients can look up the
+	// upstream URL via GET /api/services/{id}.
+	Service *ServiceSpec `json:"service,omitempty"`
+}
+
+// ServiceSpec turns a job into a long-running inference service.
+// Both JSON-persisted on the coordinator side and wire-copied into
+// pb.ServiceSpec at dispatch time. Zero value of the pointer means
+// "this is a normal batch job" — cheap to check.
+type ServiceSpec struct {
+	Port            uint32 `json:"port"`                         // 1-65535; required
+	HealthPath      string `json:"health_path"`                  // e.g. "/healthz"; required
+	HealthInitialMS uint32 `json:"health_initial_ms,omitempty"`  // pre-probe grace period
+}
+
+// ServiceEndpoint is what GET /api/services/{id} returns. Populated
+// by the coordinator on first `ready` event for the job; cleared on
+// job completion. Kept in memory only — a coordinator restart starts
+// with an empty map, and the next `ready` event re-populates it.
+type ServiceEndpoint struct {
+	JobID       string    `json:"job_id"`
+	NodeID      string    `json:"node_id"`
+	NodeAddress string    `json:"node_address"` // "host:port" of the node
+	Port        uint32    `json:"port"`         // port on the node the service listens on
+	HealthPath  string    `json:"health_path"`
+	Ready       bool      `json:"ready"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // ArtifactOutput is the coordinator-side mirror of pb.ArtifactOutput —

@@ -55,6 +55,20 @@ message DispatchRequest {
   // claims `gpus` device indices from the free pool and sets
   // CUDA_VISIBLE_DEVICES on the subprocess env. 0 on CPU jobs.
   uint32                       gpus          = 11;
+
+  // Feature 17 — long-running service spec. When set, the node
+  // runs the job without timeout enforcement and instead health-
+  // probes the bound port every 5 s. Absent on batch jobs.
+  ServiceSpec                  service       = 12;
+}
+
+// ServiceSpec turns a job into a long-running inference service.
+// The node binds the child to a port, waits HealthInitialMS, then
+// probes http://127.0.0.1:<Port><HealthPath> every 5 s.
+message ServiceSpec {
+  uint32 port              = 1; // port the child binds to (required, 1-65535)
+  string health_path       = 2; // e.g. "/healthz" (required, leading "/")
+  uint32 health_initial_ms = 3; // grace period before first probe
 }
 
 message DispatchAck {

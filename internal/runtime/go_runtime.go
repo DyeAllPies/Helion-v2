@@ -122,6 +122,12 @@ func (r *GoRuntime) Run(ctx context.Context, req RunRequest) (RunResult, error) 
 	if timeout <= 0 {
 		timeout = r.defaultTimeout
 	}
+	// Feature 17 — service jobs run until explicitly cancelled. The
+	// nodeserver's prober + Cancel RPC (or process self-exit) is the
+	// only thing that should stop them.
+	if req.IsService {
+		timeout = 0
+	}
 
 	// Claim GPU device indices before anything else so a contention
 	// failure short-circuits the whole dispatch. Held for the full
@@ -146,7 +152,14 @@ func (r *GoRuntime) Run(ctx context.Context, req RunRequest) (RunResult, error) 
 		gpuIndices = indices
 	}
 
-	jctx, cancel := context.WithTimeout(ctx, timeout)
+	var jctx context.Context
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		jctx, cancel = context.WithTimeout(ctx, timeout)
+	} else {
+		// Feature 17 service job — cancel-only, no timeout.
+		jctx, cancel = context.WithCancel(ctx)
+	}
 	r.mu.Lock()
 	r.running[req.JobID] = cancel
 	r.mu.Unlock()

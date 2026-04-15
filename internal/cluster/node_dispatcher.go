@@ -73,6 +73,15 @@ func (d *GRPCNodeDispatcher) DispatchToNode(ctx context.Context, nodeAddr string
 		NodeSelector:   job.NodeSelector,
 		Gpus:           job.Resources.GPUs,
 	}
+	// Feature 17 — forward the service block so the node-side runtime
+	// can skip timeout enforcement and start its health prober.
+	if job.Service != nil {
+		req.Service = &pb.ServiceSpec{
+			Port:            job.Service.Port,
+			HealthPath:      job.Service.HealthPath,
+			HealthInitialMs: job.Service.HealthInitialMS,
+		}
+	}
 
 	ack, err := client.Dispatch(dialCtx, req)
 	if err != nil {

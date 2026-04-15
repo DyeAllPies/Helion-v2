@@ -221,6 +221,56 @@ curl -H "Authorization: Bearer $ROOT_TOKEN" \
   "https://coordinator:8443/audit?type=rate_limit_hit"
 ```
 
+### Inference service surface (feature 17)
+
+Long-running inference jobs (`SubmitRequest.service`) bypass the
+standard job-timeout enforcement — by design, a service is supposed
+to keep running — so they widen the attack surface in three small
+ways. The controls below keep each one within the existing doctrine.
+
+| New attack surface | Control |
+|--------------------|---------|
+| Service bypasses timeout enforcement | A service job runs only for the lifetime of its Dispatch RPC. The coordinator's `Cancel` RPC is the supported stop path; it delegates to `Registry`-tracked heartbeat stream cancellation plus the node-side runtime's `running[jobID]` cancel func. A compromised node cannot make a non-service job run forever because the `IsService` flag is forwarded from the coordinator-signed `Job.Service`, not from the node. |
+| Service exposes a TCP port on the node | The prober only hits `127.0.0.1:<port><health_path>`. The coordinator records `(node_address, port)` but does **not** act as a proxy — `GET /api/services/{id}` returns the upstream URL, authenticated clients hit it directly. Nodes that run behind Nginx/ingress must publish the port themselves; Helion does not punch holes in network policy. |
+| Node could forge a `service.ready` for another node's job | `grpcserver.ReportServiceEvent` compares `ServiceEvent.NodeId` against the pinned `Job.NodeID` from the dispatcher record and returns `PermissionDenied` on mismatch. Same doctrine as `ReportResult`; same `LogSecurityViolation` path. |
+
+**Submit-time validation** (`validateServiceSpec` in `internal/api/handlers_jobs.go`):
+
+- `service.port` must be in `[1024, 65535]`. Privileged ports are
+  rejected because the production DaemonSet runs as non-root and
+  would fail to bind anyway — catching it at submit surfaces a crisp
+  400 rather than a spawn-time crash.
+- `service.health_path` must start with `/`, be non-empty, contain
+  no whitespace or NUL, and fit in 256 bytes.
+- `service.health_initial_ms` caps at 30 min so a misconfigured job
+  cannot suppress failure detection indefinitely.
+
+**Rate limiting.** The existing `POST /jobs` submit limiter covers
+service submission — services are ordinary jobs that happen to carry
+a `service` block. `GET /api/services/{id}` reads from an in-memory
+map; no additional limiter is required, and the standard JWT middle-
+ware authenticates the lookup.
+
+**Audit event taxonomy.** Two new event types land with this slice:
+
+| Event type | Emitter | Actor | Target | Details |
+|---|---|---|---|---|
+| `service.ready` | gRPC `ReportServiceEvent` | `node:<node_id>` | `job:<job_id>` | `port`, `health_path`, `consecutive_failures` (= 0 on transition into ready) |
+| `service.unhealthy` | gRPC `ReportServiceEvent` | `node:<node_id>` | `job:<job_id>` | same shape, `consecutive_failures` = probe-miss streak |
+
+Both are edge-triggered (one row per state flip, not per probe tick)
+so a healthy service does not bloat the audit log.
+
+**Runtime coverage.** The Go runtime (`internal/runtime/go_runtime.go`)
+implements the new `RunRequest.IsService` flag. The Rust runtime
+(`runtime-rust/`) does **not** yet — service jobs dispatched to a
+Rust-backed node will run with the runtime's default timeout and no
+probe loop. Tracked in the deferred backlog; see
+[`planned-features/deferred/`](planned-features/deferred/). The Go
+backend is the default; operators running a Rust-backed cluster that
+need inference services today should stay on the Go runtime until
+the Rust parity slice lands.
+
 ---
 
 ## 6. Audit logging

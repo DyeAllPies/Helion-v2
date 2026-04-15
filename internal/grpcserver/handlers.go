@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 
@@ -426,6 +427,85 @@ func validateReportedOutput(o *pb.ArtifactOutput) string {
 // with strings.HasPrefix.
 func hasPrefix(s, p string) bool {
 	return len(s) >= len(p) && s[:len(p)] == p
+}
+
+// ReportServiceEvent accepts feature-17 readiness transitions from a
+// node's service prober. Updates the in-memory ServiceRegistry (which
+// backs GET /api/services/{id}) and writes an audit record.
+//
+// The node_id on the event is validated against the dispatched job —
+// a node reporting a service event for a job pinned to a different
+// node is rejected for the same reason ReportResult is: in legitimate
+// traffic this never happens, and permitting it would let a
+// compromised node override the upstream mapping for jobs it does
+// not own.
+func (s *Server) ReportServiceEvent(
+	ctx context.Context,
+	evt *pb.ServiceEvent,
+) (*pb.Ack, error) {
+	if evt.JobId == "" {
+		return nil, status.Error(codes.InvalidArgument, "job_id required")
+	}
+	if s.services == nil {
+		// Feature 17 not wired on this coordinator — accept the RPC
+		// so the node's prober isn't stuck in a retry loop, but drop
+		// the payload. Audit the receipt so operators can see that
+		// an unexpected service event arrived.
+		s.log.Warn("ReportServiceEvent received but registry is not wired — dropping",
+			slog.String("job_id", evt.JobId),
+			slog.String("node_id", evt.NodeId))
+		return &pb.Ack{Ok: true}, nil
+	}
+
+	// Reject cross-node poisoning attempts.
+	if s.jobs != nil {
+		job, err := s.jobs.Get(evt.JobId)
+		if err == nil && job.NodeID != "" && evt.NodeId != "" && job.NodeID != evt.NodeId {
+			s.log.Warn("ReportServiceEvent node_id mismatch — rejecting",
+				slog.String("job_id", evt.JobId),
+				slog.String("dispatched_to", job.NodeID),
+				slog.String("reported_by", evt.NodeId))
+			if s.audit != nil {
+				if aerr := s.audit.LogSecurityViolation(ctx, evt.NodeId, evt.JobId, "service_event_node_id_mismatch"); aerr != nil {
+					s.log.Warn("audit node mismatch failed", slog.Any("err", aerr))
+				}
+			}
+			return nil, status.Errorf(codes.PermissionDenied,
+				"service event for job %s was reported by the wrong node", evt.JobId)
+		}
+	}
+
+	occurred := time.Now()
+	if evt.OccurredAt != nil {
+		occurred = evt.OccurredAt.AsTime()
+	}
+	s.services.Upsert(cpb.ServiceEndpoint{
+		JobID:       evt.JobId,
+		NodeID:      evt.NodeId,
+		NodeAddress: evt.NodeAddress,
+		Port:        evt.Port,
+		HealthPath:  evt.HealthPath,
+		Ready:       evt.Ready,
+		UpdatedAt:   occurred,
+	})
+
+	eventName := "service.ready"
+	if !evt.Ready {
+		eventName = "service.unhealthy"
+	}
+	s.log.Info(eventName,
+		slog.String("job_id", evt.JobId),
+		slog.String("node_id", evt.NodeId),
+		slog.Uint64("port", uint64(evt.Port)),
+		slog.Uint64("consecutive_failures", uint64(evt.ConsecutiveFailures)))
+	if s.audit != nil {
+		if aerr := s.audit.LogServiceEvent(ctx, evt.NodeId, evt.JobId, evt.Ready,
+			evt.Port, evt.HealthPath, evt.ConsecutiveFailures); aerr != nil {
+			s.log.Warn("audit service event failed",
+				slog.String("event", eventName), slog.Any("err", aerr))
+		}
+	}
+	return &pb.Ack{Ok: true}, nil
 }
 
 // StreamLogs receives log chunks from nodes and stores them for later

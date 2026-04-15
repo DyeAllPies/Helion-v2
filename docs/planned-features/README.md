@@ -22,14 +22,14 @@ relates to `audits/` and `deferred/`.
 | 07 | Observability improvements | **Done** | P2 | [07-observability.md](07-observability.md) |
 | 08 | Deferred-enhancements index (legacy) | Archived | — | [08-deferred-enhancements.md](08-deferred-enhancements.md) |
 | 09 | Analytics pipeline (BadgerDB → PostgreSQL) | **Done** | P1 | [09-analytics-pipeline.md](09-analytics-pipeline.md) |
-| 10 | Minimal ML pipeline (umbrella) | In progress (steps 1–6 done; 7–10 pending) | P1 | [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) |
+| 10 | Minimal ML pipeline (umbrella) | In progress (steps 1–7 done; 8–10 pending) | P1 | [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) |
 | 11 | ML — Artifact store abstraction | **Done** | P1 | [11-ml-artifact-store.md](11-ml-artifact-store.md) |
 | 12 | ML — Job spec: inputs/outputs/working_dir | **Done** | P1 | [12-ml-job-io-staging.md](12-ml-job-io-staging.md) |
 | 13 | ML — Inter-job artifact passing in workflows | **Done** | P1 | [13-ml-workflow-artifact-passing.md](13-ml-workflow-artifact-passing.md) |
 | 14 | ML — Node labels and selectors | **Done** | P1 | [14-ml-node-labels-and-selectors.md](14-ml-node-labels-and-selectors.md) |
 | 15 | ML — GPU as a first-class resource | **Done** | P1 | [15-ml-gpu-first-class-resource.md](15-ml-gpu-first-class-resource.md) |
 | 16 | ML — Dataset and model registry | **Done** | P1 | [16-ml-dataset-model-registry.md](16-ml-dataset-model-registry.md) |
-| 17 | ML — Inference jobs | Pending | P1 | [17-ml-inference-jobs.md](17-ml-inference-jobs.md) |
+| 17 | ML — Inference jobs | **Done** (Go runtime; Rust parity deferred) | P1 | [17-ml-inference-jobs.md](17-ml-inference-jobs.md) |
 | 18 | ML — Dashboard module | Pending | P2 | [18-ml-dashboard-module.md](18-ml-dashboard-module.md) |
 | 19 | ML — End-to-end iris demo | Pending | P2 | [19-ml-end-to-end-demo.md](19-ml-end-to-end-demo.md) |
 | 20 | ML — Documentation | Pending | P2 | [20-ml-documentation.md](20-ml-documentation.md) |

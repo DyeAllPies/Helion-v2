@@ -179,6 +179,31 @@ func (l *Logger) LogSecurityViolation(ctx context.Context, nodeID, jobID, violat
 	})
 }
 
+// LogServiceEvent records a feature-17 inference-service readiness
+// transition. Edge-triggered: one audit row per ready ↔ unhealthy
+// flip, not one per probe tick. The event type is either
+// "service.ready" or "service.unhealthy" so queries can filter
+// on transition direction without parsing details.
+func (l *Logger) LogServiceEvent(
+	ctx context.Context,
+	nodeID, jobID string,
+	ready bool,
+	port uint32,
+	healthPath string,
+	consecutiveFailures uint32,
+) error {
+	eventType := "service.ready"
+	if !ready {
+		eventType = "service.unhealthy"
+	}
+	return l.Log(ctx, eventType, "node:"+nodeID, map[string]interface{}{
+		"job_id":               jobID,
+		"port":                 port,
+		"health_path":          healthPath,
+		"consecutive_failures": consecutiveFailures,
+	})
+}
+
 // Query retrieves audit events matching the given criteria.
 type Query struct {
 	StartTime time.Time // Inclusive

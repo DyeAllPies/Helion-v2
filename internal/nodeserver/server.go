@@ -31,11 +31,19 @@ type Server struct {
 	stager      *staging.Stager    // optional; nil disables artifact staging
 	client      *grpcclient.Client // coordinator gRPC client for callbacks
 	nodeID      string
+	address     string // host:port the coordinator uses to reach this node; forwarded on ServiceEvent so /api/services/{id} can build the upstream URL
 	runtimeName string // "go" or "rust" — reported in JobResult
 	runningJobs atomic.Int32
 	totalJobs   atomic.Int32
 	log         *slog.Logger
 }
+
+// SetAdvertiseAddress attaches the node's externally-reachable
+// "host:port" string to this server so service-readiness events can
+// surface it to the coordinator. Called once at startup from
+// cmd/helion-node after the node has resolved its bind address.
+// Safe to call before Dispatch is hit; after that it is read-only.
+func (s *Server) SetAdvertiseAddress(addr string) { s.address = addr }
 
 // New returns a Server backed by rt.
 // client and nodeID are used to call ReportResult and StreamLogs on the
@@ -111,10 +119,21 @@ func (s *Server) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.Dis
 		TimeoutSeconds: req.TimeoutSeconds,
 		Limits:         lim,
 		GPUs:           req.Gpus,
+		IsService:      req.Service != nil,
 	}
 	if prepared != nil {
 		runReq.WorkingDir = prepared.WorkingDir
 	}
+
+	// Feature 17 — launch the readiness prober alongside the process
+	// for service jobs. Cancelled when Run returns (process exit or
+	// parent-ctx cancel), so the prober never outlives the job.
+	if req.Service != nil {
+		probeCtx, probeCancel := context.WithCancel(ctx)
+		defer probeCancel()
+		go s.probeService(probeCtx, req.JobId, req.Service)
+	}
+
 	result, err := s.rt.Run(ctx, runReq)
 	finishedAt := time.Now()
 

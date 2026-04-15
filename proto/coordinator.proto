@@ -47,6 +47,12 @@ service CoordinatorService {
   // time as the job runs.  The coordinator stores them and forwards to the
   // dashboard WebSocket.
   rpc StreamLogs(stream LogChunk) returns (Ack);
+
+  // ReportServiceEvent is called by the node on service readiness state
+  // transitions for long-running jobs (feature 17 inference services).
+  // Unary rather than streaming because events are edge-triggered
+  // (ready <-> unhealthy) and low-frequency compared to log/heartbeat.
+  rpc ReportServiceEvent(ServiceEvent) returns (Ack);
 }
 
 // ============================================================================
@@ -156,6 +162,20 @@ message JobResult {
   // only on successful runs (the stager skips uploads otherwise), one
   // entry per binding declared on the original Job.Outputs.
   repeated ArtifactOutput outputs = 9;
+}
+
+// ServiceEvent is the node's readiness signal for a long-running
+// service job. Emitted on state transitions only (ready ↔ unhealthy),
+// not on every probe tick.
+message ServiceEvent {
+  string job_id               = 1;
+  string node_id              = 2;
+  string node_address         = 3; // e.g. "10.0.0.4:8080" for upstream lookup
+  uint32 port                 = 4; // the port the service is bound to
+  string health_path          = 5; // mirrored for the lookup response
+  bool   ready                = 6; // true = ready, false = unhealthy
+  uint32 consecutive_failures = 7; // 0 on ready; probe-failure streak on unhealthy
+  google.protobuf.Timestamp occurred_at = 8;
 }
 
 // ArtifactOutput is a resolved reference to an artifact uploaded by the
