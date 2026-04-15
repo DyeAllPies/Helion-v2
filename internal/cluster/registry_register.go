@@ -117,13 +117,13 @@ func (r *Registry) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.R
 
 	// Persist and audit asynchronously — RPC response does not wait for disk.
 	// Both writes run under a bounded timeout and are tracked by auditWG so
-	// Close can drain them during shutdown (AUDIT 2026-04-11/M1).
+	// Close can drain them during shutdown (AUDIT 2026-04-11-01/M1).
 	snap := entry.snapshot(r.staleAfter)
 	r.persistNodeAsync(snap)
 	r.appendAuditAsync("node.registered", req.NodeId, req.NodeId,
 		fmt.Sprintf("address=%s new=%v labels=%s", req.Address, !exists, formatLabelsForAudit(labels)))
 
-	// AUDIT 2026-04-12/H1: issue a coordinator-signed certificate so the node
+	// AUDIT 2026-04-12-01/H1: issue a coordinator-signed certificate so the node
 	// can present it on its gRPC server. This allows the coordinator to verify
 	// node certs during dispatch instead of using InsecureSkipVerify.
 	resp := &pb.RegisterResponse{NodeId: req.NodeId}

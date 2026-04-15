@@ -93,7 +93,7 @@ describe('JobDetailComponent', () => {
     apiSpy.getJob.and.returnValue(throwError(() => new Error('boom')));
     component.loadJob();
     expect(component.loading).toBeFalse();
-    // AUDIT 2026-04-12/M2: error message is now generic (no raw details).
+    // AUDIT 2026-04-12-01/M2: error message is now generic (no raw details).
     expect(component.error).toContain('Job not found');
     // Restore so afterEach's logSubject.complete() -> refreshMeta() doesn't
     // resubscribe to the error observable and surface as an unhandled throw.

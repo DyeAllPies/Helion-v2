@@ -110,7 +110,7 @@ type Registry struct {
 	log               *slog.Logger
 
 	// auditWG tracks fire-and-forget background goroutines so Close can
-	// wait for them during graceful shutdown. See AUDIT 2026-04-11/M1.
+	// wait for them during graceful shutdown. See AUDIT 2026-04-11-01/M1.
 	auditWG sync.WaitGroup
 }
 
@@ -165,7 +165,7 @@ func (r *Registry) SetStreamRevoker(sr StreamRevoker) {
 
 // appendAuditAsync runs AppendAudit in a detached goroutine with a bounded
 // timeout and logs at warn on failure. Tracked by auditWG so Close can join.
-// See AUDIT 2026-04-11/M1.
+// See AUDIT 2026-04-11-01/M1.
 func (r *Registry) appendAuditAsync(eventType, actor, target, detail string) {
 	r.auditWG.Add(1)
 	go func() {

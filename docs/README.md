@@ -250,12 +250,12 @@ All project documentation lives under `docs/`:
 | [SECURITY.md](SECURITY.md) | Threat model, mTLS, PQC, rate limiting, audit logging |
 | [JWT-GUIDE.md](JWT-GUIDE.md) | JWT token lifecycle, issuance, usage, revocation |
 | [SECURITY-OPS.md](SECURITY-OPS.md) | Operational checklist, env vars, troubleshooting |
-| [AUDIT.md](AUDIT.md) | Security & code-quality audit **template** — copy into `audits/<YYYY-MM-DD>.md` to start a new audit |
-| [audits/](audits/) | Archive of closed audits (one file per run, filename = audit ID) |
+| [DOCS-WORKFLOW.md](DOCS-WORKFLOW.md) | How `audits/`, `planned-features/`, and `planned-features/deferred/` work together — templates, naming, cross-references |
+| [audits/](audits/) | Closed audits (one file per run, `YYYY-MM-DD-NN.md`). Template at [`audits/TEMPLATE.md`](audits/TEMPLATE.md). |
 | [dashboard.md](dashboard.md) | Angular dashboard — stack, testing, local dev |
 | [persistence.md](persistence.md) | `internal/persistence` rules, key schema, test invariants |
 | [docker-compose-dev-notes.md](docker-compose-dev-notes.md) | Local Docker Compose workflow notes |
-| [planned-features/](planned-features/) | Feature specs for orchestrator enhancements |
+| [planned-features/](planned-features/) | Active feature specs. Deferred items live under [`planned-features/deferred/`](planned-features/deferred/). Templates: [`planned-features/TEMPLATE.md`](planned-features/TEMPLATE.md), [`planned-features/deferred/TEMPLATE.md`](planned-features/deferred/TEMPLATE.md). |
 
 ### Packing the repo without audits and planned features
 
@@ -272,8 +272,9 @@ git archive --format=tar.gz -o helion-v2.tar.gz HEAD \
   -- ':(exclude)docs/audits' ':(exclude)docs/planned-features'
 ```
 
-This keeps `docs/AUDIT.md` (the template) and all other docs, dropping
-only the dated audit files and feature spec archive.
+This keeps [`docs/DOCS-WORKFLOW.md`](DOCS-WORKFLOW.md) and the three
+`TEMPLATE.md` files (so a fresh reader still sees how the process
+works) and drops only the dated audit files and feature spec archive.
 
 ---
 

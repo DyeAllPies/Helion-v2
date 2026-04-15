@@ -57,7 +57,7 @@ describe('WebSocketService', () => {
 
   it('should be created', () => expect(service).toBeTruthy());
 
-  // AUDIT 2026-04-12/H2: token is no longer in the URL — sent as first-message frame.
+  // AUDIT 2026-04-12-01/H2: token is no longer in the URL — sent as first-message frame.
   it('jobLogs should connect without token in URL and send auth frame', (done) => {
     service.jobLogs('job-001').subscribe({ complete: done });
     expect(MockWebSocket.instance.url).toContain('/ws/jobs/job-001/logs');

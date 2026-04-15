@@ -2,7 +2,7 @@
 # NetworkPolicy restricting ingress to the coordinator.
 # /metrics on the HTTP port is open only to the metrics scrape sources;
 # the API ports are open only to configured client sources.
-# See AUDIT 2026-04-11/L1.
+# See AUDIT 2026-04-11-01/L1.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

@@ -22,7 +22,7 @@ spec:
       securityContext:
         {{- toYaml .Values.node.securityContext | nindent 8 }}
       # Wait for coordinator to be reachable before starting.
-      # Init image is parameterised so operators can pin a digest. See AUDIT 2026-04-11/M5.
+      # Init image is parameterised so operators can pin a digest. See AUDIT 2026-04-11-01/M5.
       initContainers:
         - name: wait-for-coordinator
           image: "{{ .Values.node.initImage.repository }}:{{ .Values.node.initImage.tag }}"
@@ -68,7 +68,7 @@ spec:
             {{- toYaml .Values.node.resources | nindent 12 }}
           volumeMounts:
             # Writable scratch for the Go stdlib's temp files so that
-            # readOnlyRootFilesystem can be enforced. See AUDIT 2026-04-11/M3.
+            # readOnlyRootFilesystem can be enforced. See AUDIT 2026-04-11-01/M3.
             - name: tmp
               mountPath: /tmp
       volumes:

@@ -189,7 +189,7 @@ func main() {
 	// immediately invalid. Disable rotation only when a stable token is required
 	// (e.g. in automation that cannot capture stdout on every restart).
 	//
-	// AUDIT 2026-04-11/L4 (fixed): parse the env var strictly with
+	// AUDIT 2026-04-11-01/L4 (fixed): parse the env var strictly with
 	// strconv.ParseBool so that HELION_ROTATE_TOKEN=0 / no / False also
 	// disable rotation as the operator expects. Unknown values are a
 	// fatal startup error rather than the previous
@@ -287,7 +287,7 @@ func main() {
 	// node cert carries a valid out-of-band ML-DSA signature from this CA.
 	registry.SetCertVerifier(bundle.CA)
 
-	// AUDIT 2026-04-12/H1: wire cert issuer so Register returns a
+	// AUDIT 2026-04-12-01/H1: wire cert issuer so Register returns a
 	// coordinator-signed cert for the node's gRPC server.
 	registry.SetCertIssuer(bundle.CA)
 
@@ -381,7 +381,7 @@ func main() {
 	scheduler := cluster.NewScheduler(registry, policy)
 	log.Info("scheduler initialized", slog.String("policy", scheduler.PolicyName()))
 
-	// AUDIT 2026-04-12/H1 (fixed): Build a TLS config for dialing node agents.
+	// AUDIT 2026-04-12-01/H1 (fixed): Build a TLS config for dialing node agents.
 	// Nodes now present coordinator-signed certificates on their gRPC server
 	// (issued during Register and returned in RegisterResponse.SignedCertificate).
 	// The coordinator verifies the cert chain against its own CA.
@@ -466,7 +466,7 @@ func main() {
 		log.Info("analytics sink stopped")
 	}
 
-	// AUDIT 2026-04-11/M1 (fixed): drain in-flight audit writes and async
+	// AUDIT 2026-04-11-01/M1 (fixed): drain in-flight audit writes and async
 	// node persists before returning so the last-second events are not
 	// lost on SIGTERM.
 	jobs.Close(5 * time.Second)

@@ -359,11 +359,11 @@ func TestGarbageCollect_DoesNotEvictRecentEntry(t *testing.T) {
 	}
 }
 
-// ── AUDIT 2026-04-11/M2: cap + eviction ──────────────────────────────────────
+// ── AUDIT 2026-04-11-01/M2: cap + eviction ──────────────────────────────────────
 
 // TestNodeLimiter_CapOnOverflow verifies the limiter map never exceeds
 // MaxLimiters even when more distinct node IDs are inserted, and that the
-// oldest entry is evicted on overflow. See AUDIT 2026-04-11/M2.
+// oldest entry is evicted on overflow. See AUDIT 2026-04-11-01/M2.
 func TestNodeLimiter_CapOnOverflow(t *testing.T) {
 	nl := ratelimit.NewNodeLimiter()
 

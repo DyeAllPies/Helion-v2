@@ -1,6 +1,6 @@
 // internal/cluster/shutdown_drain_test.go
 //
-// Regression tests for AUDIT 2026-04-11/M1: fire-and-forget background
+// Regression tests for AUDIT 2026-04-11-01/M1: fire-and-forget background
 // persister writes must run under a bounded timeout, and JobStore.Close
 // must drain them during shutdown instead of leaking goroutines past
 // process exit.

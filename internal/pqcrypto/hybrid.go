@@ -224,7 +224,7 @@ func (ca *CA) EnhancedNodeTLSConfig(certPEM, keyPEM []byte, serverName string) (
 // VerifyCertificateWithKEM verifies a certificate's ML-DSA (Dilithium) signature
 // stored in a custom X.509 extension alongside the standard ECDSA signature.
 //
-// AUDIT 2026-04-12/M3 (fixed): previously returned nil unconditionally. Now
+// AUDIT 2026-04-12-01/M3 (fixed): previously returned nil unconditionally. Now
 // delegates to VerifyMLDSASignature in mldsa.go which extracts the ML-DSA
 // signature from the certificate's PQC extension and verifies it against the
 // CA's ML-DSA public key.

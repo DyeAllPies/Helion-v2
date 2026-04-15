@@ -187,7 +187,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// AUDIT 2026-04-12/H1: if the coordinator returned a signed certificate,
+	// AUDIT 2026-04-12-01/H1: if the coordinator returned a signed certificate,
 	// use it for the node's gRPC server so the coordinator can verify the
 	// node's cert during dispatch (proper CA chain verification).
 	if payload := regResp.GetSignedCertificate(); len(payload) > 0 {

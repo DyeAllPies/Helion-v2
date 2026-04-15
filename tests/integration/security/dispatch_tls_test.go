@@ -1,6 +1,6 @@
 // tests/integration/security/dispatch_tls_test.go
 //
-// AUDIT 2026-04-12/T1: verifies that the dispatcher rejects a node presenting
+// AUDIT 2026-04-12-01/T1: verifies that the dispatcher rejects a node presenting
 // an unknown certificate (i.e. one not signed by the coordinator's CA).
 
 package security

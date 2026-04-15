@@ -54,7 +54,7 @@ coordinator:
   # Container-level securityContext. readOnlyRootFilesystem is safe
   # because the coordinator only writes to its PVC mount; an emptyDir
   # is mounted at /tmp so anything the Go stdlib writes there still works.
-  # See AUDIT 2026-04-11/M3.
+  # See AUDIT 2026-04-11-01/M3.
   containerSecurityContext:
     readOnlyRootFilesystem: true
     allowPrivilegeEscalation: false
@@ -71,7 +71,7 @@ coordinator:
   # When enabled, only pods in the listed namespace (by label selector)
   # can reach /metrics, and only matching pods can reach the HTTP/gRPC
   # API. Disabled by default — trust the CNI or add your own policy.
-  # See AUDIT 2026-04-11/L1.
+  # See AUDIT 2026-04-11-01/L1.
   networkPolicy:
     enabled: false
     # Namespace selector for scrape sources (typically Prometheus).
@@ -110,7 +110,7 @@ node:
       cpu: 500m
       memory: 256Mi
 
-  # Pod-level securityContext. See AUDIT 2026-04-11/M3.
+  # Pod-level securityContext. See AUDIT 2026-04-11-01/M3.
   securityContext:
     runAsNonRoot: true
     runAsUser: 1000
@@ -127,7 +127,7 @@ node:
         - ALL
 
   # Init image used to wait for the coordinator before the node starts.
-  # Parameterised so operators can pin a digest (see AUDIT 2026-04-11/M5).
+  # Parameterised so operators can pin a digest (see AUDIT 2026-04-11-01/M5).
   initImage:
     repository: busybox
     tag: "1.36"

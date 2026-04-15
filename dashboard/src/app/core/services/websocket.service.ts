@@ -91,7 +91,7 @@ export class WebSocketService {
 
   // ── Private factory ───────────────────────────────────────────────────────────
 
-  // AUDIT 2026-04-12/H2 (fixed): token is sent as the first WebSocket message
+  // AUDIT 2026-04-12-01/H2 (fixed): token is sent as the first WebSocket message
   // instead of a URL query parameter. This keeps the JWT out of server access
   // logs, browser history, and Referer headers.
   private _connect<T>(baseUrl: string): Observable<T> {

@@ -55,7 +55,7 @@ func (r *Registry) HandleHeartbeat(ctx context.Context, msg *pb.HeartbeatMessage
 		entry.storeCapacity(msg.CpuMillicores, msg.TotalMemoryBytes, uint32(msg.MaxSlots), msg.TotalGpus)
 	}
 
-	// Persist asynchronously. See AUDIT 2026-04-11/M1 — timeout-bounded
+	// Persist asynchronously. See AUDIT 2026-04-11-01/M1 — timeout-bounded
 	// and drained by Close.
 	r.persistNodeAsync(entry.snapshot(r.staleAfter))
 

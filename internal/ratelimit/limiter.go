@@ -68,7 +68,7 @@ const (
 
 	// MaxLimiters bounds the size of the per-node limiter map so an
 	// attacker cannot exhaust memory by spoofing unique node IDs faster
-	// than the background GC can evict them. See AUDIT 2026-04-11/M2.
+	// than the background GC can evict them. See AUDIT 2026-04-11-01/M2.
 	//
 	// The limiter is consulted before authentication completes (rate
 	// limiting must run pre-auth to protect the auth path itself), so the
@@ -111,7 +111,7 @@ func NewNodeLimiter() *NodeLimiter {
 //
 // If the map is at MaxLimiters capacity on insertion, the entry with the
 // oldest lastSeenNano is evicted to make room. This bounds memory use at
-// O(MaxLimiters) independent of attacker behaviour. See AUDIT 2026-04-11/M2.
+// O(MaxLimiters) independent of attacker behaviour. See AUDIT 2026-04-11-01/M2.
 func (nl *NodeLimiter) getOrCreate(nodeID string) *limiterEntry {
 	nl.mu.RLock()
 	entry, exists := nl.limiters[nodeID]

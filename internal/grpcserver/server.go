@@ -2,7 +2,7 @@
 //
 // Server is the coordinator's gRPC server.
 //
-// AUDIT 2026-04-12/L3 (fixed): split from 469-line monolith into:
+// AUDIT 2026-04-12-01/L3 (fixed): split from 469-line monolith into:
 //   server.go        — struct, interfaces, New(), options, Serve(), Stop()
 //   interceptors.go  — revocation and rate-limit unary interceptors
 //   handlers.go      — Register, Heartbeat, ReportResult RPC handlers

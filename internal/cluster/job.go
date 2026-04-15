@@ -157,7 +157,7 @@ type JobStore struct {
 	eventBus  *events.Bus // nil if events not enabled
 
 	// auditWG tracks fire-and-forget background goroutines so Close can
-	// wait for them during graceful shutdown. See AUDIT 2026-04-11/M1
+	// wait for them during graceful shutdown. See AUDIT 2026-04-11-01/M1
 	// (writes ran under context.Background() with no timeout and no
 	// shutdown join).
 	auditWG sync.WaitGroup

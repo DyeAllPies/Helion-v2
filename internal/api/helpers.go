@@ -24,7 +24,7 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 // writeJSON encodes v as the response body and logs at warn on failure.
 // Callers must have already set Content-Type and any non-200 status code.
 // handler is the handler name, used in the failure log for debugging.
-// See AUDIT 2026-04-11/L2.
+// See AUDIT 2026-04-11-01/L2.
 func writeJSON(w http.ResponseWriter, handler string, v interface{}) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Warn("response encode failed",

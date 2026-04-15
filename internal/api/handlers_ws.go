@@ -4,7 +4,7 @@
 //   GET /ws/jobs/{id}/logs  — real-time job log streaming (not yet implemented)
 //   GET /ws/metrics         — server-push cluster metrics stream
 //
-// AUDIT 2026-04-12/H2 (fixed): WebSocket endpoints use first-message auth.
+// AUDIT 2026-04-12-01/H2 (fixed): WebSocket endpoints use first-message auth.
 // The connection is upgraded without authentication. The client must send
 // {"type":"auth","token":"<jwt>"} as the first frame. The server validates
 // the token and replies with {"type":"auth_ok"} on success or closes with

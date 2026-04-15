@@ -142,6 +142,6 @@ func TestAuthMiddleware_InvalidToken_WithAuditLog_LogsFailure(t *testing.T) {
 	}
 }
 
-// AUDIT 2026-04-12/H2: wsAuthMiddleware removed — WebSocket auth is now
+// AUDIT 2026-04-12-01/H2: wsAuthMiddleware removed — WebSocket auth is now
 // handled via first-message pattern inside the WS handlers (handlers_ws.go).
 // WS endpoints no longer have pre-upgrade HTTP-level auth.

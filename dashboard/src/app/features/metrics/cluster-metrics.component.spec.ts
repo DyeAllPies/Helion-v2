@@ -100,7 +100,7 @@ describe('ClusterMetricsComponent', () => {
   it('should show error and set connected = false on WS error', () => {
     metrics$.error(new Error('connection refused'));
     expect(component.connected).toBeFalse();
-    // AUDIT 2026-04-12/M2: error message is now generic (no raw details).
+    // AUDIT 2026-04-12-01/M2: error message is now generic (no raw details).
     expect(component.error).toContain('Metrics connection lost');
   });
 

@@ -57,7 +57,7 @@ spec:
             {{- toYaml .Values.coordinator.resources | nindent 12 }}
           volumeMounts:
             # Writable scratch for the Go stdlib's temp files so that
-            # readOnlyRootFilesystem can be enforced. See AUDIT 2026-04-11/M3.
+            # readOnlyRootFilesystem can be enforced. See AUDIT 2026-04-11-01/M3.
             - name: tmp
               mountPath: /tmp
             {{- if .Values.coordinator.persistence.enabled }}

@@ -246,7 +246,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /admin/tokens", s.authMiddleware(s.adminMiddleware(s.handleIssueToken)))
 	s.mux.HandleFunc("DELETE /admin/tokens/{jti}", s.authMiddleware(s.adminMiddleware(s.handleRevokeToken)))
 
-	// AUDIT 2026-04-12/H2 (fixed): WebSocket endpoints authenticate via
+	// AUDIT 2026-04-12-01/H2 (fixed): WebSocket endpoints authenticate via
 	// first-message pattern instead of URL query parameters. The connection is
 	// upgraded without auth; the first frame must be {"type":"auth","token":"..."}.
 	// This keeps JWTs out of server access logs and browser history.
@@ -269,7 +269,7 @@ func (s *Server) Serve(addr string) error {
 	}
 	// AUDIT L6 (fixed): IdleTimeout prevents keep-alive connections from being held
 	// open indefinitely, limiting the resource impact of slow or idle clients.
-	// AUDIT 2026-04-12/L1 (fixed): ReadHeaderTimeout limits how long the
+	// AUDIT 2026-04-12-01/L1 (fixed): ReadHeaderTimeout limits how long the
 	// server waits for request headers, countering Slowloris-style attacks
 	// that trickle headers one byte at a time to hold connection slots open.
 	hsrv := &http.Server{

@@ -194,7 +194,7 @@ func (tm *TokenManager) RevokeToken(ctx context.Context, jti string) error {
 // prior run is invalidated automatically.
 // Returns the new token string so the caller can display or persist it.
 func (tm *TokenManager) RotateRootToken(ctx context.Context) (string, error) {
-	// AUDIT 2026-04-12/M4 (fixed): revoke the old token's JTI using validated
+	// AUDIT 2026-04-12-01/M4 (fixed): revoke the old token's JTI using validated
 	// parsing instead of ParseUnverified. If signature validation fails (e.g.
 	// the secret was regenerated), the old token is already invalid under the
 	// new secret — skip revocation entirely rather than parsing untrusted data.
