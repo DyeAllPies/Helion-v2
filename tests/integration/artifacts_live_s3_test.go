@@ -35,11 +35,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/artifacts"
+	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
+	"github.com/DyeAllPies/Helion-v2/internal/staging"
 )
 
 // skipUnlessLiveMinIO skips the test unless the env signalling a
@@ -273,3 +278,134 @@ func TestLiveS3GetAndVerifyToStream(t *testing.T) {
 		t.Fatal("GetAndVerifyTo should have rejected a mismatched digest")
 	}
 }
+
+// ── Feature 12: Stager → live MinIO integration ───────────────────────
+//
+// Everything above hits the artifact Store directly. What's missing
+// against live MinIO is the **Stager's** upload path — feature 12's
+// whole point — and specifically the `jobs/<job_id>/<local_path>`
+// key shape that the coordinator's attestation (feature 12's
+// coordinator-side trust boundary) enforces against. Unit tests for
+// the Stager use LocalStore; nothing verifies that a real S3Store
+// upload produces URIs that attestation would accept.
+//
+// TestLiveS3Stager_UploadsOutputOnFinalize runs the Prepare →
+// write-file-in-workdir → Finalize loop against a real S3Store
+// pointed at live MinIO. It then asserts three things the rest of
+// the ML pipeline depends on:
+//
+//   1. Finalize returns a URI of the form `s3://<bucket>/jobs/<job_id>/<local_path>`.
+//      Anything else would fail the coordinator's `uriBelongsToJob`
+//      attestation and the upload would be dropped downstream.
+//   2. The URI actually resolves — bytes read from MinIO under that
+//      key match what the job wrote into the workdir.
+//   3. Stager.Finalize for a FAILED run does NOT upload. A
+//      subsequent Get against the expected-skipped URI returns
+//      ErrNotFound, confirming "only on success" from the spec.
+
+func TestLiveS3Stager_UploadsOutputOnFinalize(t *testing.T) {
+	cfg := skipUnlessLiveMinIO(t)
+
+	store, err := artifacts.Open(cfg)
+	if err != nil {
+		t.Fatalf("artifacts.Open: %v", err)
+	}
+
+	// Per-run unique job ID so a repeat run or a parallel harness
+	// doesn't 409 on the same jobs/<id>/ prefix.
+	jobID := "stager-it-" + time.Now().UTC().Format("20060102T150405.000")
+	workRoot := t.TempDir()
+
+	stager := staging.NewStager(store, workRoot, false, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// ── Happy path ───────────────────────────────────────────
+	job := &cpb.Job{
+		ID: jobID,
+		Outputs: []cpb.ArtifactBinding{
+			{Name: "MODEL", LocalPath: "model.bin"},
+		},
+	}
+	prepared, err := stager.Prepare(ctx, job)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	t.Cleanup(prepared.Cleanup)
+
+	// Simulate the runtime writing the output file inside the
+	// staged workdir.
+	payload := []byte("live-stager-s3-artifact-bytes")
+	modelPath := filepath.Join(prepared.WorkingDir, "model.bin")
+	if err := os.WriteFile(modelPath, payload, 0o600); err != nil {
+		t.Fatalf("write model.bin: %v", err)
+	}
+
+	resolved, err := stager.Finalize(ctx, prepared, true /* runSucceeded */)
+	if err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	if len(resolved) != 1 {
+		t.Fatalf("Finalize returned %d outputs, want 1", len(resolved))
+	}
+	out := resolved[0]
+	// (1) URI shape must match jobs/<id>/<local_path> so the
+	//     coordinator's attestation accepts it.
+	wantSuffix := "/jobs/" + jobID + "/model.bin"
+	if !strings.HasSuffix(string(out.URI), wantSuffix) {
+		t.Errorf("URI does not match jobs/<id>/<local_path> shape: got %q", out.URI)
+	}
+	if !strings.HasPrefix(string(out.URI), "s3://") {
+		t.Errorf("URI scheme: got %q, want s3://", out.URI)
+	}
+	t.Cleanup(func() { _ = store.Delete(context.Background(), out.URI) })
+
+	// (2) URI resolves; bytes match.
+	rc, err := store.Get(ctx, out.URI)
+	if err != nil {
+		t.Fatalf("Get after Finalize: %v", err)
+	}
+	got, _ := io.ReadAll(rc)
+	_ = rc.Close()
+	if !bytes.Equal(got, payload) {
+		t.Errorf("staged bytes on S3 != what the job wrote: got %q", got)
+	}
+	wantSum := sha256.Sum256(payload)
+	if out.SHA256 != hex.EncodeToString(wantSum[:]) {
+		t.Errorf("ResolvedOutput.SHA256 mismatch: got %q", out.SHA256)
+	}
+
+	// ── Failure path: Finalize for a failed run must NOT upload
+	failJobID := jobID + "-fail"
+	failJob := &cpb.Job{
+		ID: failJobID,
+		Outputs: []cpb.ArtifactBinding{
+			{Name: "SHOULD_SKIP", LocalPath: "skip.bin"},
+		},
+	}
+	failPrep, err := stager.Prepare(ctx, failJob)
+	if err != nil {
+		t.Fatalf("Prepare (fail path): %v", err)
+	}
+	t.Cleanup(failPrep.Cleanup)
+	if err := os.WriteFile(filepath.Join(failPrep.WorkingDir, "skip.bin"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write skip.bin: %v", err)
+	}
+	skipped, err := stager.Finalize(ctx, failPrep, false /* runSucceeded */)
+	if err != nil {
+		t.Fatalf("Finalize (fail path): %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("failed run should upload 0 outputs, got %d: %+v", len(skipped), skipped)
+	}
+	// Confirm no object landed in the store at the prefix the
+	// failed job would have used. Construct the would-be URI in
+	// the same shape Finalize would have chosen.
+	shouldNotExist := artifacts.URI("s3://" + cfg.S3Bucket + "/jobs/" + failJobID + "/skip.bin")
+	if _, err := store.Stat(ctx, shouldNotExist); err == nil {
+		t.Errorf("failed run still uploaded to %s", shouldNotExist)
+		_ = store.Delete(context.Background(), shouldNotExist)
+	}
+}
+

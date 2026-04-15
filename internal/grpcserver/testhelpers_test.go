@@ -74,6 +74,10 @@ type mockJobStore struct {
 	submitErr error
 	getErr    error
 	transErr  error
+	// lastTransitionOpts captures the most recent Transition call's
+	// options so tests can verify the handler passed attested
+	// outputs (not the raw node-reported slice) down to the store.
+	lastTransitionOpts cluster.TransitionOptions
 }
 
 func newMockJobStore() *mockJobStore {
@@ -99,12 +103,18 @@ func (m *mockJobStore) Get(jobID string) (*cpb.Job, error) {
 	return j, nil
 }
 
-func (m *mockJobStore) Transition(_ context.Context, jobID string, to cpb.JobStatus, _ cluster.TransitionOptions) error {
+func (m *mockJobStore) Transition(_ context.Context, jobID string, to cpb.JobStatus, opts cluster.TransitionOptions) error {
 	if m.transErr != nil {
 		return m.transErr
 	}
+	m.lastTransitionOpts = opts
 	if j, ok := m.jobs[jobID]; ok {
 		j.Status = to
+		// Mirror persistence: copy ResolvedOutputs onto the in-memory
+		// Job so tests can inspect it via Get().
+		if len(opts.ResolvedOutputs) > 0 {
+			j.ResolvedOutputs = append(j.ResolvedOutputs[:0], opts.ResolvedOutputs...)
+		}
 	}
 	return nil
 }

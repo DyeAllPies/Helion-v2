@@ -151,6 +151,25 @@ Tests: **62 new, all passing**
 [`outputs_from_proto_test.go`](../../../internal/grpcserver/outputs_from_proto_test.go),
 [`outputs_to_proto_test.go`](../../../internal/nodeserver/outputs_to_proto_test.go)).
 
+**Coverage audit follow-up** — audit
+[`2026-04-15-03`](../../audits/done/2026-04-15-03.md) landed two
+more tests after surveying the 62 above:
+
+- [`report_result_test.go:TestReportResult_AttestsOutputs_DropsForgedEntries`](../../../internal/grpcserver/report_result_test.go)
+  — full-RPC test proving the `ReportResult` handler actually
+  pipes outputs through `attestOutputs`. The attestation function
+  itself was unit-tested; its call site was not, so a regression
+  that bypassed attestation would have slipped past every existing
+  test without the bogus URI ever being noticed.
+- [`tests/integration/artifacts_live_s3_test.go:TestLiveS3Stager_UploadsOutputOnFinalize`](../../../tests/integration/artifacts_live_s3_test.go)
+  — Stager + live MinIO integration. Prepare → write-file →
+  Finalize end-to-end, asserts the returned URI matches the
+  `jobs/<job_id>/<local_path>` shape `uriBelongsToJob` checks for,
+  that the bytes round-trip through MinIO, and that a failed-run
+  Finalize uploads nothing. Gated on `MINIO_TEST_ENDPOINT` with
+  the rest of the live tests; picked up by `scripts/run-e2e.sh`'s
+  live-MinIO block.
+
 ### Staging follow-ups
 
 Landed on top of the initial step-2 implementation after a second-pass

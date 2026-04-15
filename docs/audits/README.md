@@ -20,7 +20,6 @@ Security & code-quality audits, one file per run.
 | [2026-04-12-01](2026-04-12-01.md) | Second-pass audit after dispatch hardening — closed all 10 findings |
 | [2026-04-14-01](2026-04-14-01.md) | ML registry slice audit — M1/M2 fixed, M3/M4/L1/L3 deferred |
 | [2026-04-14-02](2026-04-14-02.md) | Inference-jobs slice audit — M2/M3/L2/L3/T2 fixed, M1/L1/T1 deferred |
-| [2026-04-15-02](2026-04-15-02.md) | Feature-11 fourth-pass coverage audit — cross-backend contract lock added; declares coverage saturation |
 
 > Historical note: the prior four `YYYY-MM-DD-NN.md` rows are all
 > technically closed (every Open column is zero) but remain in the
@@ -34,6 +33,8 @@ Security & code-quality audits, one file per run.
 | Audit ID | Headline |
 |----------|----------|
 | [done/2026-04-15-01](done/2026-04-15-01.md) | Feature-11 exhaustive coverage audit — 6 test gaps + 2 Medium + 2 Low all fixed; no production-code defects |
+| [done/2026-04-15-02](done/2026-04-15-02.md) | Feature-11 fourth-pass coverage audit — cross-backend contract lock added; declares coverage saturation |
+| [done/2026-04-15-03](done/2026-04-15-03.md) | Feature-12 coverage audit — 2 test gaps fixed (ReportResult attestation wiring + live-MinIO Stager upload); no production-code defects |
 
 ## Workflow
 

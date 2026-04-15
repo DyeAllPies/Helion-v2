@@ -247,6 +247,110 @@ func TestReportResult_DispatchingJob_TransitionsToRunningThenCompleted(t *testin
 	}
 }
 
+// TestReportResult_AttestsOutputs_DropsForgedEntries is the full-RPC
+// counterpart to the attestOutputs unit tests in security_test.go.
+// attestOutputs itself is well-tested in isolation (shape + scheme +
+// prefix checks), but its call site — the ReportResult handler —
+// wires it in via one line:
+//
+//	opts.ResolvedOutputs = s.attestOutputs(...)
+//
+// A regression that removed or bypassed that line (e.g. "assigns
+// result.Outputs directly for performance") would slip past every
+// unit test because the validator itself would still work. This
+// test catches that class of regression by submitting a
+// ReportResult with one legitimate output + one forged-prefix
+// output, then asserting that the persisted Job's ResolvedOutputs
+// contains **only the legitimate entry**. If the handler ever stops
+// passing the slice through attestation, the bogus URI will reach
+// the JobStore and this test fails.
+func TestReportResult_AttestsOutputs_DropsForgedEntries(t *testing.T) {
+	coordBundle, _ := auth.NewCoordinatorBundle()
+	js := newMockJobStore()
+	// Running → Completed path; job pinned to a specific node.
+	js.jobs["legit-job"] = &cpb.Job{
+		ID:     "legit-job",
+		Status: cpb.JobStatusRunning,
+		NodeID: "worker-node",
+	}
+
+	srv, _ := grpcserver.New(coordBundle, grpcserver.WithJobStore(js))
+
+	lis, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := lis.Addr().String()
+	lis.Close()
+
+	go func() { _ = srv.Serve(addr) }()
+	t.Cleanup(srv.Stop)
+	time.Sleep(40 * time.Millisecond)
+
+	nb, _ := auth.NewNodeBundle(coordBundle.CA, "worker-node")
+	client, err := grpcclient.New(addr, "helion-coordinator", nb)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Craft two output entries:
+	//  - LEGIT: well-formed, s3 URI under jobs/legit-job/out.bin —
+	//           matches the job_id-prefix rule.
+	//  - FORGED: well-formed scheme but points at a URI that names
+	//            a DIFFERENT job's prefix. attestOutputs must drop
+	//            this, or a compromised node could inject foreign
+	//            artifact pointers into another job's record.
+	outputs := []*pb.ArtifactOutput{
+		{
+			Name:      "LEGIT",
+			Uri:       "s3://helion/jobs/legit-job/out.bin",
+			LocalPath: "out.bin",
+			Size:      42,
+			Sha256:    "deadbeef",
+		},
+		{
+			Name:      "FORGED",
+			Uri:       "s3://helion/jobs/other-job/hijacked.bin",
+			LocalPath: "hijacked.bin",
+			Size:      99,
+			Sha256:    "feedface",
+		},
+	}
+
+	if err := client.ReportResult(ctx, &pb.JobResult{
+		JobId:   "legit-job",
+		NodeId:  "worker-node",
+		Success: true,
+		Outputs: outputs,
+	}); err != nil {
+		t.Fatalf("ReportResult: %v", err)
+	}
+
+	// Observation point: the mockJobStore captured the last
+	// Transition call's options, including ResolvedOutputs.
+	// Exactly one entry must remain — the one whose URI matches
+	// the job's own prefix.
+	got := js.lastTransitionOpts.ResolvedOutputs
+	if len(got) != 1 {
+		t.Fatalf("want 1 attested output after drop, got %d: %+v", len(got), got)
+	}
+	if got[0].Name != "LEGIT" {
+		t.Errorf("attested output name: got %q, want %q", got[0].Name, "LEGIT")
+	}
+	if got[0].URI != "s3://helion/jobs/legit-job/out.bin" {
+		t.Errorf("attested URI mutated: %q", got[0].URI)
+	}
+
+	// Job record reflects only the clean output (confirms the
+	// mock mirrored persistence correctly, so the test isn't
+	// passing just because nothing was recorded).
+	persisted, _ := js.Get("legit-job")
+	if len(persisted.ResolvedOutputs) != 1 {
+		t.Errorf("persisted Job.ResolvedOutputs: got %d, want 1", len(persisted.ResolvedOutputs))
+	}
+}
+
 func TestReportResult_FinalTransitionFails_ReturnsInternal(t *testing.T) {
 	coordBundle, _ := auth.NewCoordinatorBundle()
 	js := &mockJobStore{
