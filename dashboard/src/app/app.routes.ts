@@ -79,6 +79,19 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/ml/ml-services.component').then(m => m.MlServicesComponent),
       },
+      // Pipelines list + per-workflow DAG detail view. The detail
+      // component imports mermaid lazily so the main bundle stays
+      // small for users who never open a DAG.
+      {
+        path: 'ml/pipelines',
+        loadComponent: () =>
+          import('./features/ml/ml-pipelines.component').then(m => m.MlPipelinesComponent),
+      },
+      {
+        path: 'ml/pipelines/:id',
+        loadComponent: () =>
+          import('./features/ml/ml-pipeline-detail.component').then(m => m.MlPipelineDetailComponent),
+      },
     ],
   },
   { path: '**', redirectTo: '' },

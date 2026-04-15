@@ -13,6 +13,11 @@ under `docs/planned-features/` are for *active slices*. The backlog is
 append-only — moving an item into a numbered slice (as happened with GPU
 resources → feature 10 step 5) replaces the entry here with a pointer.
 
+Items that have since been implemented move to
+[`implemented/`](./implemented/) keeping their original number; the
+deferral write-up + the landed-implementation write-up both live in
+the single moved file so future reviewers can see the full arc.
+
 ## Backlog
 
 | # | Item | From | Priority |
@@ -40,6 +45,6 @@ resources → feature 10 step 5) replaces the entry here with a pointer.
 | 21 | [Service jobs in workflow specs](./21-service-jobs-in-workflow.md) | feature 17 (audit 2026-04-14-02, M1) | P3 |
 | 22 | [Rate-limit ReportServiceEvent](./22-report-service-event-rate-limit.md) | feature 17 (audit 2026-04-14-02, L1) | P3 |
 | 23 | [Service integration e2e test](./23-service-integration-e2e.md) | feature 17 (audit 2026-04-14-02, T1) | P3 |
-| 24 | [ML Pipelines DAG view](./24-ml-pipelines-dag-view.md) | feature 18 | P3 |
+| ~~24~~ | ~~ML Pipelines DAG view~~ — **Implemented**; moved to [`implemented/24-ml-pipelines-dag-view.md`](./implemented/24-ml-pipelines-dag-view.md) | feature 18 | — |
 
 > **GPU / accelerator resources:** moved to [feature 10 step 5](../10-minimal-ml-pipeline.md) — GPU as a first-class resource. The pointer is retained so older commits and audits still resolve.

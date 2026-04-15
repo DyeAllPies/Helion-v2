@@ -195,7 +195,8 @@ export class ShellComponent {
     // links straight to the Datasets view as the landing page.
     { path: '/ml/datasets', label: 'Datasets', icon: 'dataset'      },
     { path: '/ml/models',   label: 'Models',   icon: 'hub'          },
-    { path: '/ml/services', label: 'Services', icon: 'rocket_launch'},
+    { path: '/ml/services',  label: 'Services',  icon: 'rocket_launch'},
+    { path: '/ml/pipelines', label: 'Pipelines', icon: 'account_tree' },
   ];
 
   constructor(private auth: AuthService, private router: Router) {}

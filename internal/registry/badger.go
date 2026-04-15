@@ -143,6 +143,29 @@ func (s *BadgerStore) CountModels(_ context.Context) (int, error) {
 	return s.countPrefix([]byte(modelKeyPrefix))
 }
 
+// ListBySourceJob walks every model and returns those whose
+// SourceJobID matches the argument. Linear scan; acceptable at MVP
+// scale because the caller (workflow-lineage endpoint) is behind
+// the registry rate limiter and model counts in a minimal-ML
+// deployment are O(hundreds). If that assumption changes, add a
+// secondary index under `models-by-source-job/<source_job_id>/<model_name>/<version>`.
+func (s *BadgerStore) ListBySourceJob(_ context.Context, sourceJobID string) ([]*Model, error) {
+	if sourceJobID == "" {
+		return nil, nil
+	}
+	all, err := s.loadAllModels()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Model, 0, 4)
+	for _, m := range all {
+		if m.SourceJobID == sourceJobID {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
 func (s *BadgerStore) countPrefix(prefix []byte) (int, error) {
 	n := 0
 	err := s.db.View(func(txn *badger.Txn) error {

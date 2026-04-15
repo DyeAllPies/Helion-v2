@@ -44,6 +44,7 @@
 //     GET    /api/models, /api/models/{name}/latest, /api/models/{name}/{version}
 //     DELETE /api/models/{name}/{version}
 //     GET    /api/services, /api/services/{job_id}   (SetServiceRegistry; feature 17)
+//     GET    /workflows/{id}/lineage                  (SetWorkflowStore + SetRegistryStore; feature 18 DAG view)
 //
 //   WebSocket (JWT via query param or Authorization header):
 //     GET /ws/jobs/{id}/logs
@@ -159,6 +160,11 @@ func (s *Server) SetWorkflowStore(ws *cluster.WorkflowStore, jobs *cluster.JobSt
 	s.workflowStore = ws
 	s.workflowJobStore = jobs
 	s.mux.HandleFunc("POST /workflows", s.authMiddleware(s.handleSubmitWorkflow))
+	// `/lineage` is registered before `/{id}` so ServeMux's most-
+	// specific-pattern-wins rule doesn't route `GET /workflows/123/lineage`
+	// to the base detail handler. The lineage handler itself returns 404
+	// when the model store is not wired (coordinator without registry).
+	s.mux.HandleFunc("GET /workflows/{id}/lineage", s.authMiddleware(s.handleGetWorkflowLineage))
 	s.mux.HandleFunc("GET /workflows/{id}", s.authMiddleware(s.handleGetWorkflow))
 	s.mux.HandleFunc("GET /workflows", s.authMiddleware(s.handleListWorkflows))
 	s.mux.HandleFunc("DELETE /workflows/{id}", s.authMiddleware(s.handleCancelWorkflow))

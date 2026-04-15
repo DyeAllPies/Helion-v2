@@ -1,7 +1,7 @@
 # Feature: ML Dashboard Module
 
 **Priority:** P1
-**Status:** Done (Datasets / Models / Services views; Pipelines DAG view deferred to [deferred/24](deferred/24-ml-pipelines-dag-view.md))
+**Status:** Done (all four views — Datasets / Models / Services / Pipelines — shipped; the Pipelines DAG view followed on from the initial slice, see [deferred/implemented/24](deferred/implemented/24-ml-pipelines-dag-view.md))
 **Affected files:**
 `internal/cluster/dispatch.go` (ml.resolve_failed emit + classifyUnschedulable),
 `internal/cluster/scheduler.go` (NodeSource.Snapshot accessor),
@@ -96,6 +96,14 @@ Dashboard (25 new tests):
 
 All 167 dashboard tests + the affected Go packages (`internal/cluster`, `internal/events`, `internal/api`, `internal/grpcserver`) green; no new lint warnings.
 
-## Deferred
+## Follow-ups that landed
 
-- [deferred/24](deferred/24-ml-pipelines-dag-view.md) — Pipelines DAG view. Pulls in a graph layout library + a coordinator-side lineage-join endpoint to avoid N+1 fan-out from the dashboard. The other three views cover the operator's day-to-day flow; the Pipelines view is best built once step 19 (iris demo) gives a concrete user flow to anchor design decisions.
+- **Pipelines DAG view** — originally deferred (deferred/24), now
+  implemented (see
+  [`deferred/implemented/24-ml-pipelines-dag-view.md`](deferred/implemented/24-ml-pipelines-dag-view.md)
+  for the full arc). Adds `GET /workflows/{id}/lineage` on the
+  coordinator (one round-trip join across workflow + jobs +
+  registered models), `/ml/pipelines` + `/ml/pipelines/:id` on the
+  dashboard, and a mermaid-rendered DAG distinguishing
+  dependency arrows from artifact-flow arrows. 19 new dashboard
+  tests + 7 new Go tests; dashboard suite at 186 total.

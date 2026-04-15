@@ -24,7 +24,7 @@ Every one of those three folders has the same shape:
 | Folder | Purpose | Naming | Template |
 |--------|---------|--------|----------|
 | [`planned-features/`](planned-features/) | Active feature specs — in progress or queued for the next slice. | `NN-kebab-slug.md` | [`planned-features/TEMPLATE.md`](planned-features/TEMPLATE.md) |
-| [`planned-features/deferred/`](planned-features/deferred/) | Items consciously deferred during a slice or audit, with the reason preserved. | `NN-kebab-slug.md` | [`planned-features/deferred/TEMPLATE.md`](planned-features/deferred/TEMPLATE.md) |
+| [`planned-features/deferred/`](planned-features/deferred/) | Items consciously deferred during a slice or audit, with the reason preserved. Items that later get built move to [`deferred/implemented/`](planned-features/deferred/implemented/) with the same number, carrying both the deferral rationale and the landed-implementation write-up. | `NN-kebab-slug.md` | [`planned-features/deferred/TEMPLATE.md`](planned-features/deferred/TEMPLATE.md) |
 | [`audits/`](audits/) | Closed security & code-quality audits, kept as a historical record. | `YYYY-MM-DD-NN.md` | [`audits/TEMPLATE.md`](audits/TEMPLATE.md) |
 
 The `NN` prefix on the two feature folders is a stable two-digit

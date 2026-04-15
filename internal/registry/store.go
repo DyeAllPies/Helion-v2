@@ -52,6 +52,15 @@ type ModelStore interface {
 	// CountModels returns the number of registered model entries.
 	// Backs helion_models_total.
 	CountModels(ctx context.Context) (int, error)
+	// ListBySourceJob returns every model whose SourceJobID matches
+	// the argument. Empty slice (not an error) when no model was
+	// produced by that job. Backs the workflow-lineage endpoint
+	// (feature 18 → deferred/24): the coordinator joins workflow
+	// jobs against this to surface "which registered model came out
+	// of each workflow step". Walks the model prefix; cheap at MVP
+	// scale, will want a secondary index once the model count passes
+	// the low thousands.
+	ListBySourceJob(ctx context.Context, sourceJobID string) ([]*Model, error)
 }
 
 // Store is the union interface the REST handler depends on — it

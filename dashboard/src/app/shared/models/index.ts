@@ -330,6 +330,45 @@ export interface ServiceListResponse {
   total:    number;
 }
 
+// ── Workflow lineage (feature 18 DAG view) ───────────────────────────────────
+
+export interface LineageOutput {
+  name:    string;
+  uri:     string;
+  size?:   number;
+  sha256?: string;
+}
+
+export interface LineageModelRef {
+  name:    string;
+  version: string;
+}
+
+export interface LineageJob {
+  name:             string;
+  job_id?:          string;   // generated; empty before workflow Start()
+  status:           string;   // "pending" | "running" | "completed" | …
+  command?:         string;
+  depends_on?:      string[];
+  outputs?:         LineageOutput[];
+  models_produced?: LineageModelRef[];
+}
+
+export interface ArtifactEdge {
+  from_job:    string;
+  from_output: string;
+  to_job:      string;
+  to_input:    string;
+}
+
+export interface WorkflowLineage {
+  workflow_id:    string;
+  name:           string;
+  status:         string;
+  jobs:           LineageJob[];
+  artifact_edges: ArtifactEdge[];
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export interface LoginRequest {

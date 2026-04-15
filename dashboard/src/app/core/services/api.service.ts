@@ -17,6 +17,7 @@ import {
   Dataset, DatasetListResponse, DatasetRegisterRequest,
   MLModel, ModelListResponse, ModelRegisterRequest,
   ServiceEndpoint, ServiceListResponse,
+  WorkflowLineage,
 } from '../../shared/models';
 
 // Raw API response shapes (may differ from dashboard models)
@@ -116,6 +117,14 @@ export class ApiService {
 
   cancelWorkflow(id: string): Observable<Record<string, unknown>> {
     return this.http.delete<Record<string, unknown>>(`${this.base}/workflows/${id}`);
+  }
+
+  // Feature 18 → deferred/24: coordinator-side lineage join used by
+  // the Pipelines DAG view. One round-trip per workflow; response
+  // carries jobs + artifact edges + produced-model pointers.
+  getWorkflowLineage(id: string): Observable<WorkflowLineage> {
+    return this.http.get<WorkflowLineage>(
+      `${this.base}/workflows/${encodeURIComponent(id)}/lineage`);
   }
 
   // ── Audit ────────────────────────────────────────────────────────────────────

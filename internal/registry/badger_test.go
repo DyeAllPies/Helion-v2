@@ -185,6 +185,49 @@ func TestBadgerStore_Model_Latest_MissingReturnsNotFound(t *testing.T) {
 	}
 }
 
+// ── ListBySourceJob (feature 18 lineage) ──────────────────────────────
+
+func TestBadgerStore_Model_ListBySourceJob(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	_ = s.RegisterModel(ctx, &Model{
+		Name: "a", Version: "v1", URI: "s3://b/a", SourceJobID: "wf-1/train",
+		CreatedAt: time.Now(),
+	})
+	_ = s.RegisterModel(ctx, &Model{
+		Name: "a", Version: "v2", URI: "s3://b/a2", SourceJobID: "wf-1/train",
+		CreatedAt: time.Now(),
+	})
+	_ = s.RegisterModel(ctx, &Model{
+		Name: "b", Version: "v1", URI: "s3://b/b", SourceJobID: "other-job",
+		CreatedAt: time.Now(),
+	})
+	_ = s.RegisterModel(ctx, &Model{
+		Name: "c", Version: "v1", URI: "s3://b/c", // no source
+		CreatedAt: time.Now(),
+	})
+
+	got, err := s.ListBySourceJob(ctx, "wf-1/train")
+	if err != nil {
+		t.Fatalf("ListBySourceJob: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 models for wf-1/train, got %d", len(got))
+	}
+
+	// Different job → none.
+	if got, _ := s.ListBySourceJob(ctx, "never-happened"); len(got) != 0 {
+		t.Fatalf("unknown source job should return empty, got %d", len(got))
+	}
+
+	// Empty source_job_id → nil, no error. Keeps callers from
+	// accidentally returning "all models with no source" which would
+	// be a footgun during lineage joins.
+	if got, err := s.ListBySourceJob(ctx, ""); err != nil || got != nil {
+		t.Fatalf("empty source returned (%+v, %v); want (nil, nil)", got, err)
+	}
+}
+
 // ── Cross-type isolation ────────────────────────────────────────────────
 
 // Datasets and models share a BadgerDB — verify the prefix scheme
