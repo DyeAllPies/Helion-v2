@@ -35,6 +35,7 @@ Security & code-quality audits, one file per run.
 | [done/2026-04-15-01](done/2026-04-15-01.md) | Feature-11 exhaustive coverage audit — 6 test gaps + 2 Medium + 2 Low all fixed; no production-code defects |
 | [done/2026-04-15-02](done/2026-04-15-02.md) | Feature-11 fourth-pass coverage audit — cross-backend contract lock added; declares coverage saturation |
 | [done/2026-04-15-03](done/2026-04-15-03.md) | Feature-12 coverage audit — 2 test gaps fixed (ReportResult attestation wiring + live-MinIO Stager upload); no production-code defects |
+| [done/2026-04-15-04](done/2026-04-15-04.md) | Feature-12 second-pass audit — 1 Medium + 1 Low + 1 Test Gap fixed (output-size cap, stager-less refusal, Cleanup idempotency); declares feature 12 saturation |
 
 ## Workflow
 

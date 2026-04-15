@@ -297,6 +297,60 @@ func TestFinalize_MissingOutput_Errors(t *testing.T) {
 
 // ── symlink attack ──────────────────────────────────────────────────────
 
+// TestFinalize_OversizeOutput_Rejected parallels
+// TestPrepare_InputSizeCapEnforced on the upload side. The stager
+// enforces `MaxOutputUploadBytes` via an `os.Lstat` pre-flight in
+// `upload()` — a regression that dropped that guard would let a
+// runaway job fill the artifact store (same threat-model severity
+// as the input cap, just the other direction). No test alarmed on
+// this path; this one does.
+//
+// Lowers the cap globally for the test rather than writing a
+// multi-GiB file, then restores it on cleanup. The cap is a
+// package-level var specifically for this kind of test tweak —
+// the comment on `MaxOutputUploadBytes` says so.
+func TestFinalize_OversizeOutput_Rejected(t *testing.T) {
+	// Tighten the cap so the test writes ~2 KiB instead of 2 GiB.
+	orig := MaxOutputUploadBytes
+	MaxOutputUploadBytes = 1024
+	t.Cleanup(func() { MaxOutputUploadBytes = orig })
+
+	s, store, _ := newStager(t)
+	job := &cpb.Job{
+		ID:      "oversize-out",
+		Outputs: []cpb.ArtifactBinding{{Name: "BIG", LocalPath: "big.bin"}},
+	}
+	p, err := s.Prepare(context.Background(), job)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	defer p.Cleanup()
+
+	// 2 KiB — comfortably above the 1 KiB cap we just set.
+	outPath := filepath.Join(p.WorkingDir, "big.bin")
+	if err := os.WriteFile(outPath, bytes.Repeat([]byte("A"), 2048), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err = s.Finalize(context.Background(), p, true)
+	if err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("expected oversize-cap rejection, got: %v", err)
+	}
+
+	// The oversize output must not have been uploaded. No entry
+	// with the expected key prefix should live in the store.
+	// Walking the LocalStore root is enough — if Put fired, a file
+	// under jobs/oversize-out/ would exist.
+	localStore, ok := store.(interface{ Root() string })
+	if !ok {
+		return // not a LocalStore; skip the filesystem sanity check
+	}
+	jobDir := filepath.Join(localStore.Root(), "jobs", "oversize-out")
+	if entries, err := os.ReadDir(jobDir); err == nil && len(entries) > 0 {
+		t.Errorf("oversize output reached the store anyway: %v", entries)
+	}
+}
+
 func TestFinalize_SymlinkOutputRejected(t *testing.T) {
 	s, _, _ := newStager(t)
 	job := &cpb.Job{
@@ -453,6 +507,45 @@ func TestPrepare_NilJob(t *testing.T) {
 	if _, err := s.Prepare(context.Background(), nil); !errors.Is(err, err) || err == nil {
 		t.Fatal("expected error on nil job")
 	}
+}
+
+// TestPrepared_Cleanup_Idempotent locks in the double-call safety
+// of `Prepared.Cleanup`. The code (`if p != nil && p.cleanup != nil`
+// guards) is correct today, but the only callers that matter —
+// defer-based cleanup + an explicit Cleanup in test code — routinely
+// end up calling it twice (deferred + manual). A regression that
+// dropped the nil guard would panic on the second call. Better to
+// have an alarm than to find it in a production panic trace.
+//
+// Also confirms the workdir is gone after the first call — the
+// second call must not resurrect it or throw on the missing tree.
+func TestPrepared_Cleanup_Idempotent(t *testing.T) {
+	s, _, _ := newStager(t)
+	p, err := s.Prepare(context.Background(), &cpb.Job{ID: "cleanup-twice"})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	workdir := p.WorkingDir
+
+	// First call tears down the workdir. Record its absence so the
+	// second call's expected no-op doesn't accidentally observe
+	// unrelated state.
+	p.Cleanup()
+	if _, err := os.Stat(workdir); !os.IsNotExist(err) {
+		t.Fatalf("workdir still exists after first Cleanup: %v", err)
+	}
+
+	// Second call must not panic or mis-behave. Calling this under
+	// t.Run subtest sandbox so a panic doesn't take down sibling
+	// tests in a -count=N loop.
+	t.Run("second-call-is-safe", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("double Cleanup panicked: %v", r)
+			}
+		}()
+		p.Cleanup()
+	})
 }
 
 func TestFinalize_NilPrepared_NoOp(t *testing.T) {

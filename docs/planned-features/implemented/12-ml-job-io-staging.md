@@ -170,6 +170,39 @@ more tests after surveying the 62 above:
   the rest of the live tests; picked up by `scripts/run-e2e.sh`'s
   live-MinIO block.
 
+**Second coverage audit** — audit
+[`2026-04-15-04`](../../audits/done/2026-04-15-04.md) found three
+more missing alarms after the 2026-04-15-03 pass landed. All
+closed:
+
+- [`staging_test.go:TestFinalize_OversizeOutput_Rejected`](../../../internal/staging/staging_test.go)
+  — parallel to `TestPrepare_InputSizeCapEnforced`. Lowers
+  `MaxOutputUploadBytes` globally, writes a file above the new
+  cap, asserts Finalize refuses the upload AND that nothing
+  leaked into the store root. Closes the asymmetric-coverage gap
+  on a symmetric threat: input-side cap was tested, output-side
+  wasn't.
+- [`server_test.go:TestDispatch_StagerLess_RefusesArtifactBindings`](../../../internal/nodeserver/server_test.go)
+  — table-driven over three declaration shapes (inputs only /
+  outputs only / working_dir only). Locks in the fail-closed
+  posture at `nodeserver/server.go:98` that rejects artifact-
+  bearing jobs on nodes without `HELION_ARTIFACTS_BACKEND`. A
+  regression here would produce the worst kind of silent
+  breakage: jobs accepted, commands run, uploads silently
+  skipped, downstream resolvers time out with unhelpful errors.
+- [`staging_test.go:TestPrepared_Cleanup_Idempotent`](../../../internal/staging/staging_test.go)
+  — the double-call guard on `Prepared.Cleanup` is used in
+  practice (defer + manual calls frequently overlap in tests);
+  no test alarmed on a regression that dropped the nil guard.
+  Now covered with a panic-recovering second call.
+
+The same audit [declares feature 12 coverage
+saturated](../../audits/done/2026-04-15-04.md#recommendation) —
+seven considered items didn't clear the "would catch a real
+regression" bar. Future audits on this slice will find contrived
+gaps, not real ones; next recommended audit is feature 13
+(workflow artifact passing).
+
 ### Staging follow-ups
 
 Landed on top of the initial step-2 implementation after a second-pass

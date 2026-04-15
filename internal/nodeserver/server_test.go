@@ -89,6 +89,124 @@ func TestDispatch_Success(t *testing.T) {
 	}
 }
 
+// TestDispatch_StagerLess_RefusesArtifactBindings locks in feature
+// 12's "unconfigured nodes refuse blind runs" security posture. A
+// node started without `HELION_ARTIFACTS_BACKEND` has `stager ==
+// nil`; its Dispatch handler must reject any job that declares
+// Inputs, Outputs, or WorkingDir rather than running the command
+// with those bindings silently ignored.
+//
+// Without this guard, a misconfigured node would accept a workflow
+// job, run the command, and upload nothing — the coordinator's
+// resolver (feature 13) would then time out waiting for outputs
+// that never arrived, the iris demo would hang, and the operator
+// would have no obvious "your node isn't configured for ML" signal.
+//
+// The guard lives at internal/nodeserver/server.go:98:
+//
+//	if s.stager == nil {
+//	    msg := "node has no artifact stager; job declares inputs/outputs"
+//	    ...
+//	}
+//
+// This test is the alarm for a regression that removed or widened
+// the branch. Exercises all three declaration shapes:
+//   1. Inputs only
+//   2. Outputs only
+//   3. WorkingDir only (declares a per-job workdir without bindings
+//      — still needs a stager to mint it safely).
+func TestDispatch_StagerLess_RefusesArtifactBindings(t *testing.T) {
+	cases := []struct {
+		name string
+		req  *pb.DispatchRequest
+	}{
+		{
+			name: "inputs",
+			req: &pb.DispatchRequest{
+				JobId:   "ji",
+				Command: "/bin/true",
+				Inputs: []*pb.ArtifactBinding{
+					{Name: "X", Uri: "s3://helion/k", LocalPath: "in/x"},
+				},
+			},
+		},
+		{
+			name: "outputs",
+			req: &pb.DispatchRequest{
+				JobId:   "jo",
+				Command: "/bin/true",
+				Outputs: []*pb.ArtifactBinding{
+					{Name: "Y", LocalPath: "out/y"},
+				},
+			},
+		},
+		{
+			name: "working_dir",
+			req: &pb.DispatchRequest{
+				JobId:      "jw",
+				Command:    "/bin/true",
+				WorkingDir: "per-job",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// newServer here passes stager=nil; that's the point.
+			rt := newMock(runtime.RunResult{ExitCode: 0}, nil)
+			srv := newServer(rt)
+
+			ack, err := srv.Dispatch(context.Background(), tc.req)
+			if err != nil {
+				t.Fatalf("Dispatch returned gRPC error: %v", err)
+			}
+			if ack.Accepted {
+				t.Fatal("stager-less node must NOT accept a job that declares bindings")
+			}
+			if ack.Error == "" || !containsFold(ack.Error, "stager") {
+				t.Fatalf("expected a stager-specific refusal message, got %q", ack.Error)
+			}
+		})
+	}
+}
+
+// containsFold is a tiny case-insensitive Contains helper so the
+// test doesn't lock in the exact casing of the refusal message.
+func containsFold(haystack, needle string) bool {
+	h := make([]byte, len(haystack))
+	n := make([]byte, len(needle))
+	for i := 0; i < len(haystack); i++ {
+		h[i] = lower(haystack[i])
+	}
+	for i := 0; i < len(needle); i++ {
+		n[i] = lower(needle[i])
+	}
+	return bytesContains(h, n)
+}
+func lower(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + 32
+	}
+	return b
+}
+func bytesContains(h, n []byte) bool {
+	if len(n) == 0 {
+		return true
+	}
+	for i := 0; i+len(n) <= len(h); i++ {
+		match := true
+		for j := 0; j < len(n); j++ {
+			if h[i+j] != n[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDispatch_RuntimeError(t *testing.T) {
 	rt := newMock(runtime.RunResult{}, errors.New("exec failed"))
 	srv := newServer(rt)
