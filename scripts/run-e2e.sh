@@ -32,7 +32,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 cleanup() {
   log "Tearing down cluster..."
-  COMPOSE_PROFILES=analytics docker compose $COMPOSE_FILES down -v 2>/dev/null || true
+  COMPOSE_PROFILES=analytics,ml docker compose $COMPOSE_FILES down -v 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -43,10 +43,16 @@ log "Starting cluster..."
 # bind mount (./state), so E2E tests never read or pollute user data.
 # `docker compose down -v` removes the volume, giving each run a clean DB.
 #
-# COMPOSE_PROFILES=analytics activates the analytics-db service (PostgreSQL),
-# which the coordinator depends on via docker-compose.e2e.yml.
+# COMPOSE_PROFILES=analytics,ml activates:
+#   - analytics-db (PostgreSQL) — backs /api/analytics/* endpoints and
+#     the dashboard /analytics page.
+#   - minio + minio-bootstrap — backs the feature-11 artifact store so
+#     HELION_ARTIFACTS_BACKEND=s3 (set in docker-compose.e2e.yml) has
+#     something to talk to, and the feature-11 live-S3 integration
+#     test (`go test ./internal/artifacts/ -run TestS3_LiveIntegration`
+#     with MINIO_TEST_* set) has a real endpoint.
 mkdir -p "$ROOT_DIR/logs"
-COMPOSE_PROFILES=analytics docker compose $COMPOSE_FILES up -d --build
+COMPOSE_PROFILES=analytics,ml docker compose $COMPOSE_FILES up -d --build
 
 # ── 2. Wait for coordinator healthy ─────────────────────────────────────────
 
@@ -90,7 +96,41 @@ print(sum(1 for n in nodes if n.get('healthy') or n.get('health')=='healthy'))
   sleep 3
 done
 
-# ── 4. Run Playwright ────────────────────────────────────────────────────────
+# ── 4. Run live-MinIO artifact-store integration tests ─────────────────────
+#
+# Feature 11's live-S3 path (internal/artifacts/s3.go + the Stager's
+# upload loop via internal/staging/) has excellent unit coverage but
+# never talks to a real MinIO in CI unless we point it there explicitly.
+# The --profile ml cluster has MinIO up on 127.0.0.1:9000 with the
+# `helion` bucket pre-created; export the MINIO_TEST_* env that the
+# Go tests look for and run them against it. Adds ~3 s to a full
+# e2e run.
+#
+# Tests that run here:
+#   - TestS3_LiveIntegration            (internal/artifacts)
+#   - TestLiveS3ArtifactRoundtrip       (tests/integration — added in
+#                                        this same commit; covers the
+#                                        node-agent → Stager → MinIO
+#                                        path end-to-end)
+
+log "Running live-MinIO artifact-store tests..."
+(
+  cd "$ROOT_DIR"
+  export MINIO_TEST_ENDPOINT=127.0.0.1:9000
+  export MINIO_TEST_BUCKET=helion
+  export MINIO_TEST_ACCESS=helion
+  export MINIO_TEST_SECRET=helion-dev-secret
+  export MINIO_TEST_SSL=0
+  export HELION_TEST_MINIO=1
+  go test -count=1 -timeout 60s \
+      ./internal/artifacts/ -run TestS3_LiveIntegration \
+      ./tests/integration/ -run TestLiveS3Artifact || EXIT_CODE=$?
+)
+if [ "${EXIT_CODE:-0}" -ne 0 ]; then
+  log "Live-MinIO artifact tests failed (exit $EXIT_CODE); continuing to Playwright so we get the full report."
+fi
+
+# ── 5. Run Playwright ────────────────────────────────────────────────────────
 
 log "Running Playwright E2E tests..."
 cd "$ROOT_DIR/dashboard"

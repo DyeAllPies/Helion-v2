@@ -99,6 +99,23 @@ Tests: **47 pass + 1 skipped live integration**
 [`config_test.go`](../../../internal/artifacts/config_test.go),
 [`verify_test.go`](../../../internal/artifacts/verify_test.go)).
 
+**E2E / live-MinIO coverage** — the unit tests above all use the
+in-memory `fakeS3` client; the single
+`internal/artifacts/s3_test.go:TestS3_LiveIntegration` case that
+talks to a real S3 endpoint is gated on `MINIO_TEST_ENDPOINT` and
+was previously never wired into a CI path.
+[`scripts/run-e2e.sh`](../../../scripts/run-e2e.sh) now activates
+the `ml` compose profile, points
+[`docker-compose.e2e.yml`](../../../docker-compose.e2e.yml)'s
+coordinator + both nodes at the provisioned MinIO, and runs both
+the unit-level live test and the new
+[`tests/integration/artifacts_live_s3_test.go`](../../../tests/integration/artifacts_live_s3_test.go)
+cases (round-trip, VerifyStore probe happy + bad-bucket, streaming
+GetAndVerifyTo on a 1 MiB payload). The full node-agent → Stager →
+MinIO flow (upload-on-finalize, resolve-and-download-on-next-job)
+lives in features 12/13's surface, not feature 11's — reviewed
+separately when those features get their coverage pass.
+
 ### Deliberately not fixed, with rationale
 
 A second-pass audit flagged three concerns in the artifact-store

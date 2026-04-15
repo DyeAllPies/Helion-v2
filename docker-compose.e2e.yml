@@ -38,12 +38,28 @@ services:
       # are registered and the dashboard /analytics page has a real backend.
       - HELION_ANALYTICS_DSN=postgres://helion:secret@analytics-db:5432/helion_analytics?sslmode=disable
       - HELION_ANALYTICS_FLUSH_MS=200
+      # Feature 11 — artifact store. E2E points at the compose-provisioned
+      # MinIO (profile: ml) so ML-pipeline paths exercise the real
+      # S3-compatible backend, not the local filesystem fallback. Nodes
+      # inherit the same config below so uploads from the Stager land
+      # where the coordinator expects to read them from.
+      - HELION_ARTIFACTS_BACKEND=s3
+      - HELION_ARTIFACTS_S3_ENDPOINT=minio:9000
+      - HELION_ARTIFACTS_S3_BUCKET=helion
+      - HELION_ARTIFACTS_S3_ACCESS_KEY=helion
+      - HELION_ARTIFACTS_S3_SECRET_KEY=helion-dev-secret
+      - HELION_ARTIFACTS_S3_USE_SSL=0
     volumes:
       - e2e-state:/app/state
       - ./logs:/app/logs
     depends_on:
       analytics-db:
         condition: service_healthy
+      # Wait for the bucket bootstrap to finish so the first artifact
+      # Put doesn't race against bucket creation. minio-bootstrap exits 0
+      # when the bucket is ready.
+      minio-bootstrap:
+        condition: service_completed_successfully
 
   # Analytics PostgreSQL — required by the /api/analytics/* endpoints and
   # the dashboard /analytics page during E2E.  The "analytics" profile is
@@ -67,8 +83,22 @@ services:
       - HELION_COORDINATOR=coordinator:9090
       - HELION_ALLOW_ISOLATION=false
       - HELION_CA_CERT=/app/state/ca.pem
+      # Feature 11 — Stager uses the same S3 backend as the coordinator,
+      # so node-side VerifyStore at startup talks to the compose MinIO
+      # and output uploads land in the same bucket the coordinator reads
+      # from. Missing this causes the node to fall back to LocalStore
+      # and break every artifact-bearing workflow silently.
+      - HELION_ARTIFACTS_BACKEND=s3
+      - HELION_ARTIFACTS_S3_ENDPOINT=minio:9000
+      - HELION_ARTIFACTS_S3_BUCKET=helion
+      - HELION_ARTIFACTS_S3_ACCESS_KEY=helion
+      - HELION_ARTIFACTS_S3_SECRET_KEY=helion-dev-secret
+      - HELION_ARTIFACTS_S3_USE_SSL=0
     volumes:
       - e2e-state:/app/state
+    depends_on:
+      minio-bootstrap:
+        condition: service_completed_successfully
 
   node2:
     # Override: use Rust runtime image so E2E tests exercise both runtimes.
@@ -85,5 +115,18 @@ services:
       - HELION_RUNTIME=rust
       - HELION_RUNTIME_SOCKET=/run/helion/runtime.sock
       - RUST_LOG=info
+      # Feature 11 — same S3 backend as node1; see the node1 env block
+      # for the rationale. Both nodes share one bucket so an artifact
+      # produced on one node is readable from the other when a
+      # downstream workflow job lands there.
+      - HELION_ARTIFACTS_BACKEND=s3
+      - HELION_ARTIFACTS_S3_ENDPOINT=minio:9000
+      - HELION_ARTIFACTS_S3_BUCKET=helion
+      - HELION_ARTIFACTS_S3_ACCESS_KEY=helion
+      - HELION_ARTIFACTS_S3_SECRET_KEY=helion-dev-secret
+      - HELION_ARTIFACTS_S3_USE_SSL=0
     volumes:
       - e2e-state:/app/state
+    depends_on:
+      minio-bootstrap:
+        condition: service_completed_successfully
