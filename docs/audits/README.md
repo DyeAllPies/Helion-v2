@@ -6,10 +6,13 @@ Security & code-quality audits, one file per run.
 
 - [`TEMPLATE.md`](TEMPLATE.md) — copy this when starting a new audit.
   Instructions at the top.
-- `YYYY-MM-DD-NN.md` — closed audits, kept as a historical record of
-  both problems and fixes. Never renamed, never deleted.
+- `YYYY-MM-DD-NN.md` — in-flight or partially-open audits (at least
+  one Open finding still outstanding).
+- [`done/`](done/) — audits whose Open column is all zeroes. Moved
+  here once the last finding closes so the main list stays focused
+  on what still needs attention.
 
-## Archive
+## Active
 
 | Audit ID | Headline |
 |----------|----------|
@@ -17,7 +20,20 @@ Security & code-quality audits, one file per run.
 | [2026-04-12-01](2026-04-12-01.md) | Second-pass audit after dispatch hardening — closed all 10 findings |
 | [2026-04-14-01](2026-04-14-01.md) | ML registry slice audit — M1/M2 fixed, M3/M4/L1/L3 deferred |
 | [2026-04-14-02](2026-04-14-02.md) | Inference-jobs slice audit — M2/M3/L2/L3/T2 fixed, M1/L1/T1 deferred |
-| [2026-04-15-01](2026-04-15-01.md) | Feature-11 exhaustive coverage audit — 6 test gaps + 2 Medium + 2 Low all fixed; no production-code defects |
+| [2026-04-15-02](2026-04-15-02.md) | Feature-11 fourth-pass coverage audit — cross-backend contract lock added; declares coverage saturation |
+
+> Historical note: the prior four `YYYY-MM-DD-NN.md` rows are all
+> technically closed (every Open column is zero) but remain in the
+> active list because some of their deferred items still have open
+> entries under `planned-features/deferred/`. A fully-closed audit
+> with no deferrals outstanding — like
+> [`done/2026-04-15-01.md`](done/2026-04-15-01.md) — moves out.
+
+## Done
+
+| Audit ID | Headline |
+|----------|----------|
+| [done/2026-04-15-01](done/2026-04-15-01.md) | Feature-11 exhaustive coverage audit — 6 test gaps + 2 Medium + 2 Low all fixed; no production-code defects |
 
 ## Workflow
 
@@ -29,10 +45,14 @@ Security & code-quality audits, one file per run.
    `docs/planned-features/deferred/` as a new numbered file — see
    `deferred/TEMPLATE.md`).
 4. Update `docs/audits/README.md` (this file) with the new audit ID
-   and a one-line headline.
+   and a one-line headline under the Active block.
 5. Commit. Audit findings referenced outside this folder always use
    the full `AUDIT <audit-id>/<severity-letter><n>` form, e.g.
    `AUDIT 2026-04-11-01/H2`.
+6. When the last deferred item gets closed or dismissed (so nothing
+   about the audit requires attention anymore), `git mv` the file
+   into `done/` and move its row from the Active to the Done table
+   here. See [`done/README.md`](done/README.md) for the pattern.
 
 See the top-level [`docs/DOCS-WORKFLOW.md`](../DOCS-WORKFLOW.md) for
 how audits connect to the planned-features and deferred folders.

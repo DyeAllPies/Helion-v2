@@ -143,7 +143,10 @@ Each is now covered:
   handler path a real user would hit.
 
 **Third-pass coverage additions** — final exhaustive sweep,
-documented in audit [`2026-04-15-01`](../../audits/2026-04-15-01.md).
+documented in audit [`2026-04-15-01`](../../audits/done/2026-04-15-01.md).
+A fourth follow-on pass
+[`2026-04-15-02`](../../audits/2026-04-15-02.md) added the
+cross-backend contract lock and declared coverage saturation.
 Three more alarms the prior passes hadn't set, each closed:
 
 - [`local_test.go:TestLocalStore_Permissions`](../../../internal/artifacts/local_test.go)
@@ -161,6 +164,25 @@ Three more alarms the prior passes hadn't set, each closed:
   — 10 MiB payload through live MinIO. Fails on any regression
   in Content-Length handling, reader-position drift, or the
   multipart-adjacent code path the fakeS3 doesn't model.
+
+**Fourth-pass coverage addition + saturation.** Audit
+[`2026-04-15-02`](../../audits/2026-04-15-02.md) landed a single
+test —
+[`contract_test.go:TestStoreContract_IdenticalAcrossBackends`](../../../internal/artifacts/contract_test.go),
+which parametrises over `LocalStore` + `S3Store` (fakeS3-backed)
+and runs an identical Put / Get / Stat / Delete / double-Delete /
+empty-payload sequence against both, locking in that they agree
+on every observable (error sentinels, empty-bytes handling, the
+well-known empty-SHA constant). Ran to check whether a
+speculative future refactor of one backend could drift against
+the other without any test noticing; no such drift exists today,
+and the test's purpose is to fail loudly if one is ever
+introduced. The audit also explicitly **declares coverage
+saturation** after this addition — nothing else I looked at
+cleared the bar of "would catch a real regression, not a
+contrived one." Future audits on this feature should focus on
+downstream consumers (Stager, registry, workflow resolver), not
+on the Store itself.
 
 ### Deliberately not fixed, with rationale
 
