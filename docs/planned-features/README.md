@@ -8,6 +8,9 @@ relates to `audits/` and `deferred/`.
 - `NN-kebab-slug.md` — active feature specs (next unused two-digit number).
 - [`deferred/`](deferred/) — items consciously pushed past the current
   scope. Template: [`deferred/TEMPLATE.md`](deferred/TEMPLATE.md).
+- [`implemented/`](implemented/) — features that have fully shipped
+  and passed an audit reconciling spec vs reality. Moving them out of
+  the active list keeps the index focused on what's still in flight.
 
 ## Active features
 
@@ -30,7 +33,7 @@ relates to `audits/` and `deferred/`.
 | 15 | ML — GPU as a first-class resource | **Done** | P1 | [15-ml-gpu-first-class-resource.md](15-ml-gpu-first-class-resource.md) |
 | 16 | ML — Dataset and model registry | **Done** | P1 | [16-ml-dataset-model-registry.md](16-ml-dataset-model-registry.md) |
 | 17 | ML — Inference jobs | **Done** (Go runtime; Rust parity deferred) | P1 | [17-ml-inference-jobs.md](17-ml-inference-jobs.md) |
-| 18 | ML — Dashboard module | **Done** (Datasets/Models/Services; Pipelines DAG deferred) | P2 | [18-ml-dashboard-module.md](18-ml-dashboard-module.md) |
+| ~~18~~ | ~~ML — Dashboard module~~ | **Implemented + audited**; moved to [`implemented/18-ml-dashboard-module.md`](implemented/18-ml-dashboard-module.md) | P2 | — |
 | 19 | ML — End-to-end iris demo | Pending | P2 | [19-ml-end-to-end-demo.md](19-ml-end-to-end-demo.md) |
 | 20 | ML — Documentation | Pending | P2 | [20-ml-documentation.md](20-ml-documentation.md) |
 

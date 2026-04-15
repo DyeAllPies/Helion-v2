@@ -100,7 +100,7 @@ enumerated below.
 | 5 | [15-ml-gpu-first-class-resource.md](15-ml-gpu-first-class-resource.md) | Whole-GPU scheduling + `CUDA_VISIBLE_DEVICES` pinning | Done |
 | 6 | [16-ml-dataset-model-registry.md](16-ml-dataset-model-registry.md) | `/api/datasets` + `/api/models` with lineage metadata | Done |
 | 7 | [17-ml-inference-jobs.md](17-ml-inference-jobs.md) | `ServiceSpec` long-running jobs with readiness probes | Done |
-| 8 | [18-ml-dashboard-module.md](18-ml-dashboard-module.md) | Angular ML module: Datasets / Models / Services (Pipelines DAG deferred) | Done |
+| 8 | [implemented/18-ml-dashboard-module.md](implemented/18-ml-dashboard-module.md) | Angular ML module: Datasets / Models / Services / Pipelines (all four views shipped) | Done |
 | 9 | [19-ml-end-to-end-demo.md](19-ml-end-to-end-demo.md) | `examples/ml-iris/` worked example + acceptance test | Pending |
 | 10 | [20-ml-documentation.md](20-ml-documentation.md) | Architecture / Components / persistence / ml-pipelines docs | Pending |
 

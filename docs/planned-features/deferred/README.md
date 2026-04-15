@@ -46,5 +46,8 @@ the single moved file so future reviewers can see the full arc.
 | 22 | [Rate-limit ReportServiceEvent](./22-report-service-event-rate-limit.md) | feature 17 (audit 2026-04-14-02, L1) | P3 |
 | 23 | [Service integration e2e test](./23-service-integration-e2e.md) | feature 17 (audit 2026-04-14-02, T1) | P3 |
 | ~~24~~ | ~~ML Pipelines DAG view~~ — **Implemented**; moved to [`implemented/24-ml-pipelines-dag-view.md`](./implemented/24-ml-pipelines-dag-view.md) | feature 18 | — |
+| 25 | [Dataset upload-via-browser modal](./25-dataset-upload-modal.md) | feature 18 | P3 |
+| 26 | [Pipelines view event integration (resolve_failed + unschedulable)](./26-pipelines-event-integration.md) | feature 18 | P3 |
+| 27 | [Pipelines filter — workflows that produced a registered model](./27-pipelines-produced-models-filter.md) | feature 18 | P3 |
 
 > **GPU / accelerator resources:** moved to [feature 10 step 5](../10-minimal-ml-pipeline.md) — GPU as a first-class resource. The pointer is retained so older commits and audits still resolve.

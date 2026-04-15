@@ -1,7 +1,7 @@
 # Feature: ML Dashboard Module
 
 **Priority:** P1
-**Status:** Done (all four views — Datasets / Models / Services / Pipelines — shipped; the Pipelines DAG view followed on from the initial slice, see [deferred/implemented/24](deferred/implemented/24-ml-pipelines-dag-view.md))
+**Status:** Done (all four views — Datasets / Models / Services / Pipelines — shipped; the Pipelines DAG view followed on from the initial slice, see [deferred/implemented/24](../deferred/implemented/24-ml-pipelines-dag-view.md))
 **Affected files:**
 `internal/cluster/dispatch.go` (ml.resolve_failed emit + classifyUnschedulable),
 `internal/cluster/scheduler.go` (NodeSource.Snapshot accessor),
@@ -14,7 +14,7 @@
 `dashboard/src/app/features/ml/` (new module — three list components + register-dataset dialog + shared SCSS),
 `dashboard/src/app/app.routes.ts` (ml/* lazy routes),
 `dashboard/src/app/shell/shell.component.ts` (sidebar links).
-**Parent slice:** [feature 10 — ML pipeline](10-minimal-ml-pipeline.md)
+**Parent slice:** [feature 10 — ML pipeline](../10-minimal-ml-pipeline.md)
 
 ## Dashboard: ML module
 
@@ -67,12 +67,12 @@ out in the spec for steps 3 and 4 of the parent slice.
 
 ## Security plan (this step)
 
-See [`docs/SECURITY.md` § ML dashboard module surface](../SECURITY.md#ml-dashboard-module-surface-feature-18) for the authoritative write-up. Summary:
+See [`docs/SECURITY.md` § ML dashboard module surface](../../SECURITY.md#ml-dashboard-module-surface-feature-18) for the authoritative write-up. Summary:
 
 - All three views inherit the dashboard's existing `authGuard` + JWT interceptor; no new auth surface.
 - `GET /api/services` is the same data the per-job lookup already exposes, just batched. Same auth middleware.
 - Dataset register modal hints at the URI allowlist; the coordinator's `validate.go` is the authoritative gate.
-- Delete confirms in the UI are UX guards. The flat "any authenticated user can delete any entry" policy from feature 16 still applies — tightening tracked under [`deferred/17-registry-lineage-enforcement.md`](deferred/17-registry-lineage-enforcement.md).
+- Delete confirms in the UI are UX guards. The flat "any authenticated user can delete any entry" policy from feature 16 still applies — tightening tracked under [`deferred/17-registry-lineage-enforcement.md`](../deferred/17-registry-lineage-enforcement.md).
 
 Two new audit-relevant events surface in this slice:
 
@@ -100,10 +100,37 @@ All 167 dashboard tests + the affected Go packages (`internal/cluster`, `interna
 
 - **Pipelines DAG view** — originally deferred (deferred/24), now
   implemented (see
-  [`deferred/implemented/24-ml-pipelines-dag-view.md`](deferred/implemented/24-ml-pipelines-dag-view.md)
+  [`../deferred/implemented/24-ml-pipelines-dag-view.md`](../deferred/implemented/24-ml-pipelines-dag-view.md)
   for the full arc). Adds `GET /workflows/{id}/lineage` on the
   coordinator (one round-trip join across workflow + jobs +
   registered models), `/ml/pipelines` + `/ml/pipelines/:id` on the
   dashboard, and a mermaid-rendered DAG distinguishing
-  dependency arrows from artifact-flow arrows. 19 new dashboard
-  tests + 7 new Go tests; dashboard suite at 186 total.
+  dependency arrows from artifact-flow arrows.
+- **Audit-pass cleanup.** A second-pass audit of the original
+  spec found four gaps; three closed inline post-Pipelines:
+  - Models view's `source_dataset` rendered as a clickable link
+    into `/ml/datasets` (with name + version pre-filled in the
+    query params) instead of plain text.
+  - Register-dataset modal grew a tags input that parses
+    comma-separated `key:value` pairs into the request body's
+    `tags` map. Server-side validation remains the authoritative
+    gate; the dialog surfaces parse errors inline.
+  - Datasets view grew a tag-filter input with a client-side
+    case-insensitive match against the loaded page (full-corpus
+    filter is on the deferred backlog as part of registry
+    indexed listing).
+  - `register-dataset-dialog.component.ts` got its missing spec
+    (8 cases covering canSubmit gating, request building, tag
+    parsing, error surfacing, and cancel).
+  Dashboard suite at **200 green** (was 167 → 186 with Pipelines
+  → 200 with the audit-pass additions).
+
+## Audit-pass deferrals
+
+The same audit pass identified three items that were spec'd in the
+original feature but are real-scope work, deferred with explicit
+revisit triggers:
+
+- [`../deferred/25-dataset-upload-modal.md`](../deferred/25-dataset-upload-modal.md) — register-via-browser-upload modal. Needs the signed-URL endpoint that's already on the SECURITY.md backlog; until then the URI-form flow covers the operator workflow.
+- [`../deferred/26-pipelines-event-integration.md`](../deferred/26-pipelines-event-integration.md) — Pipelines rows surfacing `ml.resolve_failed` + `job.unschedulable` reason badges. The events are emitted, audited, and visible on `/events`; the per-workflow rollup is a query-shape decision better made once step 19's iris demo gives a real usage signal.
+- [`../deferred/27-pipelines-produced-models-filter.md`](../deferred/27-pipelines-produced-models-filter.md) — "filter the Pipelines list to workflows that produced a registered model." Needs a `?has_registered_model=true` query on `/workflows`; not blocking the unfiltered list and no operator has asked yet.

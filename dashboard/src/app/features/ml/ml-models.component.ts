@@ -69,9 +69,14 @@ import { MLModel } from '../../shared/models';
               job: {{ m.source_job_id }}
             </a>
             <span *ngIf="!m.source_job_id" class="muted">no source job</span>
-            <span *ngIf="m.source_dataset as sd" class="muted">
+            <a *ngIf="m.source_dataset as sd"
+               [routerLink]="['/ml/datasets']"
+               [queryParams]="{ name: sd.name, version: sd.version }"
+               class="dataset-link"
+               [attr.aria-label]="'Source dataset ' + sd.name + ' ' + sd.version">
+              <span class="material-icons" style="font-size:11px;vertical-align:middle">dataset</span>
               dataset: {{ sd.name }} {{ sd.version }}
-            </span>
+            </a>
           </div>
         </td>
       </ng-container>

@@ -140,6 +140,60 @@ describe('MlDatasetsComponent', () => {
     expect(apiSpy.deleteDataset).toHaveBeenCalledWith('d', 'v1');
   });
 
+  it('tag filter: empty filter passes everything through', () => {
+    const ds: Dataset[] = [
+      { ...makeDataset('a', 'v1'), tags: { team: 'ml' } },
+      { ...makeDataset('b', 'v1'), tags: { team: 'infra' } },
+      makeDataset('c', 'v1'),
+    ];
+    apiSpy.getDatasets.and.returnValue(of({
+      datasets: ds, total: ds.length, page: 1, size: 25,
+    }));
+    component.reload();
+    expect(component.filteredDatasets.length).toBe(3);
+  });
+
+  it('tag filter: key-only matches any dataset with that key', () => {
+    const ds: Dataset[] = [
+      { ...makeDataset('a', 'v1'), tags: { team: 'ml' } },
+      { ...makeDataset('b', 'v1'), tags: { team: 'infra' } },
+      { ...makeDataset('c', 'v1'), tags: { env: 'prod' } },
+    ];
+    apiSpy.getDatasets.and.returnValue(of({
+      datasets: ds, total: ds.length, page: 1, size: 25,
+    }));
+    component.reload();
+    component.tagFilter = 'team';
+    component.applyFilter();
+    expect(component.filteredDatasets.length).toBe(2);
+  });
+
+  it('tag filter: key:value matches only exact value (case-insensitive)', () => {
+    const ds: Dataset[] = [
+      { ...makeDataset('a', 'v1'), tags: { team: 'ML' } },
+      { ...makeDataset('b', 'v1'), tags: { team: 'infra' } },
+    ];
+    apiSpy.getDatasets.and.returnValue(of({
+      datasets: ds, total: ds.length, page: 1, size: 25,
+    }));
+    component.reload();
+    component.tagFilter = 'team:ml';
+    component.applyFilter();
+    expect(component.filteredDatasets.length).toBe(1);
+    expect(component.filteredDatasets[0].name).toBe('a');
+  });
+
+  it('tag filter: dataset with no tags is filtered out by any filter', () => {
+    const ds: Dataset[] = [makeDataset('untagged', 'v1')];
+    apiSpy.getDatasets.and.returnValue(of({
+      datasets: ds, total: ds.length, page: 1, size: 25,
+    }));
+    component.reload();
+    component.tagFilter = 'team';
+    component.applyFilter();
+    expect(component.filteredDatasets.length).toBe(0);
+  });
+
   it('formatBytes handles every size tier', () => {
     expect(component.formatBytes(undefined)).toBe('—');
     expect(component.formatBytes(0)).toBe('—');

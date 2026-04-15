@@ -23,7 +23,7 @@ Every one of those three folders has the same shape:
 
 | Folder | Purpose | Naming | Template |
 |--------|---------|--------|----------|
-| [`planned-features/`](planned-features/) | Active feature specs — in progress or queued for the next slice. | `NN-kebab-slug.md` | [`planned-features/TEMPLATE.md`](planned-features/TEMPLATE.md) |
+| [`planned-features/`](planned-features/) | Active feature specs — in progress or queued for the next slice. Items that fully ship + pass a spec-vs-reality audit move to [`planned-features/implemented/`](planned-features/implemented/) keeping their original number. | `NN-kebab-slug.md` | [`planned-features/TEMPLATE.md`](planned-features/TEMPLATE.md) |
 | [`planned-features/deferred/`](planned-features/deferred/) | Items consciously deferred during a slice or audit, with the reason preserved. Items that later get built move to [`deferred/implemented/`](planned-features/deferred/implemented/) with the same number, carrying both the deferral rationale and the landed-implementation write-up. | `NN-kebab-slug.md` | [`planned-features/deferred/TEMPLATE.md`](planned-features/deferred/TEMPLATE.md) |
 | [`audits/`](audits/) | Closed security & code-quality audits, kept as a historical record. | `YYYY-MM-DD-NN.md` | [`audits/TEMPLATE.md`](audits/TEMPLATE.md) |
 
@@ -65,6 +65,16 @@ review surface, not a trailing artifact.
 **Ship a slice:** flip `Status:` to `Done` on the feature file, and
 update its "Affected files" list. Do not delete the spec — it stays
 as the design record that pairs with the commit history.
+
+**Close a slice:** once a feature is fully implemented (every spec
+item shipped, audit-pass deferrals filed under `deferred/` with
+written rationales), `git mv` it from `planned-features/NN-slug.md`
+to `planned-features/implemented/NN-slug.md`. The number is
+preserved so cross-references from audits and commit messages still
+resolve. Fix the relative paths inside the moved file
+(sibling-feature links go from `NN-foo.md` to `../NN-foo.md`; the
+`../SECURITY.md` reference becomes `../../SECURITY.md`). Update
+`planned-features/README.md` to strike through the moved row.
 
 **Audit a slice:** copy `audits/TEMPLATE.md` to
 `audits/<today>-<NN>.md`, `NN` starting at `01` and incrementing for

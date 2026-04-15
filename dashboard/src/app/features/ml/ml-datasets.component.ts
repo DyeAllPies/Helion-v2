@@ -40,6 +40,21 @@ import { RegisterDatasetDialogComponent } from './register-dataset-dialog.compon
     </button>
   </header>
 
+  <div class="filter-bar">
+    <label class="filter-label">
+      <span class="material-icons" style="font-size:14px;vertical-align:middle">filter_alt</span>
+      Filter by tag
+    </label>
+    <input class="filter-input" type="text"
+           placeholder="key:value (e.g. team:ml)"
+           [(ngModel)]="tagFilter"
+           (ngModelChange)="applyFilter()"
+           autocomplete="off" />
+    <span class="filter-hint" *ngIf="tagFilter">
+      showing {{ filteredDatasets.length }} of {{ datasets.length }} on this page
+    </span>
+  </div>
+
   <div class="error-banner" *ngIf="error">
     <span class="material-icons">warning_amber</span> {{ error }}
   </div>
@@ -53,8 +68,11 @@ import { RegisterDatasetDialogComponent } from './register-dataset-dialog.compon
     <div class="empty-state" *ngIf="datasets.length === 0">
       No datasets registered yet.
     </div>
+    <div class="empty-state" *ngIf="datasets.length > 0 && filteredDatasets.length === 0">
+      No datasets on this page match the tag filter.
+    </div>
 
-    <table mat-table [dataSource]="datasets" *ngIf="datasets.length > 0" class="ml-table">
+    <table mat-table [dataSource]="filteredDatasets" *ngIf="filteredDatasets.length > 0" class="ml-table">
       <ng-container matColumnDef="name">
         <th mat-header-cell *matHeaderCellDef>NAME</th>
         <td mat-cell *matCellDef="let d">{{ d.name }}</td>
@@ -108,6 +126,16 @@ import { RegisterDatasetDialogComponent } from './register-dataset-dialog.compon
 })
 export class MlDatasetsComponent implements OnInit {
   datasets: Dataset[] = [];
+  /**
+   * Datasets after the client-side tag filter is applied. The
+   * filter is local to the current page only — full-corpus filter
+   * needs a coordinator-side `?tag=k:v` query param, see
+   * deferred/18-registry-indexed-listing.md for the related
+   * indexed-listing work that would unblock it.
+   */
+  filteredDatasets: Dataset[] = [];
+  /** `key:value` (or just `key`) text the user typed; case-insensitive. */
+  tagFilter = '';
   total    = 0;
   page     = 0;
   pageSize = 25;
@@ -128,11 +156,39 @@ export class MlDatasetsComponent implements OnInit {
         this.datasets = resp.datasets;
         this.total    = resp.total;
         this.loading  = false;
+        this.applyFilter();
       },
       error: err => {
         this.error   = err?.error?.error ?? err?.message ?? 'Failed to load datasets';
         this.loading = false;
       },
+    });
+  }
+
+  /**
+   * Re-applies the client-side tag filter to `datasets`. Empty
+   * filter passes everything through; non-empty filter keeps
+   * datasets whose tag map contains the typed key (and value, if
+   * the input contains a colon). Match is case-insensitive on the
+   * typed text vs the stored tag.
+   */
+  applyFilter(): void {
+    const raw = this.tagFilter.trim();
+    if (raw === '') {
+      this.filteredDatasets = this.datasets;
+      return;
+    }
+    const idx = raw.indexOf(':');
+    const wantKey = (idx >= 0 ? raw.slice(0, idx) : raw).trim().toLowerCase();
+    const wantVal = idx >= 0 ? raw.slice(idx + 1).trim().toLowerCase() : '';
+
+    this.filteredDatasets = this.datasets.filter(d => {
+      if (!d.tags) return false;
+      for (const [k, v] of Object.entries(d.tags)) {
+        if (k.toLowerCase() !== wantKey) continue;
+        if (wantVal === '' || v.toLowerCase() === wantVal) return true;
+      }
+      return false;
     });
   }
 

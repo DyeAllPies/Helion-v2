@@ -2,7 +2,7 @@
 
 **Priority:** P3 (at the time of deferral)
 **Status:** **Implemented** — moved out of the active backlog.
-**Originating feature:** [feature 18 — ML dashboard module](../../18-ml-dashboard-module.md)
+**Originating feature:** [feature 18 — ML dashboard module](../../implemented/18-ml-dashboard-module.md)
 **Implementation landed in:** the commit that introduced the
 `docs/planned-features/deferred/implemented/` folder — see the
 working tree's `ml-pipeline` branch history for the exact SHA.
