@@ -24,12 +24,13 @@ import (
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
-// SetServiceRegistry enables the /api/services/{job_id} endpoint by
+// SetServiceRegistry enables the /api/services endpoints by
 // injecting the coordinator's ServiceRegistry. Nil (or unset) means
-// this deployment didn't opt into inference services; the handler
-// returns 404 so the endpoint is invisible.
+// this deployment didn't opt into inference services; the routes are
+// not registered at all so the HTTP mux returns its own 404.
 func (s *Server) SetServiceRegistry(sr *cluster.ServiceRegistry) {
 	s.services = sr
+	s.mux.HandleFunc("GET /api/services", s.authMiddleware(s.handleListServices))
 	s.mux.HandleFunc("GET /api/services/{job_id}", s.authMiddleware(s.handleGetService))
 }
 
@@ -47,6 +48,31 @@ type ServiceEndpointResponse struct {
 	Ready       bool   `json:"ready"`
 	UpstreamURL string `json:"upstream_url"`
 	UpdatedAt   string `json:"updated_at"`
+}
+
+// ServiceListResponse is the JSON body for GET /api/services. Total
+// echoes the length of the Services slice — clients that paginate
+// later can rely on the field without shape changes.
+type ServiceListResponse struct {
+	Services []ServiceEndpointResponse `json:"services"`
+	Total    int                       `json:"total"`
+}
+
+func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
+	if s.services == nil {
+		writeError(w, http.StatusNotFound, "service registry is not configured on this coordinator")
+		return
+	}
+	snapshot := s.services.Snapshot()
+	resp := ServiceListResponse{
+		Services: make([]ServiceEndpointResponse, 0, len(snapshot)),
+		Total:    len(snapshot),
+	}
+	for _, ep := range snapshot {
+		resp.Services = append(resp.Services, toServiceEndpointResponse(ep))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, "handleListServices", resp)
 }
 
 func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {

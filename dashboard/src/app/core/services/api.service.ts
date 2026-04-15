@@ -13,7 +13,10 @@ import {
   Job, JobsPage, JobLogsResponse, Node, ClusterMetrics, AuditPage, SubmitJobRequest,
   Workflow, WorkflowsPage, SubmitWorkflowRequest,
   AnalyticsThroughputResponse, AnalyticsNodeReliabilityRow, AnalyticsRetryRow,
-  AnalyticsQueueWaitResponse, AnalyticsWorkflowOutcomesResponse
+  AnalyticsQueueWaitResponse, AnalyticsWorkflowOutcomesResponse,
+  Dataset, DatasetListResponse, DatasetRegisterRequest,
+  MLModel, ModelListResponse, ModelRegisterRequest,
+  ServiceEndpoint, ServiceListResponse,
 } from '../../shared/models';
 
 // Raw API response shapes (may differ from dashboard models)
@@ -153,6 +156,64 @@ export class ApiService {
     const params = new HttpParams().set('from', from).set('to', to);
     return this.http.get<AnalyticsWorkflowOutcomesResponse>(
       `${this.base}/api/analytics/workflow-outcomes`, { params });
+  }
+
+  // ── ML registry: datasets ───────────────────────────────────────────────────
+
+  getDatasets(page = 0, size = 25): Observable<DatasetListResponse> {
+    const params = new HttpParams().set('page', page + 1).set('size', size);
+    return this.http.get<DatasetListResponse>(`${this.base}/api/datasets`, { params });
+  }
+
+  getDataset(name: string, version: string): Observable<Dataset> {
+    return this.http.get<Dataset>(
+      `${this.base}/api/datasets/${encodeURIComponent(name)}/${encodeURIComponent(version)}`);
+  }
+
+  registerDataset(req: DatasetRegisterRequest): Observable<Dataset> {
+    return this.http.post<Dataset>(`${this.base}/api/datasets`, req);
+  }
+
+  deleteDataset(name: string, version: string): Observable<void> {
+    return this.http.delete<void>(
+      `${this.base}/api/datasets/${encodeURIComponent(name)}/${encodeURIComponent(version)}`);
+  }
+
+  // ── ML registry: models ─────────────────────────────────────────────────────
+
+  getModels(page = 0, size = 25): Observable<ModelListResponse> {
+    const params = new HttpParams().set('page', page + 1).set('size', size);
+    return this.http.get<ModelListResponse>(`${this.base}/api/models`, { params });
+  }
+
+  getModel(name: string, version: string): Observable<MLModel> {
+    return this.http.get<MLModel>(
+      `${this.base}/api/models/${encodeURIComponent(name)}/${encodeURIComponent(version)}`);
+  }
+
+  getLatestModel(name: string): Observable<MLModel> {
+    return this.http.get<MLModel>(
+      `${this.base}/api/models/${encodeURIComponent(name)}/latest`);
+  }
+
+  registerModel(req: ModelRegisterRequest): Observable<MLModel> {
+    return this.http.post<MLModel>(`${this.base}/api/models`, req);
+  }
+
+  deleteModel(name: string, version: string): Observable<void> {
+    return this.http.delete<void>(
+      `${this.base}/api/models/${encodeURIComponent(name)}/${encodeURIComponent(version)}`);
+  }
+
+  // ── ML inference services (feature 17) ──────────────────────────────────────
+
+  getServices(): Observable<ServiceListResponse> {
+    return this.http.get<ServiceListResponse>(`${this.base}/api/services`);
+  }
+
+  getService(jobId: string): Observable<ServiceEndpoint> {
+    return this.http.get<ServiceEndpoint>(
+      `${this.base}/api/services/${encodeURIComponent(jobId)}`);
   }
 }
 

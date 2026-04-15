@@ -41,6 +41,13 @@ import (
 // a simple stub.
 type NodeSource interface {
 	HealthyNodes() []*cpb.Node
+
+	// Snapshot returns every registered node regardless of health.
+	// Used by the dispatcher to distinguish "selector has no match at
+	// all" from "selector matches a node that is currently stale" —
+	// the two failure modes show up as different reasons on the
+	// feature-18 job.unschedulable event.
+	Snapshot() []*cpb.Node
 }
 
 // Policy selects a single node from a non-empty slice of healthy candidates.

@@ -63,3 +63,47 @@ func TestGetService_NotFoundWhenRegistryUnwired(t *testing.T) {
 		t.Fatalf("want 404, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestListServices_EmptyRegistry(t *testing.T) {
+	srv, _ := newServiceServer(t)
+	rr := do(srv, "GET", "/api/services", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp api.ServiceListResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 0 || len(resp.Services) != 0 {
+		t.Fatalf("expected empty list, got %+v", resp)
+	}
+}
+
+func TestListServices_ReturnsAllEndpoints(t *testing.T) {
+	srv, sr := newServiceServer(t)
+	sr.Upsert(cpb.ServiceEndpoint{
+		JobID: "svc-a", NodeID: "n1", NodeAddress: "10.0.0.1:9090",
+		Port: 8080, HealthPath: "/h", Ready: true, UpdatedAt: time.Now(),
+	})
+	sr.Upsert(cpb.ServiceEndpoint{
+		JobID: "svc-b", NodeID: "n2", NodeAddress: "10.0.0.2:9090",
+		Port: 9000, HealthPath: "/", Ready: false, UpdatedAt: time.Now(),
+	})
+	rr := do(srv, "GET", "/api/services", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	var resp api.ServiceListResponse
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	if resp.Total != 2 || len(resp.Services) != 2 {
+		t.Fatalf("expected 2 services, got %+v", resp)
+	}
+}
+
+func TestListServices_NotFoundWhenRegistryUnwired(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	rr := do(srv, "GET", "/api/services", "")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}

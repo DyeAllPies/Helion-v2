@@ -245,6 +245,91 @@ export interface AnalyticsWorkflowOutcomesResponse {
   data: AnalyticsWorkflowOutcomeRow[];
 }
 
+// ── ML Registry (features 16 + 17) ───────────────────────────────────────────
+
+export interface Dataset {
+  name:         string;
+  version:      string;
+  uri:          string;
+  size_bytes?:  number;
+  sha256?:      string;
+  tags?:        Record<string, string>;
+  created_at:   string;
+  created_by:   string;
+}
+
+export interface DatasetListResponse {
+  datasets: Dataset[];
+  total:    number;
+  page:     number;
+  size:     number;
+}
+
+export interface DatasetRegisterRequest {
+  name:         string;
+  version:      string;
+  uri:          string;
+  size_bytes?:  number;
+  sha256?:      string;
+  tags?:        Record<string, string>;
+}
+
+export interface DatasetRef {
+  name:    string;
+  version: string;
+}
+
+export interface MLModel {
+  name:           string;
+  version:        string;
+  uri:            string;
+  framework?:     string;
+  source_job_id?: string;
+  source_dataset?: DatasetRef;
+  metrics?:       Record<string, number>;
+  size_bytes?:    number;
+  sha256?:        string;
+  tags?:          Record<string, string>;
+  created_at:     string;
+  created_by:     string;
+}
+
+export interface ModelListResponse {
+  models: MLModel[];
+  total:  number;
+  page:   number;
+  size:   number;
+}
+
+export interface ModelRegisterRequest {
+  name:           string;
+  version:        string;
+  uri:            string;
+  framework?:     string;
+  source_job_id?: string;
+  source_dataset?: DatasetRef;
+  metrics?:       Record<string, number>;
+  size_bytes?:    number;
+  sha256?:        string;
+  tags?:          Record<string, string>;
+}
+
+export interface ServiceEndpoint {
+  job_id:       string;
+  node_id:      string;
+  node_address: string;
+  port:         number;
+  health_path:  string;
+  ready:        boolean;
+  upstream_url: string;
+  updated_at:   string;
+}
+
+export interface ServiceListResponse {
+  services: ServiceEndpoint[];
+  total:    number;
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export interface LoginRequest {

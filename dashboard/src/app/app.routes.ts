@@ -60,6 +60,25 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/analytics/analytics-dashboard.component').then(m => m.AnalyticsDashboardComponent),
       },
+      // Feature 18 — ML module. Three lazy-loaded views; `ml` alone
+      // redirects to the Datasets view so sidebar clicks land on a
+      // meaningful page rather than a blank outlet.
+      { path: 'ml', redirectTo: 'ml/datasets', pathMatch: 'full' },
+      {
+        path: 'ml/datasets',
+        loadComponent: () =>
+          import('./features/ml/ml-datasets.component').then(m => m.MlDatasetsComponent),
+      },
+      {
+        path: 'ml/models',
+        loadComponent: () =>
+          import('./features/ml/ml-models.component').then(m => m.MlModelsComponent),
+      },
+      {
+        path: 'ml/services',
+        loadComponent: () =>
+          import('./features/ml/ml-services.component').then(m => m.MlServicesComponent),
+      },
     ],
   },
   { path: '**', redirectTo: '' },

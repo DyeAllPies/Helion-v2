@@ -16,6 +16,13 @@ type staticNodeSource struct{ nodes []*cpb.Node }
 
 func (s *staticNodeSource) HealthyNodes() []*cpb.Node { return s.nodes }
 
+// Snapshot returns the same nodes as HealthyNodes for this stub.
+// Feature-18 selector-reason classification walks Snapshot() to
+// distinguish "no matching labels" from "matching nodes all stale";
+// this stub keeps them identical because the scheduler-path tests
+// don't exercise the stale branch.
+func (s *staticNodeSource) Snapshot() []*cpb.Node { return s.nodes }
+
 func labeledNode(id, addr string, labels map[string]string) *cpb.Node {
 	return &cpb.Node{
 		NodeID:      id,

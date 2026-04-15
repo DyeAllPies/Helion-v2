@@ -191,6 +191,11 @@ export class ShellComponent {
     { path: '/metrics', label: 'Metrics', icon: 'show_chart'    },
     { path: '/audit',     label: 'Audit',     icon: 'receipt_long'  },
     { path: '/analytics', label: 'Analytics', icon: 'insights'      },
+    // Feature 18 — ML. Three sub-views live under /ml/*; sidebar
+    // links straight to the Datasets view as the landing page.
+    { path: '/ml/datasets', label: 'Datasets', icon: 'dataset'      },
+    { path: '/ml/models',   label: 'Models',   icon: 'hub'          },
+    { path: '/ml/services', label: 'Services', icon: 'rocket_launch'},
   ];
 
   constructor(private auth: AuthService, private router: Router) {}

@@ -271,6 +271,31 @@ backend is the default; operators running a Rust-backed cluster that
 need inference services today should stay on the Go runtime until
 the Rust parity slice lands.
 
+### ML dashboard module surface (feature 18)
+
+Feature 18 added a lazy-loaded Angular module at `/ml/datasets`,
+`/ml/models`, and `/ml/services` plus the supporting REST endpoint
+`GET /api/services` (list).
+
+| New attack surface | Control |
+|--------------------|---------|
+| New client routes | All three views are inside the existing shell, behind the same `authGuard` and JWT interceptor as every other authenticated route. The shell's auth guard rejects unauthenticated nav before any ML-API call leaves the browser. |
+| `GET /api/services` exposes node addresses | Already exposed by the per-job lookup (`GET /api/services/{job_id}`); the list variant is the same data over the same auth middleware, just batched. Same-origin CORS via Nginx in production. |
+| Register dataset modal accepts free-form URI | Server-side validator (`registry.ValidateURI`) is the authoritative check — rejects anything outside `file://` / `s3://`. The dashboard form's hint is informational; the coordinator's 400 is what the user sees on a bad URI. |
+| Delete buttons on Datasets and Models | Confirm prompt in the UI is a UX guard, not a security one. The flat "any authenticated user can delete any entry" model from feature 16 still applies; tightening to admin-only / owner-only deletion is on the deferred backlog (`deferred/17-registry-lineage-enforcement.md` covers the same authz question). |
+
+The Services view polls `GET /api/services` every 5 s — the same
+cadence as the node-side prober, so the dashboard is never more
+than one tick stale. No additional rate limiting is needed because
+the lookup is a memory read on the coordinator side.
+
+**New backend events surfaced to the dashboard:**
+
+| Event | When | Surfaced where |
+|-------|------|----------------|
+| `ml.resolve_failed` | Workflow job's artifact resolver fails (upstream missing, output missing, etc.) | Future Pipelines DAG view (deferred); already on the audit log + event bus today |
+| `job.unschedulable` (extended) | Same as before, plus a new `reason` field: `no_healthy_node` / `no_matching_label` / `all_matching_unhealthy` | Same — event-feed view shows the reason verbatim today; the Pipelines view will colour-code it once it lands |
+
 ---
 
 ## 6. Audit logging

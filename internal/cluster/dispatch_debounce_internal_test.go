@@ -68,7 +68,7 @@ func TestDispatchLoop_UnschedulableDebounceCooldownHonoured(t *testing.T) {
 	}
 	job := mustSubmit(t, js, "stuck-job", map[string]string{"gpu": "a100"})
 
-	d.maybeEmitUnschedulable(job)
+	d.maybeEmitUnschedulable(job, "no_matching_label")
 	first, ok := d.unschedulableLastEmit[job.ID]
 	if !ok {
 		t.Fatal("first call must record a timestamp")
@@ -76,7 +76,7 @@ func TestDispatchLoop_UnschedulableDebounceCooldownHonoured(t *testing.T) {
 
 	// Second call within the cooldown must NOT update the
 	// timestamp — the emit is suppressed.
-	d.maybeEmitUnschedulable(job)
+	d.maybeEmitUnschedulable(job, "no_matching_label")
 	second := d.unschedulableLastEmit[job.ID]
 	if !second.Equal(first) {
 		t.Fatalf("second call updated timestamp during cooldown: %v → %v", first, second)
@@ -89,7 +89,7 @@ func TestDispatchLoop_UnschedulableDebounceCooldownHonoured(t *testing.T) {
 	// and can tick at the same nanosecond as `first`.)
 	rewound := time.Now().Add(-2 * unschedulableEmitCooldown)
 	d.unschedulableLastEmit[job.ID] = rewound
-	d.maybeEmitUnschedulable(job)
+	d.maybeEmitUnschedulable(job, "no_matching_label")
 	third := d.unschedulableLastEmit[job.ID]
 	if !third.After(rewound) {
 		t.Fatalf("call after cooldown did not re-emit: rewound=%v third=%v", rewound, third)

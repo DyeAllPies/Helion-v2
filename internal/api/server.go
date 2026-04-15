@@ -43,7 +43,7 @@
 //     POST   /api/models
 //     GET    /api/models, /api/models/{name}/latest, /api/models/{name}/{version}
 //     DELETE /api/models/{name}/{version}
-//     GET    /api/services/{job_id}             (SetServiceRegistry; feature 17)
+//     GET    /api/services, /api/services/{job_id}   (SetServiceRegistry; feature 17)
 //
 //   WebSocket (JWT via query param or Authorization header):
 //     GET /ws/jobs/{id}/logs

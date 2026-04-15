@@ -1,0 +1,178 @@
+// Shared styles for the feature-18 ML module. Kept separate from
+// the per-component scope so Datasets / Models / Services look
+// consistent without copy-pasting every selector.
+
+.page {
+  padding: 24px 32px;
+  max-width: 1400px;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.page-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--color-accent);
+  margin: 0 0 6px 0;
+}
+
+.page-sub {
+  color: var(--color-muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.btn-primary {
+  background: var(--color-accent);
+  color: var(--color-bg);
+  border: none;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  &:hover { filter: brightness(1.1); }
+  &:disabled { opacity: 0.4; cursor: not-allowed; }
+}
+
+.btn-icon {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--color-muted);
+
+  &:hover { color: #e8edf2; background: var(--color-surface-2); }
+  &.btn-danger:hover { color: var(--color-error); border-color: var(--color-error); }
+}
+
+.error-banner {
+  color: var(--color-error);
+  border: 1px solid var(--color-error);
+  background: rgba(244, 67, 54, 0.08);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-muted);
+  font-size: 12px;
+  margin-top: 60px;
+  justify-content: center;
+}
+
+.spin { animation: mlspin 0.8s linear infinite; }
+@keyframes mlspin { to { transform: rotate(360deg); } }
+
+.empty-state {
+  color: var(--color-muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 40px 0;
+}
+
+.ml-table {
+  width: 100%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+
+  th, td {
+    padding: 10px 14px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  th {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: #8896aa;
+    background: var(--color-surface-2);
+    text-align: left;
+  }
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ellipsis {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+
+  &.chip-ready    { background: rgba(68, 181, 95, 0.15); color: var(--color-completed); }
+  &.chip-unhealthy { background: rgba(244, 67, 54, 0.15); color: var(--color-error); }
+}
+
+.lineage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  a {
+    color: var(--color-accent);
+    text-decoration: none;
+    font-size: 11px;
+    &:hover { text-decoration: underline; }
+  }
+
+  .muted { color: var(--color-muted); font-size: 10px; }
+}
+
+.metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+
+  .metric-pill {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 2px 8px;
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+}

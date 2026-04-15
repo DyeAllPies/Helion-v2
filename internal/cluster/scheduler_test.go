@@ -66,6 +66,14 @@ func (s *staticSource) HealthyNodes() []*cpb.Node {
 	return cp
 }
 
+// Snapshot mirrors HealthyNodes for this stub. Feature-18 reason
+// classification uses Snapshot to look for matching-but-stale nodes;
+// scheduler tests only need the healthy view, so the two are the
+// same here.
+func (s *staticSource) Snapshot() []*cpb.Node {
+	return s.HealthyNodes()
+}
+
 func (s *staticSource) setNodes(nodes []*cpb.Node) {
 	s.mu.Lock()
 	s.nodes = nodes

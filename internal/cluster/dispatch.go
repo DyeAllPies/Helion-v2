@@ -51,16 +51,68 @@ const unschedulableEmitCooldown = 30 * time.Second
 // unless the same job emitted one within unschedulableEmitCooldown.
 // The debounce state is reset in dispatchPending whenever a job
 // successfully picks a node, so recovery is observable.
-func (d *DispatchLoop) maybeEmitUnschedulable(job *cpb.Job) {
+//
+// reason is one of events.UnschedulableReason* and tells the
+// dashboard which of the three triage states the scheduler hit:
+// no_healthy_node, no_matching_label, or all_matching_unhealthy.
+func (d *DispatchLoop) maybeEmitUnschedulable(job *cpb.Job, reason string) {
 	now := time.Now()
 	if last, ok := d.unschedulableLastEmit[job.ID]; ok && now.Sub(last) < unschedulableEmitCooldown {
 		return
 	}
 	d.unschedulableLastEmit[job.ID] = now
-	d.log.Info("dispatch: no node matches job node_selector",
+	d.log.Info("dispatch: job unschedulable",
 		slog.String("job_id", job.ID),
+		slog.String("reason", reason),
 		slog.Any("selector", job.NodeSelector))
-	d.jobs.publishEvent(events.JobUnschedulable(job.ID, job.NodeSelector))
+	d.jobs.publishEvent(events.JobUnschedulable(job.ID, job.NodeSelector, reason))
+}
+
+// firstFromRef returns the (upstream_job, output_name) pair of the
+// first ArtifactBinding in inputs whose From field is non-empty.
+// Used by the feature-18 ml.resolve_failed emit path so the
+// dashboard knows which upstream broke the pipeline. Returns
+// empty strings when no input carries a From ref (should not
+// happen — the resolver short-circuits on empty From, so this
+// code path would not have fired — but defensive).
+func firstFromRef(inputs []cpb.ArtifactBinding) (upstream, outputName string) {
+	for _, b := range inputs {
+		if b.From == "" {
+			continue
+		}
+		// From format: "<upstream_job>.<output_name>" — matches
+		// ResolveJobInputs's split rule. A malformed From string
+		// returns the whole thing as upstream so the event still
+		// carries the raw value for operator inspection.
+		for i := 0; i < len(b.From); i++ {
+			if b.From[i] == '.' {
+				return b.From[:i], b.From[i+1:]
+			}
+		}
+		return b.From, ""
+	}
+	return "", ""
+}
+
+// classifyUnschedulable decides whether the scheduler's
+// ErrNoNodeMatchesSelector is because (a) no node in the cluster
+// advertises the requested labels at all, or (b) nodes exist with
+// those labels but they are all stale. The distinction matters to
+// the operator — case (a) needs a new node or a selector change;
+// case (b) means restart / investigate the stale ones. Returns the
+// appropriate events.UnschedulableReason* constant.
+func classifyUnschedulable(allNodes []*cpb.Node, selector map[string]string) string {
+	if len(selector) == 0 {
+		// Shouldn't happen on this branch (the scheduler short-
+		// circuits empty selectors earlier), but be defensive.
+		return events.UnschedulableReasonNoMatchingLabel
+	}
+	for _, n := range allNodes {
+		if nodeMatchesSelector(n, selector) {
+			return events.UnschedulableReasonAllMatchingStale
+		}
+	}
+	return events.UnschedulableReasonNoMatchingLabel
 }
 
 // NewDispatchLoop creates a new dispatch loop.
@@ -153,6 +205,19 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 		if rerr != nil {
 			d.log.Warn("dispatch: artifact resolution failed",
 				slog.String("job_id", job.ID), slog.Any("err", rerr))
+			// Feature 18 step-3 follow-up: emit a distinct event so
+			// the dashboard's Pipelines view can surface ML pipeline
+			// breakage at a glance. Walks the job's Inputs to find
+			// the first From reference — the resolver fails at the
+			// first bad From, so that's the one the operator needs
+			// to see on the dashboard. upstream + outputName are
+			// best-effort: they're empty for pre-resolve errors
+			// (malformed From etc.) which show up in the reason
+			// text anyway.
+			upstream, outputName := firstFromRef(job.Inputs)
+			d.jobs.publishEvent(events.MLResolveFailed(
+				job.ID, job.WorkflowID, upstream, outputName, rerr.Error(),
+			))
 			_ = d.jobs.Transition(ctx, job.ID, cpb.JobStatusFailed, TransitionOptions{
 				ErrMsg: "artifact resolution: " + rerr.Error(),
 			})
@@ -186,15 +251,23 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 				// queued means a newly-registered matching node
 				// picks it up automatically. The event is the
 				// diagnostic signal operators watch for; debounced
-				// so a stuck job doesn't spam the bus.
-				d.maybeEmitUnschedulable(job)
+				// so a stuck job doesn't spam the bus. The reason
+				// distinguishes "no nodes advertise these labels"
+				// from "matching nodes exist but are all stale" so
+				// the dashboard can colour-code them differently.
+				reason := classifyUnschedulable(d.scheduler.source.Snapshot(), job.NodeSelector)
+				d.maybeEmitUnschedulable(job, reason)
 				continue
 			default:
 				// No healthy nodes at all — stop trying until the
 				// next tick so we don't burn through every pending
-				// job on a transient registry outage.
+				// job on a transient registry outage. Emit an
+				// unschedulable event so the dashboard can still
+				// show the stall reason; debounced so a quiet
+				// cluster doesn't flood the bus.
 				d.log.Debug("dispatch: no healthy nodes, will retry",
 					slog.String("job_id", job.ID))
+				d.maybeEmitUnschedulable(job, events.UnschedulableReasonNoHealthyNode)
 				return
 			}
 		}

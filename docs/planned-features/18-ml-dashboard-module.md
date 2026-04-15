@@ -1,77 +1,101 @@
 # Feature: ML Dashboard Module
 
 **Priority:** P1
-**Status:** Pending
-**Affected files:** `dashboard/src/app/features/ml/` (new module).
+**Status:** Done (Datasets / Models / Services views; Pipelines DAG view deferred to [deferred/24](deferred/24-ml-pipelines-dag-view.md))
+**Affected files:**
+`internal/cluster/dispatch.go` (ml.resolve_failed emit + classifyUnschedulable),
+`internal/cluster/scheduler.go` (NodeSource.Snapshot accessor),
+`internal/cluster/service_registry.go` (Snapshot for list view),
+`internal/events/topics.go` (TopicMLResolveFailed + UnschedulableReason* constants + JobUnschedulable.reason field),
+`internal/api/handlers_services.go` (GET /api/services list handler + ServiceListResponse type),
+`internal/api/server.go` (route header note),
+`dashboard/src/app/shared/models/index.ts` (Dataset, MLModel, ServiceEndpoint shapes),
+`dashboard/src/app/core/services/api.service.ts` (datasets / models / services REST methods),
+`dashboard/src/app/features/ml/` (new module — three list components + register-dataset dialog + shared SCSS),
+`dashboard/src/app/app.routes.ts` (ml/* lazy routes),
+`dashboard/src/app/shell/shell.component.ts` (sidebar links).
 **Parent slice:** [feature 10 — ML pipeline](10-minimal-ml-pipeline.md)
 
 ## Dashboard: ML module
 
-New lazy-loaded Angular module at `dashboard/src/app/features/ml/`:
+A lazy-loaded Angular module at `dashboard/src/app/features/ml/`
+exposing three views, plus two backend follow-ups that were called
+out in the spec for steps 3 and 4 of the parent slice.
 
-- **Datasets** view — list, tag filter, register-via-upload modal, delete.
-- **Models** view — list, lineage column (links to source job + dataset),
-  metrics column.
-- **Pipelines** view — workflow list filtered to those that produced a
-  registered model, with a small DAG visualisation showing artifact flow
-  on edges (not just dependency arrows).
-- **Services** view — currently-serving models, upstream URL, last health
-  status.
+### Views
 
-Reuses the existing auth-guard, JWT interceptor, error banner, and date
-range patterns from the analytics module.
+- **Datasets** (`/ml/datasets`) — paginated list of registered datasets
+  reading `GET /api/datasets`. Register-via-form modal posts to
+  `POST /api/datasets`; delete button calls `DELETE /api/datasets/{name}/{version}`
+  behind a confirm prompt. URI scheme + format hints surface in the
+  modal; the coordinator's `validate.go` is the authoritative gate
+  and 400 messages flow back into the table's error banner.
+- **Models** (`/ml/models`) — paginated list reading `GET /api/models`.
+  Surfaces lineage (link to source job + dataset name+version) and
+  free-form metrics as labelled pills. Register-from-UI is omitted —
+  models are expected to be registered by training jobs via the REST
+  API, not by an operator clicking a form.
+- **Services** (`/ml/services`) — live inference endpoints reading
+  `GET /api/services` (new list endpoint added by this slice). Polls
+  every 5 s via `interval(5000).pipe(startWith(0), switchMap(...))`
+  so the table stays at most one node-prober tick stale. Renders a
+  ready/unhealthy chip, the upstream URL, and a back-link to the job.
 
-### Step-3 follow-up to pick up during this step
+### Backend follow-ups (from the parent slice)
 
-The [step-3](13-ml-workflow-artifact-passing.md) dispatch-time resolver fails closed on
-`ErrResolveUpstreamNotCompleted` / `ErrResolveOutputMissing` — the
-downstream job transitions to Failed with an `"artifact resolution:
-..."` error. These are currently `slog.Warn`-logged but not audited,
-so an operator cannot answer "which of today's ML pipelines broke
-because an upstream output went missing?" without reading raw
-coordinator logs. Emit distinct audit events from
-`DispatchLoop.dispatchPending` whenever `ResolveJobInputs` returns
-non-nil, and add a filter + column to the Pipelines view so the
-dashboard can surface them at a glance:
+- **`ml.resolve_failed` event** (step-3 follow-up). When the dispatch
+  loop's artifact resolver fails, the coordinator now emits a
+  distinct `TopicMLResolveFailed` event in addition to transitioning
+  the job to Failed. The event carries `(workflow_id, job_id,
+  upstream, output_name, reason)` so a future Pipelines view (and
+  the existing event feed) can surface ML pipeline breakage at a
+  glance instead of the operator reading raw coordinator logs.
+- **`job.unschedulable.reason`** (step-4 follow-up). The
+  `JobUnschedulable` event grew a `reason` field with three stable
+  values (`no_healthy_node` / `no_matching_label` /
+  `all_matching_unhealthy`). The dispatch loop walks the registry's
+  full snapshot to distinguish "wrong labels" from "matching nodes
+  all stale", giving operators a triage signal without log-grepping.
+  `events.UnschedulableReason*` constants pin the wire strings so a
+  rename is a dashboard-breaking change, not a silent drift.
 
-| Event | Actor | Target | Details |
-|---|---|---|---|
-| `ml.resolve_failed` | `coordinator` | `job:<job_id>` | `{workflow_id, upstream, output_name, reason}` |
+### REST surface added by this slice
 
-One emit site in `dispatch.go` plus an `AuditEventType` constant; a
-small badge on the Pipelines row keyed off the event.
-
-### Step-4 follow-up to pick up during this step
-
-The `job.unschedulable` event today carries `job_id` +
-`unsatisfied_selector` — enough for an operator to see *what* didn't
-match, but not *why*. The dashboard's Pipelines view would benefit
-from distinguishing the three causes so a user can act on them
-differently:
-
-| Diagnostic | Meaning | Operator action |
-|---|---|---|
-| `no_healthy_node` | zero nodes in the registry are healthy right now | wait / investigate registry |
-| `no_matching_label` | healthy nodes exist but none advertise the requested labels | add a node with the right labels / relax the selector |
-| `all_matching_unhealthy` | nodes with matching labels exist but are all stale | restart the affected nodes |
-
-Extend `JobUnschedulable` with a `reason` field and populate it from
-`DispatchLoop.dispatchPending` using three paths: the existing
-`ErrNoHealthyNodes` branch, the existing `ErrNoNodeMatchesSelector`
-branch, and a new check that walks *all* registered nodes (healthy
-or not) and reports `all_matching_unhealthy` when at least one
-*unhealthy* node matches the selector. The dashboard's Pipelines
-row can then render three distinct badge colours / tooltips keyed
-off `reason`.
+| Method + Route             | Handler                  | Notes |
+|----------------------------|--------------------------|-------|
+| `GET /api/services`        | `handleListServices`     | Returns `{services, total}`; 404 if registry not wired. Memory-only read on the coordinator side; no rate limit needed beyond the standard auth middleware. |
 
 ## Security plan (this step)
 
-| New attack surface | Controls landing this step | SECURITY.md doctrine used |
-|-------------------|---------------------------|---------------------------|
-| New client surface | Inherits dashboard's existing security contract (§9): in-memory JWT, auth interceptor, auth guard on `/ml`, CSP same-origin. Artifact links open through a signed-URL endpoint, never as raw `s3://` URIs | — |
+See [`docs/SECURITY.md` § ML dashboard module surface](../SECURITY.md#ml-dashboard-module-surface-feature-18) for the authoritative write-up. Summary:
 
-Threat additions handled here:
+- All three views inherit the dashboard's existing `authGuard` + JWT interceptor; no new auth surface.
+- `GET /api/services` is the same data the per-job lookup already exposes, just batched. Same auth middleware.
+- Dataset register modal hints at the URI allowlist; the coordinator's `validate.go` is the authoritative gate.
+- Delete confirms in the UI are UX guards. The flat "any authenticated user can delete any entry" policy from feature 16 still applies — tightening tracked under [`deferred/17-registry-lineage-enforcement.md`](deferred/17-registry-lineage-enforcement.md).
 
-| Threat | Mitigation |
-|---|---|
-| Dashboard leaking artifact URIs via `Referer` / access log | Signed-URL-first access pattern; URIs only rendered inside authenticated session state, never as GET-request query strings |
+Two new audit-relevant events surface in this slice:
+
+| Event | Emitter | Surfaced where |
+|---|---|---|
+| `ml.resolve_failed` | `internal/cluster/dispatch.go` (resolver failure path) | Future Pipelines view; today on `/events` and the audit log |
+| `job.unschedulable` (with `reason`) | `internal/cluster/dispatch.go:maybeEmitUnschedulable` | Same — the existing event-feed view shows the reason verbatim |
+
+## Tests
+
+Backend:
+
+- `internal/cluster/dispatch_unschedulable_reason_test.go` — covers the three reason classifications + the `firstFromRef` parser used to populate `ml.resolve_failed`.
+- `internal/api/handlers_services_test.go` — three new cases: empty list, populated list, 404 when registry not wired.
+
+Dashboard (25 new tests):
+
+- `ml-datasets.component.spec.ts` — init-load, render, error path, pagination, register modal happy path (with a component-level `MatDialog` provider override so the spy reaches the same instance the component injects), cancel-modal path, delete confirm gate, byte formatter unit cases.
+- `ml-models.component.spec.ts` — init-load, render, error path, pagination, lineage rendering, metrics sort + format, delete confirm gate.
+- `ml-services.component.spec.ts` — `fakeAsync` + `tick` driving the 5-second poll, immediate emit on `startWith(0)`, error-then-recovery flow, `reload()` one-shot, and the unsubscribe-on-destroy invariant.
+
+All 167 dashboard tests + the affected Go packages (`internal/cluster`, `internal/events`, `internal/api`, `internal/grpcserver`) green; no new lint warnings.
+
+## Deferred
+
+- [deferred/24](deferred/24-ml-pipelines-dag-view.md) — Pipelines DAG view. Pulls in a graph layout library + a coordinator-side lineage-join endpoint to avoid N+1 fan-out from the dashboard. The other three views cover the operator's day-to-day flow; the Pipelines view is best built once step 19 (iris demo) gives a concrete user flow to anchor design decisions.

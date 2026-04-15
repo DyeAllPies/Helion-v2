@@ -76,9 +76,23 @@ func (r *ServiceRegistry) Delete(jobID string) {
 }
 
 // Count returns the number of tracked services. Backs the
-// helion_services_total Prometheus gauge (optional follow-up).
+// helion_services_total Prometheus gauge.
 func (r *ServiceRegistry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.endpoints)
+}
+
+// Snapshot returns a defensive copy of every currently tracked
+// endpoint. Backs GET /api/services (list). Returns an empty slice
+// rather than nil when the registry is empty so the JSON response
+// shape is stable (`{"services":[]}` not `{"services":null}`).
+func (r *ServiceRegistry) Snapshot() []cpb.ServiceEndpoint {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]cpb.ServiceEndpoint, 0, len(r.endpoints))
+	for _, ep := range r.endpoints {
+		out = append(out, ep)
+	}
+	return out
 }

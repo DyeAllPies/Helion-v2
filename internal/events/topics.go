@@ -37,6 +37,24 @@ const (
 	TopicDatasetDeleted    = "dataset.deleted"
 	TopicModelRegistered   = "model.registered"
 	TopicModelDeleted      = "model.deleted"
+
+	// TopicMLResolveFailed fires when the dispatch loop's artifact
+	// resolver (ResolveJobInputs) cannot materialise an input URI
+	// from an upstream workflow job's ResolvedOutputs. Distinct from
+	// the generic job.failed so the dashboard's Pipelines view can
+	// surface ML-specific pipeline breakage at a glance.
+	TopicMLResolveFailed = "ml.resolve_failed"
+)
+
+// Reason values attached to the feature-18 JobUnschedulable event so
+// the dashboard can distinguish "no nodes at all" from "wrong
+// labels" from "right labels but nodes are stale". The three values
+// are stable wire strings — renaming them is a dashboard-breaking
+// change.
+const (
+	UnschedulableReasonNoHealthyNode      = "no_healthy_node"
+	UnschedulableReasonNoMatchingLabel    = "no_matching_label"
+	UnschedulableReasonAllMatchingStale   = "all_matching_unhealthy"
 )
 
 // NewEvent creates an Event with a generated ID and current timestamp.
@@ -247,7 +265,7 @@ func WorkflowFailed(workflowID, failedJob string) Event {
 // none of them match the job's node_selector. The payload echoes the
 // unsatisfied selector so operators can inspect which label set would
 // have unblocked the job — no need to grep coordinator logs.
-func JobUnschedulable(jobID string, selector map[string]string) Event {
+func JobUnschedulable(jobID string, selector map[string]string, reason string) Event {
 	// Defensive copy: a consumer mutating the payload map must not
 	// bleed into another subscriber's view of the same event.
 	sel := make(map[string]string, len(selector))
@@ -255,7 +273,25 @@ func JobUnschedulable(jobID string, selector map[string]string) Event {
 		sel[k] = v
 	}
 	return NewEvent(TopicJobUnschedulable, map[string]any{
-		"job_id":              jobID,
+		"job_id":               jobID,
 		"unsatisfied_selector": sel,
+		// reason distinguishes the three causes for dashboard
+		// triage. One of UnschedulableReason* constants above, or
+		// empty on code paths that pre-date the field.
+		"reason": reason,
+	})
+}
+
+// MLResolveFailed fires when the dispatch loop's artifact resolver
+// cannot satisfy a workflow job's From references. Surfaced on the
+// dashboard's Pipelines view (feature 18 step-3 follow-up) so a
+// broken ML pipeline is one click away from the operator.
+func MLResolveFailed(jobID, workflowID, upstream, outputName, reason string) Event {
+	return NewEvent(TopicMLResolveFailed, map[string]any{
+		"job_id":      jobID,
+		"workflow_id": workflowID,
+		"upstream":    upstream,
+		"output_name": outputName,
+		"reason":      reason,
 	})
 }
