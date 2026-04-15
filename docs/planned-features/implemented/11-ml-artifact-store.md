@@ -142,6 +142,26 @@ Each is now covered:
   coverage of the artifact store's URI contract through the same
   handler path a real user would hit.
 
+**Third-pass coverage additions** — final exhaustive sweep,
+documented in audit [`2026-04-15-01`](../../audits/2026-04-15-01.md).
+Three more alarms the prior passes hadn't set, each closed:
+
+- [`local_test.go:TestLocalStore_Permissions`](../../../internal/artifacts/local_test.go)
+  — asserts root directory is 0o700, freshly-Put files are 0o600,
+  and nested intermediate dirs are 0o700. Security-relevant
+  regression surface (a silent drop to `os.MkdirAll`'s default
+  0o755 would expose model checkpoints + training data to any
+  local user); Linux-only, skipped on Windows.
+- [`s3_test.go:TestNewS3Store_WarnsWhenUseSSLDisabled`](../../../internal/artifacts/s3_test.go)
+  — slog-captures `NewS3Store` output, asserts the documented
+  WARN line fires when `UseSSL=false` and is absent when
+  `UseSSL=true`. Locks in the operator-visible alarm that an
+  unencrypted S3 config trips on every node startup.
+- [`artifacts_live_s3_test.go:TestLiveS3LargeObjectRoundtrip`](../../../tests/integration/artifacts_live_s3_test.go)
+  — 10 MiB payload through live MinIO. Fails on any regression
+  in Content-Length handling, reader-position drift, or the
+  multipart-adjacent code path the fakeS3 doesn't model.
+
 ### Deliberately not fixed, with rationale
 
 A second-pass audit flagged three concerns in the artifact-store

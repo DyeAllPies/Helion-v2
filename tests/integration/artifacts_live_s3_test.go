@@ -155,6 +155,76 @@ func TestLiveS3ArtifactVerifyStoreProbe(t *testing.T) {
 	})
 }
 
+// TestLiveS3LargeObjectRoundtrip uploads and reads back a 10 MiB
+// payload. minio-go's Put path may exercise multipart semantics
+// above an internal threshold; the unit-level fakeS3 doesn't model
+// multipart at all, so a regression in how S3Store constructs the
+// PutObject call — e.g. a truncated Content-Length header, a bad
+// reader position, or a goroutine that closes the reader early —
+// only surfaces against a real endpoint. This test catches that
+// class of regression.
+//
+// 10 MiB is the smallest payload that's meaningfully "big" for CI
+// (takes ~0.5 s to stream over the loopback to the containerised
+// MinIO); large enough to make any streaming regression visible,
+// small enough that a CI run doesn't feel it.
+func TestLiveS3LargeObjectRoundtrip(t *testing.T) {
+	cfg := skipUnlessLiveMinIO(t)
+
+	store, err := artifacts.Open(cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// 10 MiB deterministic-but-non-trivial pattern (incrementing
+	// byte) so a truncation partway through shows up as both a
+	// Size mismatch and a SHA-256 mismatch on Stat.
+	payload := make([]byte, 10<<20)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+
+	key := "integration/large/" + time.Now().UTC().Format("20060102T150405.000")
+	uri, err := store.Put(ctx, key, bytes.NewReader(payload), int64(len(payload)))
+	if err != nil {
+		t.Fatalf("Put (10 MiB): %v", err)
+	}
+	t.Cleanup(func() { _ = store.Delete(context.Background(), uri) })
+
+	md, err := store.Stat(ctx, uri)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if md.Size != int64(len(payload)) {
+		t.Fatalf("Size after 10 MiB Put: got %d, want %d", md.Size, len(payload))
+	}
+	want := sha256.Sum256(payload)
+	if md.SHA256 != hex.EncodeToString(want[:]) {
+		t.Errorf("SHA256 after 10 MiB Put: mismatch")
+	}
+
+	// Verify bytes come back byte-for-byte. Hash-compare rather
+	// than bytes.Equal to keep any failure log sane.
+	rc, err := store.Get(ctx, uri)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer rc.Close()
+	hasher := sha256.New()
+	n, err := io.Copy(hasher, rc)
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if n != int64(len(payload)) {
+		t.Fatalf("Get returned %d bytes, want %d", n, len(payload))
+	}
+	if !bytes.Equal(hasher.Sum(nil), want[:]) {
+		t.Fatalf("10 MiB round-trip content mismatch")
+	}
+}
+
 // TestLiveS3GetAndVerifyToStream exercises the streaming-verify path
 // used by the Stager when pulling inputs for a job. The unit test
 // covers the happy path against a LocalStore; this run proves the

@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -303,6 +305,69 @@ func (r *slowReader) Read(p []byte) (int, error) {
 	p[0] = r.payload[r.pos]
 	r.pos++
 	return 1, nil
+}
+
+// TestLocalStore_Permissions locks in the 0o700 root / 0o600 file
+// invariant the feature 11 spec calls out. Model checkpoints + raw
+// training data can be sensitive; a regression that widens the
+// root's mode (for instance, dropping to os.MkdirAll's default
+// 0o755) silently exposes every artifact the process produces to
+// any local user. This test is the alarm for that class of
+// regression.
+//
+// Skipped on Windows — NTFS' Unix-mode bit emulation is a known
+// source of flakes and the bits aren't security-load-bearing on
+// Windows anyway. The production deployment runs on Linux nodes.
+func TestLocalStore_Permissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not security-load-bearing on Windows")
+	}
+
+	s := newStore(t)
+	ctx := context.Background()
+
+	// (a) Root directory mode is exactly 0o700.
+	rootStat, err := os.Stat(s.Root())
+	if err != nil {
+		t.Fatalf("Stat root: %v", err)
+	}
+	if m := rootStat.Mode().Perm(); m != 0o700 {
+		t.Errorf("root permission bits: got %#o, want 0o700", m)
+	}
+
+	// (b) A freshly-Put file has mode 0o600.
+	payload := []byte("permission-check payload")
+	uri, err := s.Put(ctx, "perms/test-file", bytes.NewReader(payload), int64(len(payload)))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	// uri is file:///abs/path — translate back to a filesystem path.
+	u, err := url.Parse(string(uri))
+	if err != nil {
+		t.Fatalf("parse URI %q: %v", uri, err)
+	}
+	filePath := filepath.FromSlash(u.Path)
+	fi, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("Stat file %q: %v", filePath, err)
+	}
+	if m := fi.Mode().Perm(); m != 0o600 {
+		t.Errorf("file permission bits: got %#o, want 0o600", m)
+	}
+
+	// (c) A nested-key intermediate directory — created via
+	// os.MkdirAll on the Put path — must also be 0o700.
+	if _, err := s.Put(ctx, "deep/nested/key", bytes.NewReader(payload), int64(len(payload))); err != nil {
+		t.Fatalf("Put nested: %v", err)
+	}
+	nestedDir := filepath.Join(s.Root(), "deep", "nested")
+	nestedStat, err := os.Stat(nestedDir)
+	if err != nil {
+		t.Fatalf("Stat nested dir: %v", err)
+	}
+	if m := nestedStat.Mode().Perm(); m != 0o700 {
+		t.Errorf("nested dir permission bits: got %#o, want 0o700", m)
+	}
 }
 
 // TestConcurrentPuts_SameKey_NoOrphanTempfile locks in the

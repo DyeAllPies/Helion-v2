@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -243,6 +244,63 @@ func TestNewS3Store_RequiresEndpointAndBucket(t *testing.T) {
 	}
 	if _, err := NewS3Store(S3Config{Endpoint: "minio:9000", Bucket: "b"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestNewS3Store_WarnsWhenUseSSLDisabled captures slog output and
+// confirms the WARN line fires whenever an S3Store is constructed
+// with UseSSL=false. This is the alarm an operator sees on every
+// node startup if they forget `HELION_ARTIFACTS_S3_USE_SSL=1` in
+// production — a silent regression (the Warn gets removed or
+// gated) would let artifact traffic run in the clear without any
+// visible signal, a harvest-now-decrypt-later risk that
+// docs/SECURITY.md §3 explicitly calls out.
+//
+// The matching negative case (UseSSL=true produces no WARN) is
+// covered implicitly by the whole test suite running without
+// emitting the warning string.
+func TestNewS3Store_WarnsWhenUseSSLDisabled(t *testing.T) {
+	// Capture slog output to an in-memory buffer. Using the JSON
+	// handler makes the assertions robust against cosmetic
+	// reordering of attributes.
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
+	prev := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	_, err := NewS3Store(S3Config{
+		Endpoint: "minio:9000",
+		Bucket:   "helion",
+		UseSSL:   false,
+	})
+	if err != nil {
+		t.Fatalf("NewS3Store: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, `"level":"WARN"`) {
+		t.Errorf("expected a WARN-level record, got:\n%s", out)
+	}
+	if !strings.Contains(out, "S3 backend configured without TLS") {
+		t.Errorf("expected the documented warning message in the log, got:\n%s", out)
+	}
+	if !strings.Contains(out, "HELION_ARTIFACTS_S3_USE_SSL=1") {
+		t.Errorf("expected the remediation hint in the log, got:\n%s", out)
+	}
+
+	// Sanity: with UseSSL=true, no WARN about TLS should fire.
+	buf.Reset()
+	_, err = NewS3Store(S3Config{
+		Endpoint: "s3.amazonaws.com",
+		Bucket:   "helion",
+		UseSSL:   true,
+	})
+	if err != nil {
+		t.Fatalf("NewS3Store (UseSSL=true): %v", err)
+	}
+	if strings.Contains(buf.String(), "S3 backend configured without TLS") {
+		t.Errorf("unexpected TLS warning when UseSSL=true:\n%s", buf.String())
 	}
 }
 
