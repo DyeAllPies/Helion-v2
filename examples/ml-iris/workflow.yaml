@@ -1,0 +1,91 @@
+# iris end-to-end workflow — ingest → preprocess → train → register.
+#
+# `serve.py` is submitted separately (see README § Serving) because
+# a service job never reaches a terminal state and would block the
+# DAG from completing.
+#
+# Artifact flow:
+#   ingest     outputs RAW_CSV          -> preprocess inputs RAW_CSV
+#   preprocess outputs TRAIN_PARQUET,   -> train      inputs TRAIN_PARQUET,
+#                      TEST_PARQUET                           TEST_PARQUET
+#   train      outputs MODEL, METRICS   -> register   inputs RAW_CSV (from ingest),
+#                                                              MODEL, METRICS
+#
+# The coordinator's dispatch-time resolver rewrites each
+# `from: <upstream>.<NAME>` reference into a concrete artifact URI
+# once the upstream job produces that output. Missing or stale
+# references surface as `ml.resolve_failed` events — visible on
+# the dashboard's /events view and audit log.
+
+id: iris-wf-1
+name: iris-end-to-end
+priority: 60
+
+jobs:
+  - name: ingest
+    command: python
+    args: [ingest.py]
+    timeout_seconds: 60
+    outputs:
+      - name: RAW_CSV
+        local_path: raw.csv
+
+  - name: preprocess
+    command: python
+    args: [preprocess.py]
+    timeout_seconds: 60
+    depends_on: [ingest]
+    inputs:
+      - name: RAW_CSV
+        from: ingest.RAW_CSV
+        local_path: raw.csv
+    outputs:
+      - name: TRAIN_PARQUET
+        local_path: train.parquet
+      - name: TEST_PARQUET
+        local_path: test.parquet
+
+  - name: train
+    command: python
+    args: [train.py]
+    timeout_seconds: 120
+    depends_on: [preprocess]
+    inputs:
+      - name: TRAIN_PARQUET
+        from: preprocess.TRAIN_PARQUET
+        local_path: train.parquet
+      - name: TEST_PARQUET
+        from: preprocess.TEST_PARQUET
+        local_path: test.parquet
+    outputs:
+      - name: MODEL
+        local_path: model.joblib
+      - name: METRICS
+        local_path: metrics.json
+
+  - name: register
+    command: python
+    args: [register.py]
+    timeout_seconds: 60
+    depends_on: [train]
+    # register.py needs the coordinator URL + token to POST to the
+    # registry API, plus the workflow ID so it can look up the
+    # training job's runtime job_id (for the model's lineage
+    # pointer). HELION_COORDINATOR + HELION_TOKEN come from the
+    # submitter's environment; HELION_WORKFLOW_ID is hardcoded to
+    # match this file's top-level `id` field — register.py then
+    # hits GET /workflows/{id}, finds the "train" job by name, and
+    # reads its job_id from the response.
+    env:
+      HELION_WORKFLOW_ID: iris-wf-1
+      HELION_TRAIN_JOB_NAME: train
+    inputs:
+      - name: RAW_CSV
+        from: ingest.RAW_CSV
+        local_path: raw.csv
+      - name: MODEL
+        from: train.MODEL
+        local_path: model.joblib
+      - name: METRICS
+        from: train.METRICS
+        local_path: metrics.json

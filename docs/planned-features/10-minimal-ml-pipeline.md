@@ -1,7 +1,7 @@
 # Feature: Minimal ML Pipeline
 
 **Priority:** P1
-**Status:** In progress (steps 1–8 implemented; 9–10 pending)
+**Status:** In progress (steps 1–8 implemented; step 9 written but awaiting acceptance run; step 10 pending)
 **Affected files:**
 `internal/api/types.go`,
 `internal/cluster/registry_node.go`,
@@ -101,7 +101,7 @@ enumerated below.
 | 6 | [16-ml-dataset-model-registry.md](16-ml-dataset-model-registry.md) | `/api/datasets` + `/api/models` with lineage metadata | Done |
 | 7 | [17-ml-inference-jobs.md](17-ml-inference-jobs.md) | `ServiceSpec` long-running jobs with readiness probes | Done |
 | 8 | [implemented/18-ml-dashboard-module.md](implemented/18-ml-dashboard-module.md) | Angular ML module: Datasets / Models / Services / Pipelines (all four views shipped) | Done |
-| 9 | [19-ml-end-to-end-demo.md](19-ml-end-to-end-demo.md) | `examples/ml-iris/` worked example + acceptance test | Pending |
+| 9 | [19-ml-end-to-end-demo.md](19-ml-end-to-end-demo.md) | `examples/ml-iris/` worked example + acceptance test | Written, awaiting acceptance run |
 | 10 | [20-ml-documentation.md](20-ml-documentation.md) | Architecture / Components / persistence / ml-pipelines docs | Pending |
 
 ---
@@ -118,7 +118,7 @@ enumerated below.
 | 6    | Dataset + model registries (API + storage)       | 1            | Medium | Done   |
 | 7    | Inference jobs (Service spec + readiness)        | 2            | Small  | Done    |
 | 8    | Dashboard ML module                              | 6, 7         | Medium | Done    |
-| 9    | Iris end-to-end example                          | 2, 3, 6, 7   | Small  | Pending |
+| 9    | Iris end-to-end example                          | 2, 3, 6, 7   | Small  | Written (acceptance run pending) |
 | 10   | Documentation                                    | All          | Small  | Pending |
 
 Roughly: steps 1-3 unlock data-flow workflows, 4-5 unlock GPU scheduling,

@@ -1,0 +1,29 @@
+# Runtime deps for the iris end-to-end demo.
+#
+# Split into two conceptual groups:
+#
+#   Pipeline steps (ingest / preprocess / train / register):
+#     pandas + pyarrow for parquet I/O, scikit-learn + joblib for
+#     training, nothing heavier — iris is a 150-row toy dataset.
+#
+#   Serving (serve.py):
+#     FastAPI + uvicorn for the inference HTTP endpoint, pydantic
+#     for request validation. Uses the same joblib/scikit-learn
+#     load path as the training step.
+#
+#   Submitter (submit.py):
+#     PyYAML to parse workflow.yaml.
+#
+# Versions intentionally minimal-bound — the example isn't pinning
+# a reproducible research environment, it's smoke-testing Helion's
+# ML plumbing. If a dep floats out of ABI compatibility, pin here
+# before debugging Helion.
+
+pandas>=2.0
+pyarrow>=14.0
+scikit-learn>=1.3
+joblib>=1.3
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+pyyaml>=6.0

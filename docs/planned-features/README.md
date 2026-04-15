@@ -34,7 +34,7 @@ relates to `audits/` and `deferred/`.
 | 16 | ML — Dataset and model registry | **Done** | P1 | [16-ml-dataset-model-registry.md](16-ml-dataset-model-registry.md) |
 | 17 | ML — Inference jobs | **Done** (Go runtime; Rust parity deferred) | P1 | [17-ml-inference-jobs.md](17-ml-inference-jobs.md) |
 | ~~18~~ | ~~ML — Dashboard module~~ | **Implemented + audited**; moved to [`implemented/18-ml-dashboard-module.md`](implemented/18-ml-dashboard-module.md) | P2 | — |
-| 19 | ML — End-to-end iris demo | Pending | P2 | [19-ml-end-to-end-demo.md](19-ml-end-to-end-demo.md) |
+| 19 | ML — End-to-end iris demo | Written; awaiting acceptance run against live cluster | P1 | [19-ml-end-to-end-demo.md](19-ml-end-to-end-demo.md) |
 | 20 | ML — Documentation | Pending | P2 | [20-ml-documentation.md](20-ml-documentation.md) |
 
 ### Priority definitions
