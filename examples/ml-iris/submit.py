@@ -34,6 +34,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from typing import Any
 
 try:
     import yaml
@@ -53,7 +54,7 @@ def _auth_headers(token: str) -> dict:
     }
 
 
-def _post(base: str, path: str, token: str, body: dict) -> dict:
+def _post(base: str, path: str, token: str, body: "dict[str, Any]") -> "dict[str, Any]":
     url = base.rstrip("/") + path
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST",
@@ -62,7 +63,7 @@ def _post(base: str, path: str, token: str, body: dict) -> dict:
         return json.loads(resp.read())
 
 
-def _get(base: str, path: str, token: str) -> dict:
+def _get(base: str, path: str, token: str) -> "dict[str, Any]":
     url = base.rstrip("/") + path
     req = urllib.request.Request(url, method="GET",
                                  headers={"Authorization": f"Bearer {token}"})
@@ -70,12 +71,55 @@ def _get(base: str, path: str, token: str) -> dict:
         return json.loads(resp.read())
 
 
-def _read_yaml(path: str) -> dict:
+def _read_yaml(path: str) -> "dict[str, Any]":
     with open(path, "r", encoding="utf-8") as f:
         spec = yaml.safe_load(f)
     if not isinstance(spec, dict):
         raise ValueError(f"{path}: top-level must be a mapping")
     return spec
+
+
+def _mint_workflow_token(api_url: str, admin_token: str, wf_id: str,
+                         ttl_hours: int = 1) -> str:
+    """Mint a short-lived `job`-role token scoped to this workflow.
+
+    Posted by the submitter against POST /admin/tokens using the
+    operator's admin token. The returned token:
+
+      - Has `role: job` — adminMiddleware rejects it at 403 for
+        /admin/* endpoints (so a leaked token from a compromised
+        in-workflow script cannot mint more tokens, revoke nodes,
+        or otherwise escalate).
+      - Has `subject: workflow:<id>` — audit-log entries stamp the
+        workflow ID directly in the actor column, so compliance
+        queries can group by workflow without joining on JTI.
+      - Expires in `ttl_hours` hours — bounds the damage window if
+        a job's env is ever dumped. One hour is enough headroom for
+        the iris pipeline (typically <2 min end-to-end) plus any
+        operator-driven retries.
+
+    Falls back to the root admin token if the cluster's coordinator
+    rejects /admin/tokens (e.g. an older build without the `job`
+    role, or a deployment without tokenManager wired). The fallback
+    logs a warning so the operator sees the downgrade.
+    """
+    body = {
+        "subject": f"workflow:{wf_id}",
+        "role": "job",
+        "ttl_hours": ttl_hours,
+    }
+    try:
+        resp = _post(api_url, "/admin/tokens", admin_token, body)
+        tok = resp.get("token")
+        if isinstance(tok, str) and tok:
+            return tok
+        print("warning: /admin/tokens response missing token; "
+              "falling back to admin token", file=sys.stderr)
+    except urllib.error.HTTPError as e:
+        msg = e.read().decode("utf-8", errors="replace")
+        print(f"warning: /admin/tokens {e.code}: {msg} — "
+              f"falling back to admin token", file=sys.stderr)
+    return admin_token
 
 
 def _inject_api_env(spec: dict, api_url: str, token: str) -> None:
@@ -85,12 +129,20 @@ def _inject_api_env(spec: dict, api_url: str, token: str) -> None:
     to subprocess jobs — only the job spec's declared env reaches
     them — so the submitter owns credential plumbing.
 
-    Security: HELION_TOKEN in every job's env is a known demo
-    tradeoff. Per the feature-19 spec's security plan ("no new trust
-    boundary"), the operator submits their own credentials to their
-    own cluster; jobs running on that cluster already execute
-    operator-supplied commands. Production deployments would use a
-    per-job scoped token instead of the root one.
+    The injected token is typically a workflow-scoped `job`-role
+    token minted via _mint_workflow_token, NOT the operator's root
+    admin token. Scoping properties:
+
+      - role=job → adminMiddleware returns 403 for /admin/*
+      - subject=workflow:<id> → audit trail names the workflow
+      - ttl=1h → bounded damage window if the env is exposed
+
+    The remaining blast radius is "anything authMiddleware-only":
+    the token can register more datasets/models, submit jobs, read
+    workflow state. Resource-scoped permissions (e.g. restrict to
+    specific name/version writes) are a future enhancement;
+    documenting the residual surface here so a future reader
+    knows what the token CAN still do.
     """
     jobs = spec.get("jobs", [])
     for job in jobs:
@@ -181,7 +233,16 @@ def main() -> int:
     # and the jobs run in-cluster, so the container-visible URL
     # (e.g. http://coordinator:8080) needs to be different.
     job_api_url = os.environ.get("HELION_JOB_API_URL") or base
-    _inject_api_env(spec, job_api_url, token)
+
+    # Security: mint a workflow-scoped `job`-role token for the jobs
+    # rather than leaking the operator's root admin token into each
+    # env block. adminMiddleware rejects the scoped token at 403 for
+    # /admin/*, and the 1-hour TTL bounds the damage window if a
+    # job's env is ever captured from a crash log or audit entry.
+    raw_id = spec.get("id")
+    wf_id = str(raw_id) if isinstance(raw_id, str) and raw_id else "unnamed-workflow"
+    job_token = _mint_workflow_token(base, token, wf_id)
+    _inject_api_env(spec, job_api_url, job_token)
 
     try:
         print(f"submitting workflow {spec.get('id', '<unnamed>')}…")
@@ -190,7 +251,9 @@ def main() -> int:
         print(f"submit failed: {e.code} {e.read().decode('utf-8', errors='replace')}",
               file=sys.stderr)
         return 1
-    wf_id = resp.get("id") or spec["id"]
+    resp_id = resp.get("id")
+    if isinstance(resp_id, str) and resp_id:
+        wf_id = resp_id
     print(f"submitted: id={wf_id}")
 
     if not args.serve:

@@ -68,3 +68,4 @@ benchmarks/
 # Proto generated files (regenerate with make proto)
 **/*.pb.go
 **/*_grpc.pb.go
+**/__pycache__/

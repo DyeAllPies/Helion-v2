@@ -262,7 +262,13 @@ func (s *Server) registerRoutes() {
 		s.mux.HandleFunc("GET /metrics", s.authMiddleware(s.handleGetMetrics))
 	}
 	s.mux.HandleFunc("GET /audit", s.authMiddleware(s.handleGetAudit))
-	s.mux.HandleFunc("POST /admin/nodes/{id}/revoke", s.authMiddleware(s.handleRevokeNode))
+	// Feature 19 follow-up: node revocation is an admin-only operation
+	// (takes a node offline cluster-wide). Pre-existing wiring used
+	// only authMiddleware, which let any authenticated caller — node
+	// role, or the new feature-19 `job` role — revoke any node.
+	// Now guarded by adminMiddleware consistent with the other
+	// /admin/* surface.
+	s.mux.HandleFunc("POST /admin/nodes/{id}/revoke", s.authMiddleware(s.adminMiddleware(s.handleRevokeNode)))
 	s.mux.HandleFunc("POST /admin/tokens", s.authMiddleware(s.adminMiddleware(s.handleIssueToken)))
 	s.mux.HandleFunc("DELETE /admin/tokens/{jti}", s.authMiddleware(s.adminMiddleware(s.handleRevokeToken)))
 

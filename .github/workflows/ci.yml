@@ -424,11 +424,50 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
 
+  # ── E2E: iris end-to-end ML pipeline (feature 19) ──────────────────────────
+  # Acceptance harness for the ML pipeline: builds the Python-capable
+  # node image, starts the full cluster (coordinator + 2 iris nodes +
+  # MinIO + Postgres), submits workflow.yaml, walks all six acceptance
+  # checkpoints (completed / registry / lineage / serve / predict).
+  # Runs after e2e so CI Playwright + iris share the same image cache.
+  e2e-iris:
+    name: E2E — iris pipeline (feature 19)
+    runs-on: ubuntu-latest
+    needs: [build, test-dashboard]
+    env:
+      COMPOSE_PROFILES: analytics,ml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install submit.py dep
+        run: pip install pyyaml
+
+      - name: Run iris acceptance harness
+        # The script builds Dockerfile.node-python on demand (not in the
+        # pre-built e2e-images tarballs since only ML-pipeline runs need
+        # the ~300MiB sklearn/pandas image). Script tears down on EXIT.
+        run: bash scripts/run-iris-e2e.sh
+
+      - name: Upload iris cluster logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-cluster-logs
+          path: logs/
+          retention-days: 7
+
   # ── Snyk: dependency and container vulnerability scan ────────────────────────
   snyk:
     name: Snyk — dependency & container scan
     runs-on: ubuntu-latest
-    needs: [e2e]
+    needs: [e2e, e2e-iris]
     permissions:
       security-events: write  # required to upload SARIF results
 

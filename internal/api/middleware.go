@@ -62,7 +62,24 @@ const (
 	defaultTokenTTLHours = 8
 )
 
-var validRoles = map[string]bool{"admin": true, "node": true}
+// validRoles lists the JWT roles the /admin/tokens endpoint will
+// mint. Enforcement of what each role can DO lives in the handler
+// middleware (adminMiddleware checks role=="admin"), not here.
+//
+//   - "admin" — full REST surface including /admin/* (token
+//     issuance + node revocation).
+//   - "node"  — currently used by node-side callbacks
+//     (ReportResult, Heartbeat); distinct from admin.
+//   - "job"   — (feature 19) short-lived credentials minted by
+//     the workflow submitter for in-workflow scripts that need
+//     to call back into the coordinator (e.g. register.py
+//     POSTing to /api/datasets + /api/models). adminMiddleware
+//     rejects this role at 403, so a leaked job token cannot
+//     mint more tokens or revoke nodes. Resource-scoped
+//     permissions (per-endpoint allowlist) is a future
+//     enhancement; today the role bounds blast radius to the
+//     non-admin REST surface + token TTL.
+var validRoles = map[string]bool{"admin": true, "node": true, "job": true}
 
 // ── authMiddleware ────────────────────────────────────────────────────────────
 

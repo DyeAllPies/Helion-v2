@@ -60,6 +60,72 @@ examples/ml-iris/workflow.yaml`, the feature is done.
   subcommand to `helion-run`, which is out of scope for this
   slice.
 
+## Follow-up 1: workflow-scoped tokens (2026-04-18)
+
+The original `submit.py` injected the operator's root admin token
+into every job's env block. The feature-19 security plan called
+this a "no new trust boundary" tradeoff (jobs already execute
+operator-supplied commands), but the blast radius if a job's env
+was ever captured — from a crash log, audit entry, or a
+compromised node — included cluster-wide admin powers (mint
+tokens, revoke nodes).
+
+Closed:
+
+- **`job` role added** to `api.validRoles` in
+  `internal/api/middleware.go`. `adminMiddleware` already rejects
+  non-admin tokens; adding the role is a one-line change that
+  unlocks a narrower credential class without restructuring
+  permissions.
+- **`submit.py` mints a workflow-scoped token** via
+  `POST /admin/tokens` with `{subject: workflow:<id>, role: job,
+  ttl_hours: 1}` and injects that token in place of the root one.
+  Falls back to the root admin token with a stderr warning if
+  `/admin/tokens` is unavailable (older cluster build, or
+  `tokenManager` not wired).
+- **Pre-existing gap fixed**: `POST /admin/nodes/{id}/revoke`
+  used only `authMiddleware`, so any authenticated caller — node
+  role, or the new `job` role — could revoke any node. Now
+  properly guarded by `adminMiddleware` consistent with the rest
+  of the `/admin/*` surface.
+- **Regression tests pinned**:
+  `handlers_admin_test.go:TestIssueToken_JobRole_Accepted` and
+  `TestJobRoleToken_CanNotMintMoreTokens` /
+  `TestJobRoleToken_CanNotRevokeNodes` alarm for a regression
+  that either removed the role or relaxed the middleware guards.
+
+Residual surface documented in `examples/ml-iris/README.md §
+Token scoping`: the `job` role can still call the non-admin
+authenticated REST surface (submit jobs, register
+datasets/models, read workflow state). Resource-scoped
+permissions (per-endpoint allowlists keyed on role) close this
+but require a broader middleware design; tracked as a future
+enhancement, not a feature-19 blocker.
+
+## Follow-up 2: CI-runnable acceptance harness (2026-04-18)
+
+The 2026-04-18 acceptance run was manual (a human at a
+terminal); feature 19's promise is "can a normal person run an
+ML pipeline on Helion" but "a normal person" includes CI.
+
+Closed:
+
+- **`scripts/run-iris-e2e.sh`** — single-command harness that
+  brings up the cluster, submits the workflow, and asserts every
+  one of the six acceptance checkpoints with explicit pass/fail
+  per line. Tears down on every exit path (EXIT trap) with logs
+  dumped on failure for post-mortem.
+- **`.github/workflows/ci.yml` gains an `e2e-iris` job** that
+  depends on `build` + `test-dashboard` and runs the harness on
+  every push. Uses the same ubuntu-latest runner + compose
+  profile pattern as the Playwright `e2e` job.
+- **Rust-runtime variant deferred**: `Dockerfile.node-rust` uses
+  cgroup v2 + seccomp which are Linux-only (Docker Desktop on
+  Windows/macOS fails at startup with cgroup mount errors). A
+  Rust-iris harness would gate on `uname -s = Linux`; not
+  blocking feature 19's Done status since the Go runtime is
+  the default and covers the acceptance surface.
+
 ## Security plan (this step)
 
 | New attack surface | Controls landing this step | SECURITY.md doctrine used |

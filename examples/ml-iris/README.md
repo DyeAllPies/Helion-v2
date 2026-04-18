@@ -191,6 +191,57 @@ docker exec helion-coordinator \
 
 ---
 
+## CI / acceptance harness
+
+`scripts/run-iris-e2e.sh` runs the six acceptance checkpoints above
+against a fresh docker-compose cluster. Zero interactive steps; tears
+down (volumes included) on every exit path. Used by the CI `e2e-iris`
+job in `.github/workflows/ci.yml`, and runnable locally the same way:
+
+```bash
+./scripts/run-iris-e2e.sh
+```
+
+Exit codes: 0 on all green, non-zero on the first failed checkpoint
+(with cluster logs dumped before teardown so CI artifacts them).
+
+### Rust runtime (deferred)
+
+The Rust runtime (`Dockerfile.node-rust`) uses cgroup v2 + seccomp-bpf
+for process isolation — both Linux-only. On Windows or macOS Docker
+Desktop the Rust node fails at startup with a cgroup mount error, so
+the iris demo is pinned to the Go runtime (`Dockerfile.node-python`
+extends `golang:1.26-alpine`'s builder plus a `python:3.11-slim`
+final stage). A Rust-runtime-on-Linux variant of this harness is a
+future enhancement; CI would gate it on `uname -s = Linux`.
+
+## Token scoping
+
+`submit.py` mints a short-lived `job`-role token for the workflow
+and injects THAT into each job's env, rather than leaking the
+operator's root admin token. Key properties of the scoped token:
+
+- **`role: job`** — `adminMiddleware` rejects it at 403 for
+  `/admin/*`, so a leaked token from a compromised in-workflow
+  script cannot mint more tokens or revoke nodes.
+- **`subject: workflow:<id>`** — audit trail stamps the workflow
+  ID directly in the actor column; compliance queries can group by
+  workflow without joining on JTI.
+- **`ttl_hours: 1`** — auto-expires shortly after the pipeline
+  finishes (typically <2 min end-to-end), bounding the damage window
+  if a job's env is ever captured from a crash log or audit entry.
+
+Residual surface (documented): the `job` token can still call the
+non-admin authenticated REST surface — submitting more jobs,
+registering more datasets/models, reading workflow state. Resource-
+scoped permissions (per-endpoint allowlists) would close this; it's
+a future enhancement tracked as a deferred item.
+
+Falls back to the root admin token if `/admin/tokens` rejects the
+request (older coordinator build without the `job` role, or a
+deployment without `tokenManager` wired). The fallback logs a
+warning so the operator sees the downgrade.
+
 ## File reference
 
 | File | Purpose |

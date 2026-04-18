@@ -246,6 +246,75 @@ func TestIssueToken_NonAdminRole_Returns403(t *testing.T) {
 	}
 }
 
+// TestIssueToken_JobRole_Accepted pins the feature-19 workflow-scoped
+// token role. submit.py uses this to mint a short-lived credential
+// for in-workflow scripts (register.py) instead of leaking the
+// operator's root admin token into every job's env.
+func TestIssueToken_JobRole_Accepted(t *testing.T) {
+	srv, tm := newAuthServer(t)
+	atk := adminToken(t, tm)
+
+	rr := doWithToken(srv, "POST", "/admin/tokens",
+		`{"subject":"workflow:iris-wf-1","role":"job","ttl_hours":1}`, atk)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rr.Code, rr.Body)
+	}
+	var resp api.IssueTokenResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Role != "job" {
+		t.Errorf("role: got %q, want job", resp.Role)
+	}
+}
+
+// TestJobRoleToken_CanNotMintMoreTokens is the load-bearing
+// alarm for feature 19's token-scoping safety: the scoped `job`
+// token must be rejected by adminMiddleware when a compromised
+// in-workflow script tries to call POST /admin/tokens to
+// escalate to an unbounded admin token. Without this, leaking
+// the iris pipeline's register-step env would let an attacker
+// mint an admin token from inside the cluster.
+func TestJobRoleToken_CanNotMintMoreTokens(t *testing.T) {
+	srv, tm := newAuthServer(t)
+	jobTok, err := tm.GenerateToken(context.Background(),
+		"workflow:iris-wf-1", "job", time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken(job): %v", err)
+	}
+
+	rr := doWithToken(srv, "POST", "/admin/tokens",
+		`{"subject":"escalated","role":"admin"}`, jobTok)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("job-role token escalation: got %d, want 403", rr.Code)
+	}
+}
+
+// TestJobRoleToken_CanNotRevokeNodes pairs with the mint-rejection
+// test above — the other adminMiddleware-guarded endpoint is
+// POST /admin/nodes/{id}/revoke. A leaked job token must not be
+// able to take nodes offline by calling it.
+func TestJobRoleToken_CanNotRevokeNodes(t *testing.T) {
+	store := newTokenStore()
+	tm, err := auth.NewTokenManager(context.Background(), store)
+	if err != nil {
+		t.Fatalf("NewTokenManager: %v", err)
+	}
+	jobTok, err := tm.GenerateToken(context.Background(),
+		"workflow:iris-wf-1", "job", time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken(job): %v", err)
+	}
+	nodes := &mockNodeRegistry{}
+	srv := api.NewServer(newMockJobStore(), nodes, nil, nil, tm, nil, nil, nil)
+
+	rr := doWithToken(srv, "POST", "/admin/nodes/target-node/revoke",
+		`{"reason":"unauthorised"}`, jobTok)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("job-role revoke-node: got %d, want 403", rr.Code)
+	}
+}
+
 func TestIssueToken_NoAuth_Returns401(t *testing.T) {
 	srv, _ := newAuthServer(t)
 	rr := doWithToken(srv, "POST", "/admin/tokens",
