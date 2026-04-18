@@ -123,6 +123,63 @@ func TestGoRuntime_Timeout(t *testing.T) {
 	}
 }
 
+// TestGoRuntime_IsService_IgnoresTimeout pins the feature-17 no-timeout
+// branch at go_runtime.go:128-130. A service job's `TimeoutSeconds`
+// must be ignored (set to 0 = no deadline) so the runtime doesn't
+// kill a long-running inference service. Without this test, a
+// regression dropping the `if req.IsService { timeout = 0 }` block
+// would cause every service to die at `defaultTimeout` (5 min) —
+// no existing runtime test exercises the IsService path.
+//
+// Mechanic: start a sleepCmd with IsService=true + TimeoutSeconds=1.
+// Without the branch: timeout fires at 1s, KillReason="Timeout".
+// With the branch: timeout=0, process runs forever until ctx
+// cancel. Observation window: sleep 1.5s, confirm the goroutine
+// has NOT returned (timeout didn't fire), then cancel and assert
+// KillReason is empty or a cancel-signature (not "Timeout").
+func TestGoRuntime_IsService_IgnoresTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping service no-timeout test in short mode")
+	}
+	rt := NewGoRuntime()
+	defer rt.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan RunResult, 1)
+	cmd, args := sleepCmd(9)
+	go func() {
+		res, _ := rt.Run(ctx, RunRequest{
+			JobID:          "svc-ignore-timeout",
+			Command:        cmd,
+			Args:           args,
+			TimeoutSeconds: 1, // would normally fire at 1s
+			IsService:      true,
+		})
+		done <- res
+	}()
+
+	// 1.5 s > the 1-second TimeoutSeconds that would fire without
+	// the IsService branch. If the goroutine has returned by now,
+	// the branch is broken.
+	select {
+	case <-done:
+		t.Fatal("service job terminated before ctx cancel — IsService did not disable timeout")
+	case <-time.After(1500 * time.Millisecond):
+		// Good — still running after the would-be timeout.
+	}
+
+	cancel()
+	select {
+	case res := <-done:
+		if res.KillReason == "Timeout" {
+			t.Errorf("KillReason: got %q, want not Timeout", res.KillReason)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after ctx cancel")
+	}
+}
+
 // TestGoRuntime_ContextCancelled verifies that cancelling ctx terminates the job.
 func TestGoRuntime_ContextCancelled(t *testing.T) {
 	if testing.Short() {
