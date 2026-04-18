@@ -10,6 +10,7 @@ import (
 	badger "github.com/dgraph-io/badger/v4"
 
 	"github.com/DyeAllPies/Helion-v2/internal/api"
+	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/DyeAllPies/Helion-v2/internal/registry"
 )
@@ -36,6 +37,25 @@ func newRegistryServerWithBus(t *testing.T) (*api.Server, *events.Bus) {
 	bus := events.NewBus(16, nil)
 	srv.SetEventBus(bus)
 	return srv, bus
+}
+
+// newRegistryServerWithAudit wires a real audit logger + in-memory
+// store so tests can assert that register/delete ops produce audit
+// entries on the bus. Mirrors newAnalyticsServerWithAudit.
+func newRegistryServerWithAudit(t *testing.T) (*api.Server, *inMemoryAuditStore) {
+	t.Helper()
+	store := newAuditStore()
+	auditLog := audit.NewLogger(store, 0)
+	srv := api.NewServer(newMockJobStore(), nil, nil, auditLog, nil, nil, nil, nil)
+	srv.DisableAuth()
+	opts := badger.DefaultOptions(t.TempDir()).WithLogger(nil)
+	db, err := badger.Open(opts)
+	if err != nil {
+		t.Fatalf("badger open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	srv.SetRegistryStore(registry.NewBadgerStore(db))
+	return srv, store
 }
 
 // ── Dataset ────────────────────────────────────────────────────────────
@@ -359,6 +379,76 @@ func TestRegistry_RateLimit_ExcessReturns429(t *testing.T) {
 	}
 	if !seen429 {
 		t.Error("expected at least one 429 after exhausting registryQueryAllow burst")
+	}
+}
+
+// TestRegistry_AuditLog_RegisterAndDelete_BothResources pins the
+// audit-log emission path, independent of the event bus. The
+// handler emits BOTH a bus event (covered by
+// `TestRegistry_Dataset_RegisterPublishesEvent` + peers) AND an
+// audit-log entry via `s.audit.Log` (at handlers_registry.go:122,
+// 210, 280, 391). Audit 2026-04-18-03 pinned the event-bus side;
+// the audit-log side was still unpinned. A refactor that extracted
+// the audit call into a helper and forgot to wire it from one
+// endpoint, or renamed `dataset.registered` to something else,
+// would leave every existing registry test green while silently
+// breaking the compliance / audit-query path.
+//
+// One integration test covering all four emissions (register +
+// delete on both resources) is sufficient — they all use the same
+// `s.audit.Log` pattern, so a refactor breaking one is likely to
+// break all of them. Decoding each scan result as a JSON map
+// (audit.Event shape) confirms the event_type key is present on
+// each entry.
+func TestRegistry_AuditLog_RegisterAndDelete_BothResources(t *testing.T) {
+	srv, store := newRegistryServerWithAudit(t)
+
+	if rr := do(srv, "POST", "/api/datasets",
+		`{"name":"d","version":"v1","uri":"s3://b/k"}`); rr.Code != http.StatusCreated {
+		t.Fatalf("register dataset: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(srv, "POST", "/api/models",
+		`{"name":"m","version":"v1","uri":"s3://b/k"}`); rr.Code != http.StatusCreated {
+		t.Fatalf("register model: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(srv, "DELETE", "/api/datasets/d/v1", ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("delete dataset: %d", rr.Code)
+	}
+	if rr := do(srv, "DELETE", "/api/models/m/v1", ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("delete model: %d", rr.Code)
+	}
+
+	// Scan every audit entry; each is a JSON `audit.Event`.
+	raws, err := store.Scan(nil, "audit:", 0)
+	if err != nil {
+		t.Fatalf("audit scan: %v", err)
+	}
+	want := map[string]bool{
+		"dataset.registered": false,
+		"dataset.deleted":    false,
+		"model.registered":   false,
+		"model.deleted":      false,
+	}
+	for _, raw := range raws {
+		var evt struct {
+			Type  string `json:"type"`
+			Actor string `json:"actor"`
+		}
+		if err := json.Unmarshal(raw, &evt); err != nil {
+			t.Fatalf("unmarshal audit entry: %v", err)
+		}
+		if _, tracked := want[evt.Type]; tracked {
+			want[evt.Type] = true
+			// Auth is disabled; actor stamped as "anonymous".
+			if evt.Actor != "anonymous" {
+				t.Errorf("event %q: actor %q, want %q", evt.Type, evt.Actor, "anonymous")
+			}
+		}
+	}
+	for topic, seen := range want {
+		if !seen {
+			t.Errorf("audit entry for %q missing", topic)
+		}
 	}
 }
 
