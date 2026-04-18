@@ -40,4 +40,4 @@ audit itself.
 | [2026-04-15-06](2026-04-15-06.md) | Feature-12 fourth-pass audit — empty-`workRoot` fallback test; 6 items dismissed; calibration note recommends moving to feature 13 |
 | [2026-04-15-07](2026-04-15-07.md) | Feature-13 first-pass audit — `ml.resolve_failed` event observer test; 11 items dismissed; recommends feature 14 or 15 next |
 | [2026-04-15-08](2026-04-15-08.md) | Feature-13 second-pass audit — fixed first-dot→last-dot split divergence in `firstFromRef` + `splitFromRef`; 2 test gaps pinned; recants 07's saturation claim |
-| [2026-04-15-09](2026-04-15-09.md) | Feature-14 first-pass audit — `job.unschedulable` `reason`-field observer test; 8 items dismissed; pattern-notes load-bearing event payload fields need observer tests |
+| [2026-04-18-01](2026-04-18-01.md) | Feature-14 first-pass audit — `job.unschedulable` `reason`-field observer test; 8 items dismissed; pattern-notes load-bearing event payload fields need observer tests |
