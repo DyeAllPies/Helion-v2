@@ -40,6 +40,7 @@ Security & code-quality audits, one file per run.
 | [done/2026-04-15-06](done/2026-04-15-06.md) | Feature-12 fourth-pass audit — 1 Test Gap fixed (empty-`workRoot` fallback); six items considered and dismissed; calibration-based recommendation to move on to feature 13 |
 | [done/2026-04-15-07](done/2026-04-15-07.md) | Feature-13 first-pass audit — 1 Test Gap fixed (`ml.resolve_failed` event observer); 11 items dismissed; recommends feature 14 or 15 next |
 | [done/2026-04-15-08](done/2026-04-15-08.md) | Feature-13 second-pass audit — production fix: two sibling `<upstream>.<output>` splitters converted from first-dot to last-dot to match the canonical contract; 1 Low + 2 Test Gaps; recants 07's saturation claim |
+| [done/2026-04-15-09](done/2026-04-15-09.md) | Feature-14 first-pass audit — 1 Test Gap fixed (`job.unschedulable` event `reason`-field observer wiring); 8 items dismissed; generalises the "pin every load-bearing event payload field" pattern |
 
 ## Workflow
 

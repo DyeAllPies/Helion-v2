@@ -113,6 +113,90 @@ func TestDispatch_SelectorNoMatch_EmitsUnschedulable(t *testing.T) {
 	}
 }
 
+// TestDispatch_UnschedulableEvent_ReasonField_Correct pins the wiring
+// between classifyUnschedulable and JobUnschedulable.Data["reason"].
+// The feature-18 Pipelines dashboard uses the reason field to choose
+// between "wait / retry" (no_healthy_node), "operator must add a
+// matching node" (no_matching_label), and "restart stale matching
+// nodes" (all_matching_unhealthy). A regression that passed the wrong
+// constant, or dropped the field entirely, would leave every
+// existing test passing while the dashboard silently misclassified
+// stalls — an invisible UX regression because the event still fires.
+//
+// Drives two reachable cases:
+//   - selector mismatch with healthy nodes present → no_matching_label
+//   - empty registry (no healthy nodes) → no_healthy_node
+//
+// The third reason (all_matching_unhealthy) is covered by the
+// classifyUnschedulable unit test in dispatch_unschedulable_reason_test.go
+// and shares the same emit path, so a separate integration test would
+// duplicate the alarm without exercising new code.
+func TestDispatch_UnschedulableEvent_ReasonField_Correct(t *testing.T) {
+	t.Run("no_matching_label", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		sched, _ := schedulerWithLabeledNodes(t, map[string]string{"role": "cpu"})
+		bus := events.NewBus(16, nil)
+		js := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+		js.SetEventBus(bus)
+		sub := bus.Subscribe(events.TopicJobUnschedulable)
+		defer sub.Cancel()
+
+		nd := &mockNodeDispatcher{}
+		loop := cluster.NewDispatchLoop(js, sched, nd, 20*time.Millisecond, slog.Default())
+
+		_ = js.Submit(ctx, &cpb.Job{
+			ID: "no-match", Command: "echo",
+			NodeSelector: map[string]string{"gpu": "a100"},
+		})
+		go loop.Run(ctx)
+
+		select {
+		case evt := <-sub.C:
+			got, _ := evt.Data["reason"].(string)
+			if got != events.UnschedulableReasonNoMatchingLabel {
+				t.Fatalf("reason: got %q, want %q", got, events.UnschedulableReasonNoMatchingLabel)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected job.unschedulable event")
+		}
+	})
+
+	t.Run("no_healthy_node", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Registry with zero nodes — HealthyNodes() returns empty.
+		r := cluster.NewRegistry(cluster.NopPersister{}, 500*time.Millisecond, nil)
+		sched := cluster.NewScheduler(r, cluster.NewRoundRobinPolicy())
+
+		bus := events.NewBus(16, nil)
+		js := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+		js.SetEventBus(bus)
+		sub := bus.Subscribe(events.TopicJobUnschedulable)
+		defer sub.Cancel()
+
+		nd := &mockNodeDispatcher{}
+		loop := cluster.NewDispatchLoop(js, sched, nd, 20*time.Millisecond, slog.Default())
+
+		// No selector here — we want to reach the no-healthy-nodes branch,
+		// which runs regardless of whether the job had a selector.
+		_ = js.Submit(ctx, &cpb.Job{ID: "stranded", Command: "echo"})
+		go loop.Run(ctx)
+
+		select {
+		case evt := <-sub.C:
+			got, _ := evt.Data["reason"].(string)
+			if got != events.UnschedulableReasonNoHealthyNode {
+				t.Fatalf("reason: got %q, want %q", got, events.UnschedulableReasonNoHealthyNode)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected job.unschedulable event")
+		}
+	})
+}
+
 // TestDispatch_UnschedulableEvent_DebouncedPerJob asserts the event
 // fires at most once within the cooldown window even if the loop
 // ticks many times — otherwise a stuck job would flood the bus.
