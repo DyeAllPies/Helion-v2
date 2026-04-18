@@ -136,6 +136,43 @@ func TestReportServiceEvent_CrossNodeMismatch_Rejected(t *testing.T) {
 	}
 }
 
+// TestReportServiceEvent_EmptyJobId_Rejected pins the InvalidArgument
+// branch at handlers.go:491. Without this check a malformed event
+// (empty JobId) would proceed through the handler: cross-node check
+// skipped (Get("") errors, condition short-circuits), registry's own
+// guard silently drops the upsert, but LogServiceEvent would fire
+// with an empty job_id field — audit-log noise with no corresponding
+// registry entry. The InvalidArgument response is the handler's
+// first-line defense and the only branch that rejects the event
+// cleanly before any side effects.
+func TestReportServiceEvent_EmptyJobId_Rejected(t *testing.T) {
+	js := newMockJobStore()
+	addr, nb, _, _, stop := newServiceEventHarness(t, js, "node-a")
+	t.Cleanup(stop)
+
+	client, err := grpcclient.New(addr, "helion-coordinator", nb)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err = client.ReportServiceEvent(ctx, &pb.ServiceEvent{
+		JobId:  "", // the whole point
+		NodeId: "node-a",
+		Port:   8080,
+		Ready:  true,
+	})
+	if err == nil {
+		t.Fatal("expected InvalidArgument, got nil")
+	}
+	if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", st.Code())
+	}
+}
+
 func TestReportServiceEvent_NilRegistry_SoftAccepts(t *testing.T) {
 	// No WithServiceRegistry — handler should accept the RPC so the
 	// node prober isn't stuck retrying, but drop the payload.

@@ -108,6 +108,36 @@ func TestListServices_NotFoundWhenRegistryUnwired(t *testing.T) {
 	}
 }
 
+// TestGetService_NoAuth_Returns401 pins the authMiddleware wrapper
+// on the services lookup route. Every existing /api/services test
+// uses DisableAuth(), so a regression that dropped
+// `s.authMiddleware(...)` from SetServiceRegistry's route
+// registration would leave the endpoint publicly enumerable —
+// information disclosure (which services run on which jobs) with
+// no existing test catching it. Mirrors the admin-token 401 test
+// shape at handlers_admin_test.go:249.
+func TestGetService_NoAuth_Returns401(t *testing.T) {
+	srv, _ := newAuthServer(t)
+	srv.SetServiceRegistry(cluster.NewServiceRegistry())
+	rr := doWithToken(srv, "GET", "/api/services/any-job", "", "")
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestListServices_NoAuth_Returns401 is the list-endpoint companion.
+// The same authMiddleware wrapper must guard /api/services as
+// guards /api/services/{id} — a refactor that dropped one but not
+// the other could slip past.
+func TestListServices_NoAuth_Returns401(t *testing.T) {
+	srv, _ := newAuthServer(t)
+	srv.SetServiceRegistry(cluster.NewServiceRegistry())
+	rr := doWithToken(srv, "GET", "/api/services", "", "")
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 // TestGetService_IPv6NodeAddress_WrapsBrackets pins the buildUpstreamURL
 // IPv6 branch — NodeAddress like "[::1]:9090" must render as
 // "http://[::1]:<port><path>", not "http://::1:<port><path>" which
