@@ -49,6 +49,7 @@ Security & code-quality audits, one file per run.
 | [done/2026-04-18-07](done/2026-04-18-07.md) | Feature-17 second-pass audit — 2 Test Gaps fixed (audit-package-level `LogServiceEvent` shape + `buildUpstreamURL` IPv6 branch); generalises the "check mocked contracts are tested in isolation elsewhere" rule |
 | [done/2026-04-18-08](done/2026-04-18-08.md) | Feature-17 third-pass audit — 4 Test Gaps fixed (3 unpinned validator branches + `JobResponse.Service` round-trip); confirms "passes find finer gaps" calibration and recommends feature 18 next |
 | [done/2026-04-18-09](done/2026-04-18-09.md) | Feature-17 fourth-pass audit — 3 Test Gaps fixed (two `/api/services` auth-wrapper 401 tests + `ReportServiceEvent` empty-JobId `InvalidArgument`); declares feature-17 saturation, names "first-line defense unpinned" gap class |
+| [done/2026-04-18-10](done/2026-04-18-10.md) | Feature-17 fifth-pass audit — `helion_services_total` Prometheus gauge emission + nil-counter omission; recants pass-09 saturation, generalises "enumerate every consumer surface (HTTP, gRPC, audit, metrics)" |
 
 ## Workflow
 

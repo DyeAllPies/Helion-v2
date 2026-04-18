@@ -191,6 +191,56 @@ func TestNewRegistry_RegistryGauges_OmittedWhenNilCounter(t *testing.T) {
 	}
 }
 
+// mockServiceCounter is the minimal ServiceCounter for scrape tests.
+// Mirrors mockRegistryCounter; satisfies metrics.ServiceCounter via Count().
+type mockServiceCounter struct{ n int }
+
+func (m *mockServiceCounter) Count() int { return m.n }
+
+// TestNewRegistry_ServicesGauge_Emitted pins the feature-17
+// `helion_services_total` gauge emission. The Collector's
+// `if c.services != nil { ... }` branch at prometheus.go:219-221
+// is load-bearing for operational dashboards that track live
+// inference-service count; without this test, a refactor dropping
+// the emission (or the SetServiceCounter wiring) would silently
+// omit the gauge from scrape output. Mirrors
+// TestNewRegistry_RegistryGauges_Emitted's shape.
+func TestNewRegistry_ServicesGauge_Emitted(t *testing.T) {
+	jobs := &mockJobCounter{byStatus: map[string]int{}, total: 0}
+	nodes := &mockNodeCounter{}
+	sc := &mockServiceCounter{n: 4}
+
+	_, handler := metrics.NewRegistry(jobs, nodes, nil, nil, sc)
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+	if !strings.Contains(body, "helion_services_total 4") {
+		t.Errorf("expected helion_services_total 4, body: %s", body)
+	}
+}
+
+// TestNewRegistry_ServicesGauge_OmittedWhenNilCounter is the
+// complementary alarm: a coordinator that never opts into feature
+// 17 (SetServiceCounter(nil) / never called) must not emit the
+// gauge — otherwise dashboards on non-ML deployments would see
+// misleading zeroes. Pins the `if c.services != nil` guard.
+func TestNewRegistry_ServicesGauge_OmittedWhenNilCounter(t *testing.T) {
+	jobs := &mockJobCounter{byStatus: map[string]int{}, total: 0}
+	nodes := &mockNodeCounter{}
+
+	_, handler := metrics.NewRegistry(jobs, nodes, nil, nil, nil)
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+	if strings.Contains(body, "helion_services_total") {
+		t.Errorf("expected no services gauge when counter is nil, body: %s", body)
+	}
+}
+
 func TestNewRegistry_Handler_Returns200(t *testing.T) {
 	jobs := &mockJobCounter{byStatus: map[string]int{}, total: 0}
 	nodes := &mockNodeCounter{}

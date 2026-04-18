@@ -49,3 +49,4 @@ audit itself.
 | [2026-04-18-07](2026-04-18-07.md) | Feature-17 second-pass audit — audit-package-level `LogServiceEvent` shape + `buildUpstreamURL` IPv6 branch; adds "check mocked contracts are tested in isolation elsewhere" rule |
 | [2026-04-18-08](2026-04-18-08.md) | Feature-17 third-pass audit — 3 unpinned validator branches (oversize path / whitespace / oversize grace) + `JobResponse.Service` round-trip; branch-level residuals, recommends feature 18 |
 | [2026-04-18-09](2026-04-18-09.md) | Feature-17 fourth-pass audit — services 401-path pair + `ReportServiceEvent` empty-JobId rejection; declares saturation, names "first-line defense unpinned" gap class |
+| [2026-04-18-10](2026-04-18-10.md) | Feature-17 fifth-pass audit — `helion_services_total` gauge emission + nil-counter omission; recants pass-09 saturation, adds "enumerate every consumer surface" rule |
