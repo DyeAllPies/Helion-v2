@@ -18,12 +18,15 @@ test.describe('Sidebar Navigation', () => {
     await expect(page.locator('.brand-version')).toContainText('v2');
   });
 
-  test('all seven nav items are present', async ({ authedPage: page }) => {
+  test('all eleven nav items are present', async ({ authedPage: page }) => {
+    // 7 core (Nodes/Jobs/Workflows/Events/Metrics/Audit/Analytics) +
+    // 4 ML (Datasets/Models/Services/Pipelines) added by feature 18.
     const navLinks = page.locator('a.nav-link');
-    await expect(navLinks).toHaveCount(7);
+    await expect(navLinks).toHaveCount(11);
 
     const labels = await navLinks.allTextContents();
     const joined = labels.map(l => l.trim().toUpperCase()).join(' ');
+    // Core platform views.
     expect(joined).toContain('NODES');
     expect(joined).toContain('JOBS');
     expect(joined).toContain('WORKFLOWS');
@@ -31,6 +34,11 @@ test.describe('Sidebar Navigation', () => {
     expect(joined).toContain('METRICS');
     expect(joined).toContain('AUDIT');
     expect(joined).toContain('ANALYTICS');
+    // Feature-18 ML module.
+    expect(joined).toContain('DATASETS');
+    expect(joined).toContain('MODELS');
+    expect(joined).toContain('SERVICES');
+    expect(joined).toContain('PIPELINES');
   });
 
   test('nodes link is active when on /nodes', async ({ authedPage: page }) => {

@@ -11,10 +11,24 @@
 // the user's local BadgerDB. Tear down with -v to reset:
 //   docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
 //
-// Video recording: set E2E_VIDEO=1 to record all tests. Videos are saved
-// per-test in test-results/ and can be combined into a single MP4:
-//   find test-results -name "*.webm" | sort | sed 's/^/file /' > concat.txt
-//   ffmpeg -f concat -safe 0 -i concat.txt -c:v libx264 docs/e2e-full-run.mp4
+// Video recording: set E2E_VIDEO=1 to record all tests. Playwright
+// writes one webm per *context*, so the worker-scoped fixture
+// produces one long video covering most specs plus small per-test
+// videos for the `isolatedTest` fixture (login, route guards).
+// Stitch chronologically with ffmpeg:
+//   find test-results -name "*.webm" -printf "%T@ %p\n" | sort -n \
+//     | awk '{print "file '\''" $2 "'\''"}' > concat.txt
+//   ffmpeg -y -f concat -safe 0 -i concat.txt \
+//     -c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p \
+//     -vf 'fps=25,scale=800:450' e2e-full-run.mp4
+//   mv e2e-full-run.mp4 ../docs/e2e-full-run.mp4
+//
+// NOTE: the full suite now includes ml-iris.spec.ts (feature 19)
+// which requires Python-capable nodes. Start the cluster with the
+// iris overlay before recording the full-run video:
+//   COMPOSE_PROFILES=analytics,ml docker compose \
+//     -f ../docker-compose.yml -f ../docker-compose.e2e.yml \
+//     -f ../docker-compose.iris.yml up -d --build
 //
 // Run:  npx playwright test
 // UI:   npx playwright test --ui
@@ -26,8 +40,8 @@ import { defineConfig, devices } from '@playwright/test';
 // Some downstream tests depend on earlier ones (e.g. job detail tests
 // need the job list to work), so cascading failures are expected when
 // a core feature breaks.
-const totalSpecs = 122;
-const maxFailures = Math.ceil(totalSpecs * 0.1); // ~10 failures
+const totalSpecs = 165;
+const maxFailures = Math.ceil(totalSpecs * 0.1); // ~17 failures
 
 export default defineConfig({
   testDir: './e2e/specs',

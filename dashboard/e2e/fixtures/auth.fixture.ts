@@ -32,13 +32,21 @@ export async function authenticate(page: Page): Promise<void> {
 
 /** Map of route paths to sidebar link text for Angular router navigation. */
 const NAV_LINKS: Record<string, string> = {
-  '/nodes':     'Nodes',
-  '/jobs':      'Jobs',
-  '/workflows': 'Workflows',
-  '/events':    'Events',
-  '/metrics':   'Metrics',
-  '/audit':     'Audit',
-  '/analytics': 'Analytics',
+  '/nodes':        'Nodes',
+  '/jobs':         'Jobs',
+  '/workflows':    'Workflows',
+  '/events':       'Events',
+  '/metrics':      'Metrics',
+  '/audit':        'Audit',
+  '/analytics':    'Analytics',
+  // Feature-18 ML module. Before this entry, navigateTo() fell
+  // through for /ml/* routes and re-authenticated, redirecting
+  // to /nodes — any follow-up assertions about being on an ML
+  // page timed out. The iris + ml-artifacts specs use these paths.
+  '/ml/datasets':  'Datasets',
+  '/ml/models':    'Models',
+  '/ml/services':  'Services',
+  '/ml/pipelines': 'Pipelines',
 };
 
 /**
