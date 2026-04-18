@@ -1,10 +1,10 @@
 # Dockerfile.node-python
 #
-# Node image for the iris end-to-end demo (feature 19). Runs the same
-# helion-node agent as Dockerfile.node but with Python 3.11 and the
-# iris pipeline's pip deps pre-installed so subprocess jobs can exec
-# `python ingest.py` / `preprocess.py` / `train.py` / `register.py`
-# / `uvicorn serve:app`.
+# Node image for the ML-pipeline demos (feature 19 iris + feature 21
+# MNIST). Runs the same helion-node agent as Dockerfile.node but with
+# Python 3.11 and the shared pipeline pip deps pre-installed so
+# subprocess jobs can exec `python ingest.py` etc. and `uvicorn
+# serve:app`.
 #
 # The standard Dockerfile.node is alpine + a stripped Go binary (no
 # Python, ~30 MiB). Adding sklearn + pandas + pyarrow pulls ~300 MiB
@@ -12,7 +12,9 @@
 # don't run ML jobs keep the small image.
 #
 # Built by docker-compose.iris.yml on top of the standard compose so
-# the analytics + minio profiles still apply.
+# the analytics + minio profiles still apply. (The overlay name still
+# says "iris" because it predates the MNIST demo; the overlay covers
+# both.)
 
 FROM golang:1.26-alpine AS go-builder
 WORKDIR /app
@@ -28,24 +30,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
-# Iris pipeline deps. Pinned to the requirements.txt the example
-# ships with so the node's Python env matches what the scripts
-# expect.
+# ML pipeline deps. Iris + MNIST requirements.txt are identical
+# (pandas + pyarrow + sklearn + joblib + fastapi/uvicorn/pydantic +
+# pyyaml); install once from the iris file so both demos are ready.
+# The MNIST requirements.txt is kept as a parallel file so operators
+# can pin MNIST-specific versions independently if needed.
 COPY examples/ml-iris/requirements.txt /tmp/iris-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/iris-requirements.txt
 
-# Copy the iris example scripts to /app/ml-iris so jobs can reference
-# them by a relative path — the node's working directory per job is
-# its stager-assigned workdir, but the job spec runs `python
-# ingest.py` which resolves `ingest.py` via PYTHONPATH or CWD. We
-# set PYTHONPATH below so the scripts are importable regardless of
-# which workdir the Stager picks.
-COPY examples/ml-iris/ingest.py     /app/ml-iris/ingest.py
-COPY examples/ml-iris/preprocess.py /app/ml-iris/preprocess.py
-COPY examples/ml-iris/train.py      /app/ml-iris/train.py
-COPY examples/ml-iris/register.py   /app/ml-iris/register.py
-COPY examples/ml-iris/serve.py      /app/ml-iris/serve.py
-ENV PYTHONPATH=/app/ml-iris
+# Copy both demos' scripts into the image. Jobs reference them by
+# absolute path from workflow.yaml (the node's per-job working
+# directory is the Stager workdir, not /app/ml-*, so relative
+# `python foo.py` wouldn't find them). Service jobs use
+# `uvicorn serve:app` with PYTHONPATH set per-job via the job's env
+# block — NOT from this ENV directive — because the Go runtime
+# builds the subprocess env from req.Env only, not from the node's
+# env. The ENV below is kept as documentation / host-debug hint.
+COPY examples/ml-iris/ingest.py      /app/ml-iris/ingest.py
+COPY examples/ml-iris/preprocess.py  /app/ml-iris/preprocess.py
+COPY examples/ml-iris/train.py       /app/ml-iris/train.py
+COPY examples/ml-iris/register.py    /app/ml-iris/register.py
+COPY examples/ml-iris/serve.py       /app/ml-iris/serve.py
+COPY examples/ml-mnist/ingest.py     /app/ml-mnist/ingest.py
+COPY examples/ml-mnist/preprocess.py /app/ml-mnist/preprocess.py
+COPY examples/ml-mnist/train.py      /app/ml-mnist/train.py
+COPY examples/ml-mnist/register.py   /app/ml-mnist/register.py
+COPY examples/ml-mnist/serve.py      /app/ml-mnist/serve.py
+ENV PYTHONPATH=/app/ml-iris:/app/ml-mnist
 
 # UID/GID must match Dockerfile.coordinator (alpine adduser -S
 # allocates helion=100:101) so the shared /app/state named volume

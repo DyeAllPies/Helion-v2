@@ -17,6 +17,36 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
+// minDispatchRPCTimeout is the floor timeout for a Dispatch RPC when
+// the job hasn't declared a TimeoutSeconds. It also covers dial +
+// connection setup. Kept at the original 10 s so any job with no
+// declared timeout behaves like it did before feature 21.
+const minDispatchRPCTimeout = 10 * time.Second
+
+// dispatchRPCBuffer is the slack added on top of job.TimeoutSeconds
+// for the Dispatch RPC: the node's Dispatch handler runs the job
+// synchronously then has to upload outputs, stream stdout/stderr,
+// and ReportResult before returning the ACK. 30 s covers those on
+// every pipeline we've profiled (iris, MNIST, GPU tests).
+const dispatchRPCBuffer = 30 * time.Second
+
+// dispatchRPCTimeout picks the Dispatch RPC timeout for a job. Batch
+// jobs with a declared TimeoutSeconds get TimeoutSeconds + buffer —
+// the node Dispatch handler blocks on rt.Run until the subprocess
+// exits, so a fixed short timeout would cancel any job whose runtime
+// exceeds it (this is how MNIST ingest + train used to get killed at
+// the 10 s mark). Service jobs ACK immediately from a goroutine, so
+// the floor is fine. Jobs with no TimeoutSeconds also use the floor.
+func dispatchRPCTimeout(job *cpb.Job) time.Duration {
+	if job.Service != nil {
+		return minDispatchRPCTimeout
+	}
+	if job.TimeoutSeconds <= 0 {
+		return minDispatchRPCTimeout
+	}
+	return time.Duration(job.TimeoutSeconds)*time.Second + dispatchRPCBuffer
+}
+
 // GRPCNodeDispatcher dispatches jobs to nodes via gRPC.
 type GRPCNodeDispatcher struct {
 	tlsCfg *tls.Config // coordinator's client TLS config for dialing nodes
@@ -48,8 +78,9 @@ func bindingsToProto(bs []cpb.ArtifactBinding) []*pb.ArtifactBinding {
 }
 
 // DispatchToNode sends a job to the node at nodeAddr via gRPC Dispatch RPC.
+// See dispatchRPCTimeout above for the timeout-derivation reasoning.
 func (d *GRPCNodeDispatcher) DispatchToNode(ctx context.Context, nodeAddr string, job *cpb.Job) error {
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	rpcCtx, cancel := context.WithTimeout(ctx, dispatchRPCTimeout(job))
 	defer cancel()
 
 	creds := credentials.NewTLS(d.tlsCfg)
@@ -83,7 +114,7 @@ func (d *GRPCNodeDispatcher) DispatchToNode(ctx context.Context, nodeAddr string
 		}
 	}
 
-	ack, err := client.Dispatch(dialCtx, req)
+	ack, err := client.Dispatch(rpcCtx, req)
 	if err != nil {
 		return fmt.Errorf("Dispatch RPC to %s: %w", nodeAddr, err)
 	}

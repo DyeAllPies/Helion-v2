@@ -1,0 +1,15 @@
+# Same runtime deps as the iris demo. Kept as a separate file so
+# operators can pin MNIST-specific versions independently if needed.
+# Versions are minimum-bound — the example isn't pinning a
+# reproducible research environment, it's smoke-testing Helion's
+# ML plumbing against a heavier workload than iris.
+
+pandas>=2.0
+pyarrow>=14.0
+scikit-learn>=1.3
+joblib>=1.3
+numpy>=1.24
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+pyyaml>=6.0

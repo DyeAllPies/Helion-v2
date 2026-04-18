@@ -1,0 +1,77 @@
+# MNIST-784 end-to-end workflow — ingest → preprocess → train → register.
+#
+# Heavier sibling of the iris demo (examples/ml-iris/workflow.yaml).
+# MNIST training on 5 000 subsampled rows × 784 features takes ~10–30 s
+# in LogisticRegression — enough to observe the pipeline transitioning
+# pending → dispatching → running → completed on the Pipelines list.
+# The local-only Playwright spec
+# (dashboard/e2e/specs/ml-mnist-live.spec.ts) drives exactly this.
+#
+# `serve.py` is submitted separately once the workflow completes
+# because a service job never reaches a terminal state and would
+# block the DAG.
+
+id: mnist-wf-1
+name: mnist-end-to-end
+priority: 50
+
+jobs:
+  - name: ingest
+    command: python
+    args: [/app/ml-mnist/ingest.py]
+    timeout_seconds: 180           # OpenML fetch ~11 MB; first run is slowest
+    outputs:
+      - name: RAW_CSV
+        local_path: raw.csv
+
+  - name: preprocess
+    command: python
+    args: [/app/ml-mnist/preprocess.py]
+    timeout_seconds: 60
+    depends_on: [ingest]
+    inputs:
+      - name: RAW_CSV
+        from: ingest.RAW_CSV
+        local_path: raw.csv
+    outputs:
+      - name: TRAIN_PARQUET
+        local_path: train.parquet
+      - name: TEST_PARQUET
+        local_path: test.parquet
+
+  - name: train
+    command: python
+    args: [/app/ml-mnist/train.py]
+    timeout_seconds: 180
+    depends_on: [preprocess]
+    inputs:
+      - name: TRAIN_PARQUET
+        from: preprocess.TRAIN_PARQUET
+        local_path: train.parquet
+      - name: TEST_PARQUET
+        from: preprocess.TEST_PARQUET
+        local_path: test.parquet
+    outputs:
+      - name: MODEL
+        local_path: model.joblib
+      - name: METRICS
+        local_path: metrics.json
+
+  - name: register
+    command: python
+    args: [/app/ml-mnist/register.py]
+    timeout_seconds: 60
+    depends_on: [train]
+    env:
+      HELION_WORKFLOW_ID: mnist-wf-1
+      HELION_TRAIN_JOB_NAME: train
+    inputs:
+      - name: RAW_CSV
+        from: ingest.RAW_CSV
+        local_path: raw.csv
+      - name: MODEL
+        from: train.MODEL
+        local_path: model.joblib
+      - name: METRICS
+        from: train.METRICS
+        local_path: metrics.json

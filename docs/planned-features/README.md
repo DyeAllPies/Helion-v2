@@ -36,6 +36,7 @@ relates to `audits/` and `deferred/`.
 | ~~18~~ | ~~ML — Dashboard module~~ | **Implemented + audited**; moved to [`implemented/18-ml-dashboard-module.md`](implemented/18-ml-dashboard-module.md) | P2 | — |
 | ~~19~~ | ~~ML — End-to-end iris demo~~ | **Implemented + acceptance-green (2026-04-18)**; moved to [`implemented/19-ml-end-to-end-demo.md`](implemented/19-ml-end-to-end-demo.md) | P1 | — |
 | ~~20~~ | ~~ML — Documentation~~ | **Implemented**; moved to [`implemented/20-ml-documentation.md`](implemented/20-ml-documentation.md) | P2 | — |
+| ~~21~~ | ~~ML — MNIST local E2E (progression-observing)~~ | **Implemented** (six tests green locally; also fixed a hidden 10 s dispatch RPC ceiling); moved to [`implemented/21-ml-mnist-e2e-local.md`](implemented/21-ml-mnist-e2e-local.md) | P2 | — |
 
 ### Priority definitions
 
