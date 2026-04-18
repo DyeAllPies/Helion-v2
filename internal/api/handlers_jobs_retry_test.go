@@ -190,6 +190,39 @@ func TestSubmitJob_WithResources_Returns201(t *testing.T) {
 	}
 }
 
+// TestSubmitJob_GPUsAtMax_Returns201 pins the maxGPUs = 16 boundary
+// as accepted (feature-15 ResourceRequest.GPUs cap). Mirrors the
+// priority / workflow-job-count pattern: one test for the inclusive
+// upper bound, one for the first rejected value. Without these,
+// an off-by-one flip from > to >= in validateSubmitRequest would
+// silently reject every 16-GPU request while every existing
+// resources test (which uses 0–2 GPUs) stayed green.
+func TestSubmitJob_GPUsAtMax_Returns201(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{
+		"id": "gpu-16",
+		"command": "echo",
+		"resources": {"gpus": 16}
+	}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 at maxGPUs boundary; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSubmitJob_GPUsExceedsMax_Returns400(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{
+		"id": "gpu-17",
+		"command": "echo",
+		"resources": {"gpus": 17}
+	}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for gpus > maxGPUs; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestCancelJobAPI_AlreadyTerminal_Returns409(t *testing.T) {
 	store := newMockJobStore()
 	srv := newServer(store, nil, nil)
