@@ -9,6 +9,7 @@ package registry
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -169,10 +170,14 @@ func ValidateMetrics(metrics map[string]float64) error {
 		// NaN and ±Inf can't round-trip through the JSON encoder
 		// (encoding/json rejects them). Catch here with a clearer
 		// error message than the handler would otherwise surface.
-		if v != v { // NaN check
+		// Use math.IsNaN / math.IsInf explicitly so finite values
+		// near MaxFloat64 (≈1.8e308) are accepted — a prior check
+		// used `v > 1e308 || v < -1e308` which spuriously rejected
+		// any finite metric above 1e308.
+		if math.IsNaN(v) {
 			return fmt.Errorf("metric %q is NaN", k)
 		}
-		if v > 1e308 || v < -1e308 {
+		if math.IsInf(v, 0) {
 			return fmt.Errorf("metric %q is infinite", k)
 		}
 	}

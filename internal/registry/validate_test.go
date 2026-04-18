@@ -117,6 +117,26 @@ func TestValidateMetrics(t *testing.T) {
 	}
 }
 
+// TestValidateMetrics_FiniteExtremesAccepted pins the boundary
+// between "finite, round-trips through JSON" and "infinite, breaks
+// JSON". The validator's comment promises to reject only NaN and
+// ±Inf; an earlier implementation used `v > 1e308 || v < -1e308`
+// which spuriously rejected finite metrics above 1e308 (MaxFloat64
+// ≈ 1.798e308 falls in that window). Fix switched to math.IsInf.
+// Without this test, a refactor that reintroduced the threshold
+// check would slip past — all existing metric tests use values
+// in [-1, 1].
+func TestValidateMetrics_FiniteExtremesAccepted(t *testing.T) {
+	cases := map[string]float64{
+		"max":  math.MaxFloat64,
+		"nmax": -math.MaxFloat64,
+		"big":  1.5e308, // between 1e308 and MaxFloat64 — the regression window
+	}
+	if err := ValidateMetrics(cases); err != nil {
+		t.Fatalf("finite extremes should validate: %v", err)
+	}
+}
+
 // ── Composed validators ────────────────────────────────────────────────
 
 func TestValidateDataset_HappyAndPartialLineage(t *testing.T) {

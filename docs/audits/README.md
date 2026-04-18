@@ -43,6 +43,7 @@ Security & code-quality audits, one file per run.
 | [done/2026-04-18-01](done/2026-04-18-01.md) | Feature-14 first-pass audit — 1 Test Gap fixed (`job.unschedulable` event `reason`-field observer wiring); 8 items dismissed; generalises the "pin every load-bearing event payload field" pattern |
 | [done/2026-04-18-02](done/2026-04-18-02.md) | Feature-15 first-pass audit — 1 Test Gap fixed (`maxGPUs = 16` API validator boundary pair); 9 items dismissed; recommends feature 18 next given cross-cutting observability threads |
 | [done/2026-04-18-03](done/2026-04-18-03.md) | Feature-16 first-pass audit — 3 Test Gaps fixed (rate-limit 429 + 1 MiB body cap + `model.registered` lineage event observer); 10 items dismissed |
+| [done/2026-04-18-04](done/2026-04-18-04.md) | Feature-16 second-pass audit — production fix: `ValidateMetrics` switched from 1e308 threshold to `math.IsInf` so finite-extreme values (MaxFloat64) validate cleanly; 1 Low + 1 Test Gap; recants audit 03's metrics dismissal |
 
 ## Workflow
 
