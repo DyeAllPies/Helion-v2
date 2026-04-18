@@ -53,3 +53,4 @@ audit itself.
 | [2026-04-18-11](2026-04-18-11.md) | Feature-17 sixth-pass audit — `Job.Service` persistence roundtrip + forward-compat; recants pass-10 saturation, extends rule to cover producer surfaces |
 | [2026-04-18-12](2026-04-18-12.md) | Feature-17 seventh-pass audit — `GoRuntime` IsService no-timeout branch (pass-06 wrongly dismissed); adds cross-package contract-verification rule |
 | [2026-04-18-13](2026-04-18-13.md) | Feature-18 first-pass audit — HTTP-layer tests for `/workflows/{id}/lineage` (401 / 404 / happy path); handler was library-tested only |
+| [2026-04-18-14](2026-04-18-14.md) | Feature-18 second-pass audit — Registry `Snapshot`/`HealthyNodes` stale-inclusion divergence (load-bearing for `all_matching_unhealthy` reason); adds "drill from event field back to data-structure invariant" rule |

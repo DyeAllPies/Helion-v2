@@ -53,6 +53,7 @@ Security & code-quality audits, one file per run.
 | [done/2026-04-18-11](done/2026-04-18-11.md) | Feature-17 sixth-pass audit — `Job.Service` BadgerDB Save→LoadAll roundtrip + forward-compat; recants pass-10 saturation, extends the rule to cover producer surfaces (persistence) |
 | [done/2026-04-18-12](done/2026-04-18-12.md) | Feature-17 seventh-pass audit — `GoRuntime` IsService no-timeout branch (pass-06 dismissed as covered; wasn't); adds "grep feature identifiers in every package's tests" rule |
 | [done/2026-04-18-13](done/2026-04-18-13.md) | Feature-18 first-pass audit — 3 HTTP-layer tests for `GET /workflows/{id}/lineage` (401, 404, happy); Pipelines DAG endpoint was only tested at the library layer |
+| [done/2026-04-18-14](done/2026-04-18-14.md) | Feature-18 second-pass audit — `Registry.Snapshot()` vs `HealthyNodes()` stale-inclusion divergence invariant (load-bearing for `all_matching_unhealthy` reason classification); adds "trace event field's origin through data structure" drilling rule |
 
 ## Workflow
 

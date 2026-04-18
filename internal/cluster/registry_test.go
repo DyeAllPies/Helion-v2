@@ -220,6 +220,60 @@ func TestSnapshot_IncludesAll(t *testing.T) {
 	}
 }
 
+// TestSnapshot_IncludesUnhealthy_HealthyNodesExcludes pins the
+// feature-18 invariant that Registry.Snapshot() and
+// Registry.HealthyNodes() diverge: Snapshot includes stale/unhealthy
+// nodes, HealthyNodes filters them out. The dispatch loop's
+// classifyUnschedulable relies on this divergence to distinguish
+// UnschedulableReasonAllMatchingStale (there IS a matching node,
+// it's just unhealthy) from UnschedulableReasonNoMatchingLabel
+// (no node advertises the requested labels at all). A regression
+// that made Snapshot identical to HealthyNodes — for example a
+// refactor consolidating the two methods — would silently break
+// the dashboard's triage signal while every existing classify
+// unit test still passed (they pass hand-crafted snapshots
+// directly, bypassing the Registry).
+//
+// Without this test the only signal of the regression would be
+// operators on misleading dashboards trying to add new nodes
+// when the real fix is restarting stale ones.
+func TestSnapshot_IncludesUnhealthy_HealthyNodesExcludes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping sleep-based stale test in -short mode")
+	}
+	r := newRegistry(t)
+	registerNode(t, r, "fresh", "10.0.0.1:8080")
+	registerNode(t, r, "stale", "10.0.0.2:8080")
+
+	// Wait past staleAfter so both nodes would be stale. Then
+	// refresh only "fresh" with a heartbeat so "stale" stays past
+	// the staleAfter boundary.
+	time.Sleep(2*testInterval + 10*time.Millisecond)
+	sendHeartbeat(t, r, "fresh", 0)
+
+	snap := r.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("Snapshot: got %d nodes, want 2 (fresh + stale)", len(snap))
+	}
+	var snapHasStale bool
+	for _, n := range snap {
+		if n.NodeID == "stale" {
+			snapHasStale = true
+			if n.Healthy {
+				t.Errorf("stale node reported Healthy=true in Snapshot")
+			}
+		}
+	}
+	if !snapHasStale {
+		t.Fatal("Snapshot must include the stale node — feature-18 classifyUnschedulable depends on it")
+	}
+
+	healthy := r.HealthyNodes()
+	if len(healthy) != 1 || healthy[0].NodeID != "fresh" {
+		t.Fatalf("HealthyNodes: got %d, want only fresh; nodes=%+v", len(healthy), healthy)
+	}
+}
+
 // ── PruneStaleNodes ───────────────────────────────────────────────────────────
 
 func TestPruneStaleNodes_IdentifiesStale(t *testing.T) {
