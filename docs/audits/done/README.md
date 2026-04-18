@@ -42,3 +42,4 @@ audit itself.
 | [2026-04-15-08](2026-04-15-08.md) | Feature-13 second-pass audit — fixed first-dot→last-dot split divergence in `firstFromRef` + `splitFromRef`; 2 test gaps pinned; recants 07's saturation claim |
 | [2026-04-18-01](2026-04-18-01.md) | Feature-14 first-pass audit — `job.unschedulable` `reason`-field observer test; 8 items dismissed; pattern-notes load-bearing event payload fields need observer tests |
 | [2026-04-18-02](2026-04-18-02.md) | Feature-15 first-pass audit — `maxGPUs = 16` API-validator boundary pair; 9 items dismissed; recommends feature 18 next |
+| [2026-04-18-03](2026-04-18-03.md) | Feature-16 first-pass audit — registry rate-limit 429 + 1 MiB body cap + `model.registered` lineage event observer; 10 items dismissed |

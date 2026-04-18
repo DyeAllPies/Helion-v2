@@ -264,6 +264,104 @@ func TestRegistry_Model_DeletePublishesEvent(t *testing.T) {
 	}
 }
 
+// TestRegistry_Model_RegisterPublishesEvent pins the
+// `model.registered` event payload, which carries the lineage
+// fields (source_job_id + source_dataset) that the analytics
+// pipeline uses to build the training graph. The companion
+// dataset-register event test asserts only name/version/size; the
+// model-register event was entirely unpinned before this one, so a
+// refactor that dropped the lineage half of ModelRegistered (the
+// `if sourceJobID != ""` block) would leave the graph silently
+// blank while every existing registry test stayed green. Same
+// silent-regression class as audits 2026-04-15-07 (ml.resolve_failed
+// observer) and 2026-04-18-01 (job.unschedulable reason).
+func TestRegistry_Model_RegisterPublishesEvent(t *testing.T) {
+	srv, bus := newRegistryServerWithBus(t)
+	sub := bus.Subscribe(events.TopicModelRegistered)
+	defer sub.Cancel()
+
+	_ = do(srv, "POST", "/api/models", `{
+		"name": "resnet",
+		"version": "v0.1",
+		"uri": "s3://helion/jobs/train/out/model.pt",
+		"framework": "pytorch",
+		"source_job_id": "train-1",
+		"source_dataset": {"name": "imagenet", "version": "v2"}
+	}`)
+
+	select {
+	case evt := <-sub.C:
+		if evt.Data["name"] != "resnet" || evt.Data["version"] != "v0.1" {
+			t.Fatalf("event name/version: %+v", evt.Data)
+		}
+		if evt.Data["uri"] != "s3://helion/jobs/train/out/model.pt" {
+			t.Errorf("event uri: %v", evt.Data["uri"])
+		}
+		// Auth is disabled in the test server; actor is "anonymous".
+		if evt.Data["actor"] != "anonymous" {
+			t.Errorf("event actor: %v", evt.Data["actor"])
+		}
+		if evt.Data["source_job_id"] != "train-1" {
+			t.Errorf("event source_job_id: %v", evt.Data["source_job_id"])
+		}
+		ds, _ := evt.Data["source_dataset"].(map[string]string)
+		if ds["name"] != "imagenet" || ds["version"] != "v2" {
+			t.Errorf("event source_dataset: %+v", evt.Data["source_dataset"])
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("no model.registered event")
+	}
+}
+
+// TestRegistry_OversizedBody_Returns400 pins the 1 MiB POST cap
+// shared with job submit. Without a test, a caller could stream
+// multi-MiB free-form tags before validation runs. Matches the
+// job-submit oversize test shape so regressions in
+// maxSubmitBodyBytes wiring get caught uniformly across all
+// registry POST handlers. Datasets and models share the same cap
+// via the handlers' `http.MaxBytesReader` calls at lines 83 +
+// 234; the dataset path is representative.
+func TestRegistry_OversizedBody_Returns400(t *testing.T) {
+	srv := newRegistryServer(t)
+
+	prefix := `{"name":"big","version":"v1","uri":"s3://b/k","tags":{"x":"`
+	suffix := `"}}`
+	padding := strings.Repeat("x", 1<<20+1) // just over 1 MiB
+	body := prefix + padding + suffix
+
+	rr := do(srv, "POST", "/api/datasets", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("oversized body: want 400, got %d", rr.Code)
+	}
+}
+
+// TestRegistry_RateLimit_ExcessReturns429 pins the per-subject
+// registryQueryAllow limiter (2 rps burst 30). Without this test,
+// a refactor that broke the preflight ordering (limiter check
+// before handler logic) would expose registry writes to
+// unlimited hammer requests — and every existing success test
+// stays under the burst so nothing would trip. Mirrors the
+// analytics `TestAnalytics_RateLimit_ExcessReturns429` shape.
+func TestRegistry_RateLimit_ExcessReturns429(t *testing.T) {
+	srv := newRegistryServer(t)
+
+	// Burst is 30; send 100 GETs to exhaust and see at least one
+	// 429. Use GET /api/datasets (list endpoint) because POST
+	// would also spend cycles through validation and the body
+	// cap — the limiter sits before both.
+	seen429 := false
+	for i := 0; i < 100; i++ {
+		rr := do(srv, "GET", "/api/datasets", "")
+		if rr.Code == http.StatusTooManyRequests {
+			seen429 = true
+			break
+		}
+	}
+	if !seen429 {
+		t.Error("expected at least one 429 after exhausting registryQueryAllow burst")
+	}
+}
+
 // ── Gating ─────────────────────────────────────────────────────────────
 
 func TestRegistry_Gated_WhenStoreNotWired(t *testing.T) {
