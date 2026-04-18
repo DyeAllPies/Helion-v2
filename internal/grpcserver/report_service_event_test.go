@@ -59,7 +59,7 @@ func TestReportServiceEvent_UpsertsRegistry(t *testing.T) {
 	js := newMockJobStore()
 	js.jobs["svc-1"] = &cpb.Job{ID: "svc-1", NodeID: "node-a"}
 
-	addr, nb, sr, _, stop := newServiceEventHarness(t, js, "node-a")
+	addr, nb, sr, al, stop := newServiceEventHarness(t, js, "node-a")
 	t.Cleanup(stop)
 
 	client, err := grpcclient.New(addr, "helion-coordinator", nb)
@@ -88,6 +88,14 @@ func TestReportServiceEvent_UpsertsRegistry(t *testing.T) {
 	}
 	if !ep.Ready || ep.Port != 8080 {
 		t.Fatalf("unexpected entry: %+v", ep)
+	}
+	// LogServiceEvent must fire on every accepted event — it's the
+	// compliance trail for readiness transitions. A regression that
+	// dropped the `if s.audit != nil { s.audit.LogServiceEvent(...) }`
+	// block at handlers.go:545-551 would break the audit trail
+	// silently; the registry upsert above would still succeed.
+	if al.serviceEvents != 1 {
+		t.Errorf("audit LogServiceEvent: got %d calls, want 1", al.serviceEvents)
 	}
 }
 

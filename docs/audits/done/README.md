@@ -45,3 +45,4 @@ audit itself.
 | [2026-04-18-03](2026-04-18-03.md) | Feature-16 first-pass audit — registry rate-limit 429 + 1 MiB body cap + `model.registered` lineage event observer; 10 items dismissed |
 | [2026-04-18-04](2026-04-18-04.md) | Feature-16 second-pass audit — `ValidateMetrics` switched to `math.IsInf` so MaxFloat64 validates; 1 Low + 1 Test Gap; recants prior metrics dismissal |
 | [2026-04-18-05](2026-04-18-05.md) | Feature-16 third-pass audit — audit-log observer covering all four registry emissions (dataset/model × register/delete); generalises side-effect emission playbook |
+| [2026-04-18-06](2026-04-18-06.md) | Feature-17 first-pass audit — prober edge-trigger state machine + `LogServiceEvent` observer via integration test; adds "long-running goroutines need multi-tick tests" rule |

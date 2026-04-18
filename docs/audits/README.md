@@ -45,6 +45,7 @@ Security & code-quality audits, one file per run.
 | [done/2026-04-18-03](done/2026-04-18-03.md) | Feature-16 first-pass audit — 3 Test Gaps fixed (rate-limit 429 + 1 MiB body cap + `model.registered` lineage event observer); 10 items dismissed |
 | [done/2026-04-18-04](done/2026-04-18-04.md) | Feature-16 second-pass audit — production fix: `ValidateMetrics` switched from 1e308 threshold to `math.IsInf` so finite-extreme values (MaxFloat64) validate cleanly; 1 Low + 1 Test Gap; recants audit 03's metrics dismissal |
 | [done/2026-04-18-05](done/2026-04-18-05.md) | Feature-16 third-pass audit — audit-log observer for all four registry emissions (dataset/model × register/delete); generalises side-effect emission playbook across bus-event + audit-log paths |
+| [done/2026-04-18-06](done/2026-04-18-06.md) | Feature-17 first-pass audit — 3 Test Gaps fixed (prober edge-trigger state machine via integration test + `LogServiceEvent` observer); generalises the "long-running goroutines need multi-tick integration tests" rule |
 
 ## Workflow
 
