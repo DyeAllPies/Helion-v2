@@ -1,0 +1,64 @@
+# Dockerfile.node-python
+#
+# Node image for the iris end-to-end demo (feature 19). Runs the same
+# helion-node agent as Dockerfile.node but with Python 3.11 and the
+# iris pipeline's pip deps pre-installed so subprocess jobs can exec
+# `python ingest.py` / `preprocess.py` / `train.py` / `register.py`
+# / `uvicorn serve:app`.
+#
+# The standard Dockerfile.node is alpine + a stripped Go binary (no
+# Python, ~30 MiB). Adding sklearn + pandas + pyarrow pulls ~300 MiB
+# of wheels, so this image is intentionally separate — operators who
+# don't run ML jobs keep the small image.
+#
+# Built by docker-compose.iris.yml on top of the standard compose so
+# the analytics + minio profiles still apply.
+
+FROM golang:1.26-alpine AS go-builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /helion-node ./cmd/helion-node
+
+FROM python:3.11-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    netcat-openbsd \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+
+# Iris pipeline deps. Pinned to the requirements.txt the example
+# ships with so the node's Python env matches what the scripts
+# expect.
+COPY examples/ml-iris/requirements.txt /tmp/iris-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/iris-requirements.txt
+
+# Copy the iris example scripts to /app/ml-iris so jobs can reference
+# them by a relative path — the node's working directory per job is
+# its stager-assigned workdir, but the job spec runs `python
+# ingest.py` which resolves `ingest.py` via PYTHONPATH or CWD. We
+# set PYTHONPATH below so the scripts are importable regardless of
+# which workdir the Stager picks.
+COPY examples/ml-iris/ingest.py     /app/ml-iris/ingest.py
+COPY examples/ml-iris/preprocess.py /app/ml-iris/preprocess.py
+COPY examples/ml-iris/train.py      /app/ml-iris/train.py
+COPY examples/ml-iris/register.py   /app/ml-iris/register.py
+COPY examples/ml-iris/serve.py      /app/ml-iris/serve.py
+ENV PYTHONPATH=/app/ml-iris
+
+# UID/GID must match Dockerfile.coordinator (alpine adduser -S
+# allocates helion=100:101) so the shared /app/state named volume
+# is readable by both containers. Without this alignment the
+# coordinator's first BadgerDB write fails with "permission denied"
+# because the node (debian useradd -r defaults to 999) created the
+# volume mountpoint first.
+RUN groupadd -g 101 helion && useradd -u 100 -g 101 -M helion
+COPY --from=go-builder /helion-node /usr/local/bin/helion-node
+
+RUN mkdir -p /app/state && chown helion:helion /app/state
+USER helion
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+  CMD nc -z localhost 8080 || exit 1
+ENTRYPOINT ["/usr/local/bin/helion-node"]

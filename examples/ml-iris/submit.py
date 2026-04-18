@@ -78,6 +78,27 @@ def _read_yaml(path: str) -> dict:
     return spec
 
 
+def _inject_api_env(spec: dict, api_url: str, token: str) -> None:
+    """Inject HELION_API_URL + HELION_TOKEN into every workflow job's
+    env block so in-workflow scripts (register.py) can POST back to
+    the coordinator. The Go runtime does not forward node-agent env
+    to subprocess jobs — only the job spec's declared env reaches
+    them — so the submitter owns credential plumbing.
+
+    Security: HELION_TOKEN in every job's env is a known demo
+    tradeoff. Per the feature-19 spec's security plan ("no new trust
+    boundary"), the operator submits their own credentials to their
+    own cluster; jobs running on that cluster already execute
+    operator-supplied commands. Production deployments would use a
+    per-job scoped token instead of the root one.
+    """
+    jobs = spec.get("jobs", [])
+    for job in jobs:
+        env = job.setdefault("env", {})
+        env.setdefault("HELION_API_URL", api_url)
+        env.setdefault("HELION_TOKEN", token)
+
+
 def _poll_until_terminal(base: str, token: str, wf_id: str, timeout_s: int = 600) -> str:
     """Poll GET /workflows/{id} every 2s until Status leaves the
     running set. Returns the terminal status string so the caller
@@ -141,14 +162,26 @@ def main() -> int:
                     help="seconds to wait for the workflow to terminate (default 600)")
     args = ap.parse_args()
 
-    base = os.environ.get("HELION_COORDINATOR")
+    # HELION_API_URL wins if set; otherwise accept HELION_COORDINATOR
+    # when it's an http(s):// URL. submit.py runs from the operator's
+    # laptop where HELION_COORDINATOR is conventionally the HTTP URL,
+    # so the fallback keeps the documented one-env-var workflow.
+    base = os.environ.get("HELION_API_URL") or os.environ.get("HELION_COORDINATOR")
     token = os.environ.get("HELION_TOKEN")
     if not base or not token:
-        print("HELION_COORDINATOR and HELION_TOKEN must both be set",
+        print("HELION_API_URL (or HELION_COORDINATOR) and HELION_TOKEN must both be set",
               file=sys.stderr)
         return 1
 
     spec = _read_yaml(args.workflow_yaml)
+
+    # The URL that jobs running INSIDE the cluster use to call back
+    # to the coordinator. Defaults to HELION_API_URL (host-visible)
+    # but for docker-compose demos the submitter runs on the host
+    # and the jobs run in-cluster, so the container-visible URL
+    # (e.g. http://coordinator:8080) needs to be different.
+    job_api_url = os.environ.get("HELION_JOB_API_URL") or base
+    _inject_api_env(spec, job_api_url, token)
 
     try:
         print(f"submitting workflow {spec.get('id', '<unnamed>')}…")

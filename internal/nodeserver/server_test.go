@@ -89,6 +89,76 @@ func TestDispatch_Success(t *testing.T) {
 	}
 }
 
+// TestDispatch_ServiceJob_ReturnsAckImmediately pins the feature-19
+// acceptance-run fix: service jobs must ACK the Dispatch RPC before
+// the runtime finishes, otherwise the coordinator's 10-second dial
+// deadline kills every service launch with DeadlineExceeded. The
+// node forks the runtime + prober into a background goroutine; the
+// RPC returns Accepted=true right after Prepare completes.
+//
+// Without this guard, the iris demo's `docker compose up` path
+// submits a service job via POST /jobs, the coordinator dispatches
+// it, the node's Dispatch handler blocks on rt.Run (which never
+// returns for IsService=true), the coordinator times out after 10s,
+// and the job lands in Failed with "context deadline exceeded".
+// That's exactly the symptom the acceptance run surfaced before the
+// background-run split.
+//
+// The mock runtime here blocks on a channel to simulate a long-
+// running service. Before the fix, Dispatch would block on this
+// channel too; now it returns within the test's 2s timeout.
+func TestDispatch_ServiceJob_ReturnsAckImmediately(t *testing.T) {
+	// Runtime that blocks until released — mimics IsService=true
+	// keeping the subprocess alive indefinitely.
+	blocked := make(chan struct{})
+	rt := &blockingServiceRuntime{release: blocked}
+	srv := newServer(rt)
+
+	done := make(chan *pb.DispatchAck, 1)
+	go func() {
+		ack, err := srv.Dispatch(context.Background(), &pb.DispatchRequest{
+			JobId:   "svc",
+			Command: "/bin/true",
+			Service: &pb.ServiceSpec{
+				Port:       8080,
+				HealthPath: "/healthz",
+			},
+		})
+		if err != nil {
+			t.Errorf("Dispatch: %v", err)
+		}
+		done <- ack
+	}()
+
+	select {
+	case ack := <-done:
+		if !ack.Accepted {
+			t.Fatalf("service Dispatch should ACK Accepted=true; got error=%q", ack.Error)
+		}
+	case <-time.After(2 * time.Second):
+		close(blocked) // unblock the goroutine so the test exits cleanly
+		t.Fatal("service Dispatch blocked on rt.Run — background-run fix regressed")
+	}
+	close(blocked)
+}
+
+// blockingServiceRuntime's Run blocks on a channel until release is
+// closed, simulating a long-running service whose runtime.Run would
+// never return on its own.
+type blockingServiceRuntime struct {
+	release chan struct{}
+}
+
+func (m *blockingServiceRuntime) Run(ctx context.Context, _ runtime.RunRequest) (runtime.RunResult, error) {
+	select {
+	case <-m.release:
+	case <-ctx.Done():
+	}
+	return runtime.RunResult{ExitCode: 0}, nil
+}
+func (m *blockingServiceRuntime) Cancel(_ string) error { return nil }
+func (m *blockingServiceRuntime) Close() error          { return nil }
+
 // TestDispatch_StagerLess_RefusesArtifactBindings locks in feature
 // 12's "unconfigured nodes refuse blind runs" security posture. A
 // node started without `HELION_ARTIFACTS_BACKEND` has `stager ==

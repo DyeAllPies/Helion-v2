@@ -25,16 +25,13 @@ terminates, so a service inside a workflow would block the DAG from
 reaching a terminal state. The `--serve` flag on `submit.py` submits
 them in sequence for you.
 
-> **⚠️ Status: implementation written, acceptance run pending.**
->
-> At the time of commit the author did not have a running
-> Docker-Compose cluster to execute this end-to-end against. The
-> scripts have been authored from spec and compiled against the
-> Helion types and REST surface as implemented in the rest of this
-> branch, but no one has yet observed the workflow transition all
-> the way from `pending` to `completed`. The Known gaps section at
-> the bottom lists what is expected to need attention on the first
-> real run.
+> **Status: acceptance-green (2026-04-18).** The
+> `docker-compose.iris.yml` + `Dockerfile.node-python` overlay runs
+> this pipeline end-to-end against a clean checkout; the workflow
+> reaches `completed` with zero `ml.resolve_failed` events, the
+> registry shows iris-logreg/v1 with accuracy 0.9667 and correct
+> lineage, the serve job becomes `ready` within one probe tick,
+> and `POST /predict` returns the right class for a setosa row.
 
 ---
 
@@ -50,36 +47,44 @@ On the node(s) that will run the workflow jobs:
 
 - Python 3.11 on `$PATH`.
 - The pip dependencies from [`requirements.txt`](requirements.txt)
-  installed in the node's runtime environment:
+  installed in the node's runtime environment.
 
-  ```bash
-  pip install -r examples/ml-iris/requirements.txt
-  ```
-
-  The local Docker-Compose node image in this repo is a slim Go
-  binary — it does **not** ship Python by default. To run this
-  example locally you'll need to either rebuild `Dockerfile.node`
-  with Python + the requirements pre-installed, or run the node
-  agent directly on a host that already has them.
+For the local Docker-Compose run, this repo ships
+[`Dockerfile.node-python`](../../Dockerfile.node-python) (Python +
+iris deps pre-baked) and [`docker-compose.iris.yml`](../../docker-compose.iris.yml)
+(overlay that swaps both nodes to that image and injects the
+coordinator-side credentials). See the updated "Running it" section
+below.
 
 ---
 
 ## Running it
 
-1. **Start the cluster.**
+1. **Start the cluster with the iris overlay.**
 
    ```bash
-   docker compose up --build
+   rm -rf state/ logs/ && mkdir -p state logs
+   COMPOSE_PROFILES=analytics,ml docker compose \
+     -f docker-compose.yml \
+     -f docker-compose.e2e.yml \
+     -f docker-compose.iris.yml \
+     up -d --build
    ```
 
-   Watch the coordinator stdout for the root bearer token (one is
-   rotated per startup — see [`docs/SECURITY.md` § 4](../../docs/SECURITY.md)).
+   The three-file overlay gives you: coordinator + 2 Python-capable
+   nodes + MinIO (S3 artifact store) + Postgres (analytics sink),
+   with a root token written to the shared `/app/state/root-token`
+   and injected into each node's env.
 
 2. **Export environment.**
 
    ```bash
-   export HELION_COORDINATOR=http://127.0.0.1:8080
-   export HELION_TOKEN=<paste-token-from-coordinator-stdout>
+   export HELION_API_URL=http://127.0.0.1:8080
+   # Jobs running inside the cluster reach the coordinator via the
+   # internal DNS name, not 127.0.0.1 — submit.py injects this into
+   # every job's env block so register.py can call back.
+   export HELION_JOB_API_URL=http://coordinator:8080
+   export HELION_TOKEN=$(docker exec helion-coordinator cat /app/state/root-token)
    ```
 
 3. **Submit the workflow.**
@@ -101,10 +106,10 @@ On the node(s) that will run the workflow jobs:
 
    ```bash
    curl -H "Authorization: Bearer $HELION_TOKEN" \
-     "$HELION_COORDINATOR/api/datasets"
+     "$HELION_API_URL/api/datasets"
    # → includes iris/v1
    curl -H "Authorization: Bearer $HELION_TOKEN" \
-     "$HELION_COORDINATOR/api/models"
+     "$HELION_API_URL/api/models"
    # → includes iris-logreg/v1 with source_job_id + metrics
    ```
 
@@ -123,24 +128,32 @@ input-URI scheme being resolved by the coordinator — **that scheme
 is not yet implemented**. Until it lands, submit the serve job by
 hand with the model's concrete URI substituted in.
 
-Grab the model URI from the registry:
+The registered model URI comes back as `file://` on local Docker
+backends (Stager doesn't yet expose its assigned `s3://` URI to
+`register.py` — see known gap #3 below). For the serve job, grab
+the authoritative `s3://` URI from the training job's lineage:
 
 ```bash
 MODEL_URI=$(curl -s -H "Authorization: Bearer $HELION_TOKEN" \
-  "$HELION_COORDINATOR/api/models/iris-logreg/v1" | jq -r '.uri')
+  "$HELION_API_URL/workflows/iris-wf-1/lineage" \
+  | python -c "import sys,json; d=json.load(sys.stdin); [print(o['uri']) for j in d['jobs'] if j['name']=='train' for o in j.get('outputs',[]) if o['name']=='MODEL']")
 ```
 
-Submit the serve job:
+Submit the serve job. `PYTHONPATH=/app/ml-iris` makes `uvicorn`
+find `serve:app` — the image bakes the iris scripts there but the
+runtime doesn't inherit node env, so the job spec has to declare
+the path explicitly:
 
 ```bash
-cat <<JSON | curl -X POST \
+cat <<JSON | curl -s -X POST \
   -H "Authorization: Bearer $HELION_TOKEN" \
   -H "Content-Type: application/json" \
-  "$HELION_COORDINATOR/jobs" -d @-
+  "$HELION_API_URL/jobs" -d @-
 {
   "id": "iris-serve-1",
   "command": "uvicorn",
   "args": ["serve:app", "--host", "0.0.0.0", "--port", "8000"],
+  "env": {"PYTHONPATH": "/app/ml-iris"},
   "inputs": [{
     "name": "MODEL",
     "uri": "$MODEL_URI",
@@ -155,20 +168,25 @@ cat <<JSON | curl -X POST \
 JSON
 ```
 
-The dashboard's `/ml/services` view should show the service go
-from not-listed → ready within one probe interval (~5 s).
+The dashboard's `/ml/services` view (and `curl $HELION_API_URL/api/services`)
+shows the service go from not-listed → ready within one probe
+interval (~5 s).
 
-Test a prediction (the upstream URL is exposed via the lookup
-endpoint; replace `<node-address>` with whatever the registry
-records):
+Test a prediction. The upstream URL uses the node's internal DNS
+name, so hit it from inside the helion-net network rather than
+from the host:
 
 ```bash
 UPSTREAM=$(curl -s -H "Authorization: Bearer $HELION_TOKEN" \
-  "$HELION_COORDINATOR/api/services/iris-serve-1" | jq -r '.upstream_url')
-curl -X POST "$UPSTREAM/predict" \
-  -H "Content-Type: application/json" \
-  -d '{"features": [[5.1, 3.5, 1.4, 0.2]]}'
-# → {"predictions": [0]}
+  "$HELION_API_URL/api/services/iris-serve-1" \
+  | python -c "import sys,json; print(json.load(sys.stdin)['upstream_url'].rsplit('/',1)[0])")
+# UPSTREAM is now "http://<node-container-id>:8000"; exec into the
+# coordinator container (or any on helion-net) to reach it:
+docker exec helion-coordinator \
+  wget -qO- --header='Content-Type: application/json' \
+       --post-data='{"features":[[5.1,3.5,1.4,0.2]]}' \
+       "$UPSTREAM/predict"
+# → {"predictions":[0]}
 ```
 
 ---

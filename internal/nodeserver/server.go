@@ -125,13 +125,24 @@ func (s *Server) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.Dis
 		runReq.WorkingDir = prepared.WorkingDir
 	}
 
-	// Feature 17 — launch the readiness prober alongside the process
-	// for service jobs. Cancelled when Run returns (process exit or
-	// parent-ctx cancel), so the prober never outlives the job.
+	// Feature 17 — service jobs must not block the Dispatch RPC: the
+	// runtime.Run call never returns on its own (IsService keeps the
+	// subprocess running until Cancel), and the coordinator's
+	// Dispatch dial is timeout-bounded. Fork the runtime + prober +
+	// reporting into a background goroutine, ACK immediately. Cancel
+	// RPC (rt.Cancel) is the only graceful stop path for service
+	// jobs, and reportResult fires when the subprocess finally exits.
+	//
+	// Batch jobs keep the old sync-dispatch semantics: the caller
+	// (dispatch loop) gets per-job ordering from the blocking RPC.
 	if req.Service != nil {
-		probeCtx, probeCancel := context.WithCancel(ctx)
-		defer probeCancel()
-		go s.probeService(probeCtx, req.JobId, req.Service)
+		// Use a detached context so the ACK returning (which cancels
+		// ctx) does not kill the service. The runtime's own Cancel
+		// (via Runtime.Cancel(jobID)) remains the stop mechanism.
+		bgCtx := context.Background()
+		go s.probeService(bgCtx, req.JobId, req.Service)
+		go s.runAndReportService(bgCtx, req.JobId, runReq, prepared, startedAt)
+		return &pb.DispatchAck{JobId: req.JobId, Accepted: true}, nil
 	}
 
 	result, err := s.rt.Run(ctx, runReq)
@@ -191,6 +202,65 @@ func (s *Server) Dispatch(ctx context.Context, req *pb.DispatchRequest) (*pb.Dis
 		Accepted: true,
 		Error:    errMsg,
 	}, nil
+}
+
+// runAndReportService is the service-job background runner. Splits
+// the synchronous Dispatch path so the RPC can ACK immediately while
+// the long-running subprocess continues — the coordinator's dispatch
+// loop cannot block on a service for its entire lifetime.
+//
+// Mirrors the batch-dispatch tail: rt.Run → Finalize → reportResult.
+// The ctx is detached (context.Background from the caller) so the
+// service survives the Dispatch RPC returning; rt.Cancel is the stop
+// mechanism.
+func (s *Server) runAndReportService(
+	ctx context.Context,
+	jobID string,
+	runReq runtime.RunRequest,
+	prepared *staging.Prepared,
+	startedAt time.Time,
+) {
+	result, err := s.rt.Run(ctx, runReq)
+	finishedAt := time.Now()
+
+	var outputURIs []staging.ResolvedOutput
+	if prepared != nil {
+		success := err == nil && result.ExitCode == 0 && result.KillReason == ""
+		res, ferr := s.stager.Finalize(ctx, prepared, success)
+		if ferr != nil {
+			s.log.Error("staging finalize (service)",
+				slog.String("job_id", jobID), slog.Any("err", ferr))
+			if err == nil {
+				err = ferr
+			}
+		}
+		outputURIs = res
+	}
+
+	if err != nil {
+		s.log.Error("runtime error (service)", slog.String("job_id", jobID), slog.Any("err", err))
+		s.reportResult(ctx, jobID, false, -1, err.Error(), startedAt, finishedAt, nil)
+		return
+	}
+
+	s.log.Info("service job finished",
+		slog.String("job_id", jobID),
+		slog.Int("exit_code", int(result.ExitCode)),
+		slog.String("kill_reason", result.KillReason),
+	)
+
+	if s.client != nil && (len(result.Stdout) > 0 || len(result.Stderr) > 0) {
+		if lerr := s.client.StreamLogs(ctx, jobID, s.nodeID, result.Stdout, result.Stderr); lerr != nil {
+			s.log.Warn("StreamLogs failed (service)", slog.String("job_id", jobID), slog.Any("err", lerr))
+		}
+	}
+
+	errMsg := result.KillReason
+	if errMsg == "" {
+		errMsg = result.Error
+	}
+	success := result.ExitCode == 0 && result.KillReason == ""
+	s.reportResult(ctx, jobID, success, result.ExitCode, errMsg, startedAt, finishedAt, outputURIs)
 }
 
 // reportResult calls coordinator.ReportResult in a best-effort manner.

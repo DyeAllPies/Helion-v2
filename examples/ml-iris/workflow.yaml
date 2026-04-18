@@ -24,7 +24,7 @@ priority: 60
 jobs:
   - name: ingest
     command: python
-    args: [ingest.py]
+    args: [/app/ml-iris/ingest.py]
     timeout_seconds: 60
     outputs:
       - name: RAW_CSV
@@ -32,7 +32,7 @@ jobs:
 
   - name: preprocess
     command: python
-    args: [preprocess.py]
+    args: [/app/ml-iris/preprocess.py]
     timeout_seconds: 60
     depends_on: [ingest]
     inputs:
@@ -47,7 +47,7 @@ jobs:
 
   - name: train
     command: python
-    args: [train.py]
+    args: [/app/ml-iris/train.py]
     timeout_seconds: 120
     depends_on: [preprocess]
     inputs:
@@ -65,7 +65,7 @@ jobs:
 
   - name: register
     command: python
-    args: [register.py]
+    args: [/app/ml-iris/register.py]
     timeout_seconds: 60
     depends_on: [train]
     # register.py needs the coordinator URL + token to POST to the

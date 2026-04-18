@@ -139,8 +139,28 @@ def _resolve_uri(env_var: str) -> str | None:
     return None
 
 
+def _api_base() -> str | None:
+    """Resolve the coordinator HTTP URL.
+
+    HELION_API_URL is preferred; it's an explicit HTTP URL
+    (e.g. http://coordinator:8080). Falls back to
+    HELION_COORDINATOR only when that value already looks like
+    a URL (from the host side of the demo, where operators set
+    it to http://127.0.0.1:8080). Inside the node container
+    HELION_COORDINATOR is a gRPC host:port and can't be used
+    as an HTTP base — HELION_API_URL is the supported split.
+    """
+    api = os.environ.get("HELION_API_URL")
+    if api:
+        return api
+    coord = os.environ.get("HELION_COORDINATOR", "")
+    if coord.startswith("http://") or coord.startswith("https://"):
+        return coord
+    return None
+
+
 def main() -> int:
-    base = os.environ.get("HELION_COORDINATOR")
+    base = _api_base()
     token = os.environ.get("HELION_TOKEN")
     workflow_id = os.environ.get("HELION_WORKFLOW_ID")
     train_name = os.environ.get("HELION_TRAIN_JOB_NAME", "train")
@@ -149,7 +169,7 @@ def main() -> int:
     metrics_file = os.environ.get("HELION_INPUT_METRICS")
 
     required = {
-        "HELION_COORDINATOR": base,
+        "HELION_API_URL (or HELION_COORDINATOR as http URL)": base,
         "HELION_TOKEN": token,
         "HELION_WORKFLOW_ID": workflow_id,
         "HELION_INPUT_RAW_CSV": raw_csv,
