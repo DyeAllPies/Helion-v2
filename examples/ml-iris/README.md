@@ -205,6 +205,40 @@ job in `.github/workflows/ci.yml`, and runnable locally the same way:
 Exit codes: 0 on all green, non-zero on the first failed checkpoint
 (with cluster logs dumped before teardown so CI artifacts them).
 
+### UI coverage — Playwright
+
+The REST harness proves the backend end-to-end. The companion
+Playwright spec at
+[`dashboard/e2e/specs/ml-iris.spec.ts`](../../dashboard/e2e/specs/ml-iris.spec.ts)
+proves the **frontend renders** the resulting state: iris-wf-1 on
+the Pipelines list, the DAG panel with four job cards (all
+`completed`), iris/v1 on Datasets, iris-logreg/v1 on Models with
+lineage + metric pills, and iris-serve-1 on Services with a
+READY chip.
+
+Local run (cluster must be up with the iris overlay):
+
+```bash
+# 1. Leave the cluster running after the REST harness passes:
+IRIS_SKIP_TEARDOWN=1 ./scripts/run-iris-e2e.sh
+
+# 2. Run only the iris Playwright spec against the same cluster:
+cd dashboard
+E2E_TOKEN=$(docker exec helion-coordinator cat /app/state/root-token) \
+  npx playwright test ml-iris
+
+# 3. Tear down when done:
+COMPOSE_PROFILES=analytics,ml docker compose \
+  -f ../docker-compose.yml -f ../docker-compose.e2e.yml -f ../docker-compose.iris.yml \
+  down -v
+```
+
+CI wires both layers into the `e2e-iris` job — the REST harness
+runs first with `IRIS_SKIP_TEARDOWN=1`, then Playwright reuses
+the live cluster, and a final `docker compose down -v` tears
+down on both pass and failure paths. Running them in the same
+job halves CI time vs. two separate cluster stands.
+
 ### Rust runtime (deferred)
 
 The Rust runtime (`Dockerfile.node-rust`) uses cgroup v2 + seccomp-bpf

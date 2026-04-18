@@ -51,9 +51,14 @@ cleanup() {
     log "Dumping cluster logs for post-mortem..."
     COMPOSE_PROFILES=analytics,ml docker compose $COMPOSE_FILES logs --no-color 2>&1 | tail -200 || true
   fi
-  log "Tearing down cluster..."
-  COMPOSE_PROFILES=analytics,ml docker compose $COMPOSE_FILES down -v 2>/dev/null || true
-  rm -rf "$ROOT_DIR/state" "$ROOT_DIR/logs" 2>/dev/null || true
+  if [ -n "${IRIS_SKIP_TEARDOWN:-}" ]; then
+    log "IRIS_SKIP_TEARDOWN=$IRIS_SKIP_TEARDOWN — leaving cluster running for follow-up runs"
+    log "  clean up manually with:  COMPOSE_PROFILES=analytics,ml docker compose $COMPOSE_FILES down -v"
+  else
+    log "Tearing down cluster..."
+    COMPOSE_PROFILES=analytics,ml docker compose $COMPOSE_FILES down -v 2>/dev/null || true
+    rm -rf "$ROOT_DIR/state" "$ROOT_DIR/logs" 2>/dev/null || true
+  fi
   exit $EXIT_CODE
 }
 trap cleanup EXIT
