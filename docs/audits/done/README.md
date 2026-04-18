@@ -47,3 +47,4 @@ audit itself.
 | [2026-04-18-05](2026-04-18-05.md) | Feature-16 third-pass audit — audit-log observer covering all four registry emissions (dataset/model × register/delete); generalises side-effect emission playbook |
 | [2026-04-18-06](2026-04-18-06.md) | Feature-17 first-pass audit — prober edge-trigger state machine + `LogServiceEvent` observer via integration test; adds "long-running goroutines need multi-tick tests" rule |
 | [2026-04-18-07](2026-04-18-07.md) | Feature-17 second-pass audit — audit-package-level `LogServiceEvent` shape + `buildUpstreamURL` IPv6 branch; adds "check mocked contracts are tested in isolation elsewhere" rule |
+| [2026-04-18-08](2026-04-18-08.md) | Feature-17 third-pass audit — 3 unpinned validator branches (oversize path / whitespace / oversize grace) + `JobResponse.Service` round-trip; branch-level residuals, recommends feature 18 |
