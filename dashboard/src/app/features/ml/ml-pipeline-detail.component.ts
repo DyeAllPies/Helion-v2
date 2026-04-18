@@ -16,9 +16,11 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, RouterLink } from '@angular/router';
+import { Subscription, interval, startWith, switchMap } from 'rxjs';
 
 import { ApiService } from '../../core/services/api.service';
 import { WorkflowLineage } from '../../shared/models';
+import { environment } from '../../../environments/environment';
 
 @Component({
   selector: 'app-ml-pipeline-detail',
@@ -226,12 +228,35 @@ export class MlPipelineDetailComponent implements OnInit, AfterViewInit, OnDestr
   // mermaid render).
   private destroyed = false;
 
+  // Live-polling bookkeeping.
+  private sub?: Subscription;
+  // Signature of the last-rendered lineage — `name:status` per job,
+  // ordered. If the next poll returns the same signature we skip
+  // the mermaid render entirely (spec unchanged → output unchanged;
+  // re-rendering would flash the SVG for no reason).
+  private lastRenderSignature = '';
+  // Terminal statuses for the workflow itself. Once we see one we
+  // stop polling — the lineage is frozen and further ticks would
+  // just burn coordinator CPU.
+  private static readonly TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+
   constructor(
     private route: ActivatedRoute,
     private api: ApiService,
     private cdr: ChangeDetectorRef,
   ) {}
 
+  /**
+   * Poll `GET /workflows/{id}/lineage` on the same cadence as the
+   * nodes list (environment.tokenRefreshMs). Three safeguards:
+   *
+   *   1. switchMap cancels an in-flight request if the next tick
+   *      fires first — a slow coordinator won't stack requests.
+   *   2. The mermaid render only runs when the job-status signature
+   *      actually changes, so steady-state ticks are free.
+   *   3. When the workflow reaches a terminal status we unsubscribe
+   *      (pausePolling) — no point polling a completed pipeline.
+   */
   ngOnInit(): void {
     this.workflowId = this.route.snapshot.paramMap.get('id') ?? '';
     if (!this.workflowId) {
@@ -239,15 +264,26 @@ export class MlPipelineDetailComponent implements OnInit, AfterViewInit, OnDestr
       this.loading = false;
       return;
     }
-    this.api.getWorkflowLineage(this.workflowId).subscribe({
+    this.sub = interval(environment.tokenRefreshMs).pipe(
+      startWith(0),
+      switchMap(() => this.api.getWorkflowLineage(this.workflowId)),
+    ).subscribe({
       next: l => {
         this.lineage = l;
         this.loading = false;
+        this.error   = '';
         // Render after the *ngIf branch materialises the #dagHost
         // element — ngAfterViewInit fires before lineage arrives
         // for async fetches, so we drive the render from here too.
         this.cdr.detectChanges();
-        void this.renderDag();
+        const sig = this.lineageSignature(l);
+        if (sig !== this.lastRenderSignature) {
+          this.lastRenderSignature = sig;
+          void this.renderDag();
+        }
+        if (MlPipelineDetailComponent.TERMINAL.has((l.status ?? '').toLowerCase())) {
+          this.pausePolling();
+        }
       },
       error: err => {
         this.error   = err?.error?.error ?? err?.message ?? 'Failed to load lineage';
@@ -264,7 +300,28 @@ export class MlPipelineDetailComponent implements OnInit, AfterViewInit, OnDestr
     }
   }
 
-  ngOnDestroy(): void { this.destroyed = true; }
+  ngOnDestroy(): void {
+    this.destroyed = true;
+    this.pausePolling();
+  }
+
+  private pausePolling(): void {
+    this.sub?.unsubscribe();
+    this.sub = undefined;
+  }
+
+  /**
+   * Stable string key for a lineage snapshot: per-job `name:status`
+   * joined, plus the workflow-level status. Two polls that produce
+   * the same signature represent the same state machine moment,
+   * so we can skip the expensive mermaid re-render.
+   */
+  private lineageSignature(l: WorkflowLineage): string {
+    const perJob = (l.jobs ?? [])
+      .map(j => `${j.name}:${j.status ?? ''}`)
+      .join('|');
+    return `${l.status ?? ''}#${perJob}`;
+  }
 
   private async renderDag(): Promise<void> {
     if (!this.lineage || !this.dagHost) return;

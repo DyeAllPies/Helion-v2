@@ -6,13 +6,19 @@
 // terminal-state navigation — this spec submits the workflow
 // *inside* the recorded test so the viewer sees the full
 // lifecycle: empty list → row appears in pending → DAG cards
-// transition pending → dispatching → running → completed → back
-// to the list showing completed → registry → services → READY.
+// transition pending → dispatching → running → completed → Jobs
+// tab showing the same four rows → registry → services → READY.
 //
 // MNIST is the right demo for this shape because the workflow
 // takes ~60 s end-to-end (iris finishes in ~10 s, which is too
 // fast to film a transition), and the 784-feature LogisticRegression
 // training is the observable "running" phase.
+//
+// The walkthrough depends on live polling in ml-pipelines.component
+// and ml-pipeline-detail.component: without it, the list row and
+// DAG cards would be static snapshots and the spec would need a
+// route-bounce hack to force re-fetches. With polling, we just
+// park on each page and let the camera roll.
 //
 // Skipped by default. Enable with E2E_RECORD_MNIST_WALKTHROUGH=1
 // plus E2E_VIDEO=1 to record:
@@ -201,118 +207,74 @@ test.describe('Feature 21 — MNIST walkthrough (video recording)', () => {
     await expect(page).toHaveURL(/\/ml\/pipelines$/);
     await page.waitForTimeout(PAUSE_MEDIUM);
 
-    // 3. Submit the workflow via REST. The Pipelines list fetches
-    //    once on component init and doesn't auto-poll; clicking
-    //    the same nav link is a no-op under Angular's default
-    //    RouteReuseStrategy (same URL → no ngOnInit → no re-fetch).
-    //    page.reload() would destroy the in-memory JWT (the auth
-    //    fixture's comment on this is explicit). So we nudge the
-    //    list to re-render by bouncing through a sibling ML route
-    //    — Datasets → Pipelines destroys+recreates the Pipelines
-    //    component, forcing a fresh fetch. On camera this reads
-    //    as a natural "check something else, come back" beat.
+    // 3. Submit the workflow via REST. Both the Pipelines list
+    //    and the DAG detail component now poll the coordinator on
+    //    the same cadence as the Nodes list (environment.tokenRefreshMs
+    //    — 5 s dev / 10 s prod), so the new row and its chip
+    //    transitions just appear in-place as the backend advances.
+    //    No route-bounce hack needed.
     await submitMnistWorkflow(token);
-    await page.waitForTimeout(PAUSE_SHORT);
-    await page.click('a.nav-link >> text=Datasets');
-    await expect(page).toHaveURL(/\/ml\/datasets$/);
-    await page.waitForTimeout(PAUSE_SHORT);
-    await page.click('a.nav-link >> text=Pipelines');
-    await expect(page).toHaveURL(/\/ml\/pipelines$/);
     const row = page.locator('tr').filter({ hasText: WF_ID });
+    // The list's startWith(0) tick fires on mount, and the next
+    // poll fires within tokenRefreshMs — so the row shows up
+    // either immediately (we were already on the page) or after
+    // one tick. Give it the tick's worth of headroom plus slack.
     await expect(row).toBeVisible({ timeout: 15_000 });
-    // Pause on the row in non-terminal state so the viewer sees
-    // the chip colour.
+    // Linger so the viewer sees the row with its transitional chip
+    // colour and the JOBS column ticking up (0/4 → 1/4 → …).
     await page.waitForTimeout(PAUSE_LONG);
 
-    // 4. Click "View DAG" to drill into the detail view. Both the
-    //    Pipelines list and the DAG detail component fetch on
-    //    init and do NOT auto-poll (by design: these are
-    //    snapshot views, not live streams — the dashboard pushes
-    //    real-time updates through separate node/events surfaces).
-    //    So to film transitions, we do what a real user would:
-    //    drive the refresh manually by bouncing between the list
-    //    and the DAG view. Each click re-navigates, which
-    //    re-fetches the lineage + re-renders the cards with the
-    //    latest per-job state.
+    // 4. Click "View DAG" to drill into the detail view. The
+    //    detail component polls getWorkflowLineage and re-renders
+    //    the mermaid graph only when the per-job status signature
+    //    changes, so staying on this page is now sufficient — the
+    //    four job cards flip pending → dispatching → running →
+    //    completed in place while the camera rolls.
     await row.locator(`a[aria-label="View DAG for ${WF_ID}"]`).click();
     await expect(page).toHaveURL(new RegExp(`/ml/pipelines/${WF_ID}$`));
     await expect(page.locator('.dag-panel__header')).toBeVisible({ timeout: 10_000 });
     await page.locator('.job-grid').scrollIntoViewIfNeeded();
-    // The mermaid diagram renders async; give it a beat to appear
-    // above the job grid so both surfaces are in frame.
-    await page.waitForTimeout(PAUSE_LONG);
-
-    // 5. Live-progress loop. While the workflow is still running,
-    //    bounce list ↔ detail every ~10 s so the viewer watches
-    //    cards flip pending → dispatching → running → completed
-    //    across successive refreshes. The backend completion poll
-    //    runs independently — as soon as it hits `completed`, we
-    //    break out of the loop and do the final DAG render.
-    const completionDeadline = Date.now() + 300_000;
-    let completed = false;
-    while (!completed && Date.now() < completionDeadline) {
-      // Peek the backend without leaving the detail view. If it's
-      // done we want the NEXT card render to be the all-green
-      // snapshot, not a random intermediate.
-      const wfRes = await fetch(`${API_URL}/workflows/${WF_ID}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (wfRes.ok) {
-        const wf: WorkflowResp = await wfRes.json();
-        if (wf.status === 'completed') {
-          completed = true;
-          break;
-        }
-        if (wf.status === 'failed' || wf.status === 'cancelled') {
-          throw new Error(`workflow terminal ${wf.status}`);
-        }
-      }
-
-      // User-natural refresh beat: back to the Pipelines list
-      // (different route → component re-mount → fresh fetch,
-      // shows the latest list-level status chip), then back into
-      // the DAG detail (different route again → lineage refetched,
-      // cards re-render with up-to-date per-job state). The auth
-      // fixture's JWT is in-memory, so page.reload() would nuke
-      // it; bouncing between SPA routes keeps the token.
-      await page.click('a.nav-link >> text=Pipelines');
-      await expect(page).toHaveURL(/\/ml\/pipelines$/);
-      await expect(row).toBeVisible({ timeout: 10_000 });
-      await page.waitForTimeout(PAUSE_MEDIUM);
-      await row.locator(`a[aria-label="View DAG for ${WF_ID}"]`).click();
-      await expect(page).toHaveURL(new RegExp(`/ml/pipelines/${WF_ID}$`));
-      await expect(page.locator('.dag-panel__header')).toBeVisible({ timeout: 10_000 });
-      await page.locator('.job-grid').scrollIntoViewIfNeeded();
-      await page.waitForTimeout(PAUSE_LONG);
-    }
-
-    if (!completed) {
-      // Defensive: if the inline loop timed out before observing
-      // completion, run the long-wait helper so the rest of the
-      // walkthrough has something to point at. Shouldn't fire in
-      // practice on a warm cache.
-      await waitWorkflowCompleted(token, 60_000);
-    }
-
-    // Final DAG render: bounce to the Pipelines list (now shows
-    // the completed chip) then back into the DAG for the all-
-    // green terminal-state shot.
-    await page.click('a.nav-link >> text=Pipelines');
-    await expect(page).toHaveURL(/\/ml\/pipelines$/);
-    await expect(row).toContainText(/completed/i, { timeout: 10_000 });
+    // Mermaid renders async after lineage arrives.
     await page.waitForTimeout(PAUSE_MEDIUM);
-    await row.locator(`a[aria-label="View DAG for ${WF_ID}"]`).click();
-    await expect(page).toHaveURL(new RegExp(`/ml/pipelines/${WF_ID}$`));
-    await expect(page.locator('.dag-panel__header')).toBeVisible({ timeout: 10_000 });
-    await page.locator('.job-grid').scrollIntoViewIfNeeded();
+
+    // 5. Park on the DAG view for the rest of the workflow's run.
+    //    The in-component polling drives the card transitions, and
+    //    waitForWorkflowCompleted polls the REST API in parallel
+    //    so we know exactly when to advance to the next scene.
+    //    No navigation during this window — the transition sequence
+    //    (pending → dispatching → running → completed for each of
+    //    the four jobs) is the whole point of this beat.
+    await waitWorkflowCompleted(token, 300_000);
+
+    // Linger on the all-green terminal DAG so the viewer sees the
+    // final state clearly before we leave.
     await page.waitForTimeout(PAUSE_LONG);
 
-    // 6. Back to the Pipelines list one final time so the closing
-    //    shot of this section is the list row with the completed
-    //    chip — mirrors the opening "row appears" moment.
+    // 6. Back to the Pipelines list for the closing beat: row chip
+    //    now shows completed and JOBS is 4/4. Mirrors the opening
+    //    "row appears" moment at its terminal state.
     await page.click('a.nav-link >> text=Pipelines');
     await expect(page).toHaveURL(/\/ml\/pipelines$/);
     await expect(row).toContainText(/completed/i, { timeout: 10_000 });
+    await page.waitForTimeout(PAUSE_LONG);
+
+    // 6b. Jobs — detour through the core Jobs list so the viewer
+    //     sees the same workflow from a different angle: each of
+    //     the four DAG jobs appears as its own row with status
+    //     badge + command. Reinforces that an ML pipeline isn't a
+    //     special construct — it's just four ordinary Helion jobs
+    //     linked by `from:` references, which is why they show up
+    //     in the non-ML Jobs view too.
+    await page.click('a.nav-link >> text=Jobs');
+    await expect(page).toHaveURL(/\/jobs$/);
+    // The four workflow jobs are identified as `<wf-id>/<name>`.
+    // Assert all four rendered so the viewer has something to
+    // look at before the pause.
+    for (const jobName of ['ingest', 'preprocess', 'train', 'register']) {
+      await expect(
+        page.locator('tr').filter({ hasText: `${WF_ID}/${jobName}` }),
+      ).toBeVisible({ timeout: 10_000 });
+    }
     await page.waitForTimeout(PAUSE_LONG);
 
     // 7. Registry — Datasets shows mnist/v1.

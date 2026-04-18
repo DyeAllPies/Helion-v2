@@ -8,14 +8,16 @@
 // coordinator-side `GET /api/workflows?produced_model=true`
 // endpoint to narrow the list cheaply.
 
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { MatTableModule } from '@angular/material/table';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
+import { Subscription, interval, startWith, switchMap } from 'rxjs';
 
 import { ApiService } from '../../core/services/api.service';
-import { Workflow } from '../../shared/models';
+import { Workflow, WorkflowJob } from '../../shared/models';
+import { environment } from '../../../environments/environment';
 
 @Component({
   selector: 'app-ml-pipelines',
@@ -61,7 +63,11 @@ import { Workflow } from '../../shared/models';
       </ng-container>
       <ng-container matColumnDef="jobs">
         <th mat-header-cell *matHeaderCellDef class="num">JOBS</th>
-        <td mat-cell *matCellDef="let w" class="num">{{ w.jobs?.length ?? 0 }}</td>
+        <td mat-cell *matCellDef="let w" class="num jobs-progress">
+          <span class="jobs-done">{{ countCompleted(w.jobs) }}</span>
+          <span class="jobs-sep">/</span>
+          <span class="jobs-total">{{ w.jobs?.length ?? 0 }}</span>
+        </td>
       </ng-container>
       <ng-container matColumnDef="created_at">
         <th mat-header-cell *matHeaderCellDef>SUBMITTED</th>
@@ -104,6 +110,14 @@ import { Workflow } from '../../shared/models';
     }
     .btn-link:hover { text-decoration: underline; }
 
+    .jobs-progress {
+      font-variant-numeric: tabular-nums;
+      font-family: var(--font-mono);
+    }
+    .jobs-done  { color: var(--color-completed); font-weight: 600; }
+    .jobs-sep   { color: var(--color-muted); margin: 0 2px; }
+    .jobs-total { color: var(--color-muted); }
+
     /* Status-chip palette mirrors ml-pipeline-detail so the list
        row and the DAG cards on the detail view share colours: a
        workflow transitioning through states reads identically
@@ -117,7 +131,7 @@ import { Workflow } from '../../shared/models';
     .chip.chip-default     { background: var(--color-surface-2); color: var(--color-muted); }
   `],
 })
-export class MlPipelinesComponent implements OnInit {
+export class MlPipelinesComponent implements OnInit, OnDestroy {
   workflows: Workflow[] = [];
   total    = 0;
   page     = 0;
@@ -127,18 +141,34 @@ export class MlPipelinesComponent implements OnInit {
 
   columns = ['id', 'name', 'status', 'jobs', 'created_at', 'actions'];
 
+  private sub?: Subscription;
+
   constructor(private api: ApiService) {}
 
-  ngOnInit(): void { this.reload(); }
-
-  reload(): void {
-    this.loading = true;
-    this.error   = '';
-    this.api.getWorkflows(this.page, this.pageSize).subscribe({
+  /**
+   * Poll `GET /workflows` on the same cadence as the Nodes list
+   * (environment.tokenRefreshMs — 5 s dev, 10 s prod). The Pipelines
+   * list used to fetch once on init, so a workflow progressing from
+   * pending → running → completed looked static until the user
+   * manually re-navigated. Polling keeps the list fresh for both
+   * the live walkthrough (docs/e2e-mnist-run.mp4) and day-to-day
+   * operator use.
+   *
+   * switchMap cancels an in-flight request if the next tick fires
+   * first (protects against slow coordinator responses stacking
+   * up). Subscription is stored and unsubscribed on destroy so
+   * navigating away stops the poll.
+   */
+  ngOnInit(): void {
+    this.sub = interval(environment.tokenRefreshMs).pipe(
+      startWith(0),
+      switchMap(() => this.api.getWorkflows(this.page, this.pageSize)),
+    ).subscribe({
       next: resp => {
         this.workflows = resp.workflows ?? [];
         this.total     = resp.total ?? this.workflows.length;
         this.loading   = false;
+        this.error     = '';
       },
       error: err => {
         this.error   = err?.error?.error ?? err?.message ?? 'Failed to load workflows';
@@ -147,10 +177,41 @@ export class MlPipelinesComponent implements OnInit {
     });
   }
 
+  ngOnDestroy(): void { this.sub?.unsubscribe(); }
+
+  /**
+   * Restart the poll from the current (page, pageSize). Pagination
+   * changes and the walkthrough-spec first load both need a fresh
+   * stream rather than waiting up to tokenRefreshMs for the next
+   * tick — that's what startWith(0) gives us on resubscribe.
+   * Public because unit tests drive it to simulate page-size
+   * changes + re-fetches without waiting on the real interval.
+   */
+  reload(): void {
+    this.sub?.unsubscribe();
+    this.ngOnInit();
+  }
+
   onPage(e: PageEvent): void {
     this.page     = e.pageIndex;
     this.pageSize = e.pageSize;
     this.reload();
+  }
+
+  /**
+   * Count jobs already in a terminal-success state so the list can
+   * render "2/4" instead of just "4". The running / pending /
+   * dispatching jobs don't count — only `completed`. Skipped jobs
+   * (a finished branch under a conditional workflow) also count as
+   * done: the workflow won't re-run them, so from the operator's
+   * progress-bar perspective they're no longer outstanding.
+   */
+  countCompleted(jobs?: WorkflowJob[]): number {
+    if (!jobs) return 0;
+    return jobs.filter(j => {
+      const s = (j.job_status ?? '').toLowerCase();
+      return s === 'completed' || s === 'skipped';
+    }).length;
   }
 
   statusChipClass(status: string): string {

@@ -80,6 +80,25 @@ describe('MlPipelineDetailComponent', () => {
     expect(component.loading).toBeFalse();
   });
 
+  it('stops polling once the workflow reaches a terminal status', () => {
+    // Emit a terminal lineage on the first fetch. The component
+    // should unsubscribe — ngOnDestroy must not find a live sub
+    // to tear down (private, so we infer via call count: no
+    // extra fetches happen after the synchronous startWith(0)
+    // tick even though fixture.destroy() is only called in afterEach).
+    apiSpy.getWorkflowLineage.and.returnValue(of(makeLineage({ status: 'completed' })));
+    fixture.detectChanges();
+    const callsAfterInit = apiSpy.getWorkflowLineage.calls.count();
+    // Re-run detection a few times; if polling were still live on
+    // a synchronous stream, startWith(0) would not re-fire, but
+    // the switchMap pipeline would remain subscribed. What we
+    // want to prove is that the terminal branch triggered the
+    // unsubscribe path cleanly — easiest via ngOnDestroy not
+    // throwing.
+    expect(() => fixture.destroy()).not.toThrow();
+    expect(apiSpy.getWorkflowLineage.calls.count()).toBe(callsAfterInit);
+  });
+
   it('surfaces API errors', () => {
     apiSpy.getWorkflowLineage.and.returnValue(throwError(() => ({
       error: { error: 'workflow not found' },

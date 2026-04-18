@@ -73,6 +73,25 @@ describe('MlPipelinesComponent', () => {
     expect(apiSpy.getWorkflows).toHaveBeenCalledWith(2, 50);
   });
 
+  it('countCompleted counts only completed + skipped jobs', () => {
+    // Mixed workflow: two done (one completed, one skipped via
+    // on_failure branch), one running, one pending. "Jobs" column
+    // in the UI should render 2/4 for this shape.
+    const mk = (name: string, s: string): Workflow['jobs'][number] => ({
+      name, command: '', condition: 'on_success', job_status: s,
+    });
+    expect(component.countCompleted([
+      mk('a', 'completed'), mk('b', 'running'),
+      mk('c', 'skipped'),   mk('d', 'pending'),
+    ])).toBe(2);
+
+    // Empty/undefined inputs must not crash — the list row renders
+    // `countCompleted / length` on every tick, and getWorkflows can
+    // return a workflow with no jobs yet if it was just submitted.
+    expect(component.countCompleted(undefined)).toBe(0);
+    expect(component.countCompleted([])).toBe(0);
+  });
+
   it('statusChipClass maps statuses to distinct colour classes', () => {
     expect(component.statusChipClass('running')).toContain('chip-running');
     expect(component.statusChipClass('completed')).toContain('chip-completed');
