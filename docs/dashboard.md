@@ -37,7 +37,10 @@ dashboard/
 │   │       ├── nodes/           # NodeListComponent (auto-refreshes every 10 s)
 │   │       ├── jobs/            # JobListComponent, JobDetailComponent + live log viewer
 │   │       ├── metrics/         # ClusterMetricsComponent (WebSocket + Chart.js)
-│   │       └── audit/           # AuditLogComponent (paginated, filterable)
+│   │       ├── audit/           # AuditLogComponent (paginated, filterable)
+│   │       └── ml/              # Feature-18 ML module (lazy-loaded /ml/*)
+│   │           # Datasets / Models / Services / Pipelines list + detail
+│   │           # See "ML module" section below.
 │   ├── environments/            # environment.ts / environment.production.ts
 │   └── styles.scss              # Global SCSS + Material dark theme + badge utilities
 ├── e2e/
@@ -186,6 +189,13 @@ In `environment.ts` (local dev):
 | GET    | `/api/analytics/retry-effectiveness` | AnalyticsDashboardComponent |
 | GET    | `/api/analytics/queue-wait` | AnalyticsDashboardComponent |
 | GET    | `/api/analytics/workflow-outcomes` | AnalyticsDashboardComponent |
+| GET    | `/api/datasets`            | MlDatasetsComponent     |
+| POST   | `/api/datasets`            | RegisterDatasetDialogComponent |
+| DELETE | `/api/datasets/{name}/{version}` | MlDatasetsComponent |
+| GET    | `/api/models`              | MlModelsComponent       |
+| DELETE | `/api/models/{name}/{version}` | MlModelsComponent   |
+| GET    | `/api/services`            | MlServicesComponent (5 s poll) |
+| GET    | `/workflows/{id}/lineage`  | MlPipelineDetailComponent (DAG) |
 
 ## Analytics module
 
@@ -205,4 +215,60 @@ the same dark theme as the operational metrics page.
 The analytics module only appears functional when the coordinator has analytics enabled
 (`HELION_ANALYTICS_DSN` set). When disabled, the API endpoints are not registered and
 the dashboard will show connection errors.
+
+## ML module
+
+Feature 18 adds four lazy-loaded routes under `/ml/*`, wired
+through `app.routes.ts`. The module is the dashboard surface for
+the full ML pipeline (features 11–19); see
+[ml-pipelines.md](ml-pipelines.md) for the backend story.
+
+| Route | Component | Reads | Writes | What it shows |
+|---|---|---|---|---|
+| `/ml/datasets` | `MlDatasetsComponent` | `GET /api/datasets` | `POST /api/datasets` (via `RegisterDatasetDialog`), `DELETE /api/datasets/{name}/{version}` (confirm prompt) | Paginated dataset list with URI + size + tags; register-via-form modal with URI scheme hint; delete with `window.confirm` gate |
+| `/ml/models` | `MlModelsComponent` | `GET /api/models` | `DELETE /api/models/{name}/{version}` | Model table with lineage cell (source_job_id link + source_dataset link into `/ml/datasets?name=X&version=Y`) and metric pills rendering `accuracy`, `f1_macro`, etc. |
+| `/ml/services` | `MlServicesComponent` | `GET /api/services` every 5 s (`interval(5000).pipe(startWith(0), switchMap(...))`) | — | Live inference endpoints; READY / UNHEALTHY chip; upstream URL (`mono ellipsis` with title tooltip); back-link into `/jobs/{id}` |
+| `/ml/pipelines` | `MlPipelinesComponent` | `GET /workflows` | — | Paginated workflow table with a "View DAG" action that routes into the detail page |
+| `/ml/pipelines/:id` | `MlPipelineDetailComponent` | `GET /workflows/{id}/lineage` | — | Mermaid-rendered DAG with dependency (solid) + artifact (dashed) arrows; job cards with status chips, command, deps, outputs (with byte-formatted sizes), and `models_produced` chips linking back to `/ml/models` |
+
+### ML security model
+
+The ML views inherit the dashboard's standard auth posture (JWT
+in-memory, route guards, 401-triggered logout). Two feature-19
+additions worth noting:
+
+- **Workflow-scoped tokens** — `examples/ml-iris/submit.py`
+  mints a short-lived `job`-role JWT per workflow via
+  `POST /admin/tokens` and injects it into each job's env,
+  rather than leaking the operator's root admin token. The
+  dashboard itself doesn't interact with this flow, but the
+  `/events` + `/audit` pages surface `workflow:<id>` as the
+  actor on register / delete rows emitted by in-workflow
+  scripts.
+- **Event payload observers** — `ml.resolve_failed` and
+  `job.unschedulable` (with `reason` field distinguishing
+  `no_healthy_node` / `no_matching_label` /
+  `all_matching_unhealthy`) are emitted on the event bus and
+  audit log. Feature 18's Pipelines event rollup that renders
+  these as inline badges on pipeline rows is deferred
+  (`deferred/26-pipelines-event-integration.md`); today the raw
+  events are visible on `/events`.
+
+### E2E
+
+Four iris-specific Angular + Playwright test files cover the
+ML module:
+
+- `ml-datasets.component.spec.ts`, `ml-models.component.spec.ts`,
+  `ml-services.component.spec.ts`, `ml-pipelines.component.spec.ts`
+  (unit, Karma + Jasmine).
+- [`dashboard/e2e/specs/ml-iris.spec.ts`](../dashboard/e2e/specs/ml-iris.spec.ts)
+  — Playwright UI acceptance for feature 19. Submits the iris
+  workflow + serve job via REST in `beforeAll`, then asserts
+  all five dashboard views render the resulting state
+  correctly.
+- [`dashboard/e2e/specs/ml-iris-walkthrough.spec.ts`](../dashboard/e2e/specs/ml-iris-walkthrough.spec.ts)
+  — paced walkthrough spec gated behind
+  `E2E_RECORD_IRIS_WALKTHROUGH=1`. Not part of CI; used to
+  regenerate `docs/e2e-iris-run.mp4`.
 

@@ -1,7 +1,8 @@
 # Feature: Minimal ML Pipeline
 
 **Priority:** P1
-**Status:** In progress (steps 1–8 implemented; step 9 written but awaiting acceptance run; step 10 pending)
+**Status:** Done (all 10 slices landed; step 9 acceptance-green
+on 2026-04-18; step 10 documentation published 2026-04-18).
 **Affected files:**
 `internal/api/types.go`,
 `internal/cluster/registry_node.go`,

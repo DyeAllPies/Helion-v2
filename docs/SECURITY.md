@@ -40,6 +40,14 @@ operational procedures.
 | Undetected compromise post-incident | Append-only audit log covers all security events including token issuance/revocation |
 | Vulnerable Go dependency | Snyk scans `go.mod` on every push; blocks on high severity |
 | Vulnerable container OS packages | Snyk container scan of coordinator image on every push |
+| Compromised node reports a cross-job artifact URI (claims job A's bytes live under job B's prefix) | `attestOutputs` rejects any `ResolvedOutputs` URI that doesn't match `<scheme>://<bucket>/jobs/<reporting-job-id>/<local_path>` (feature 13). A compromised node can only report URIs under its own running job's prefix. |
+| Compromised node reports an undeclared output name (invents names the downstream resolver would accept) | `attestOutputs` cross-checks every reported `Name` against `Job.Outputs` (the submit-time declaration); undeclared names are dropped (feature 12 audit 2026-04-15-05). |
+| Compromised node serves tampered artifact bytes under a valid URI | Downstream node's Stager runs `artifacts.GetAndVerify` — reads into a capped buffer, hashes, returns `ErrChecksumMismatch` if the digest doesn't match the SHA-256 the upstream committed with the URI. Catches leaked S3-creds tamper, bit rot, and store-side MITM. |
+| Leaked workflow token escalates to admin (mints more tokens, revokes nodes) | `submit.py` mints a `job`-role token per workflow (subject `workflow:<id>`, TTL 1 h); `adminMiddleware` returns 403 for `/admin/*` endpoints on the `job` role. Pre-feature-19 wiring had `POST /admin/nodes/{id}/revoke` missing `adminMiddleware`; fixed in the same commit that added the role. |
+| Leaked workflow token persists after the pipeline finishes | 1-hour TTL; operator can `DELETE /admin/tokens/{jti}` to invalidate immediately. `submit.py` falls back to the root admin token with a stderr warning on older coordinator builds that lack the `job` role. |
+| ML-pipeline DoS via oversize artifact metadata | `http.MaxBytesReader` at 1 MiB on `POST /api/datasets` and `POST /api/models` — shared with the job-submit handler. Rate-limited per-subject via `registryQueryAllow` (2 rps burst 30). |
+| CPU job on a GPU-equipped node escapes per-job GPU pinning by setting its own `CUDA_VISIBLE_DEVICES` | Runtime stamps `CUDA_VISIBLE_DEVICES=""` into the subprocess env map (not via OS env precedence) for `req.GPUs == 0` on nodes with `allocator.Capacity() > 0`. Map-based override is unambiguous — no platform-dependent first/last-set-wins. |
+| Malicious service job binds a privileged port or hides behind a non-loopback probe | `validateServiceSpec` rejects `port < 1024`, `port > 65535`, non-absolute `health_path`, whitespace/NUL in the path, and `health_initial_ms > 30 min`. The prober binds `127.0.0.1` only — coordinator never proxies a service, a client that needs external access puts an Nginx in front. |
 
 ---
 

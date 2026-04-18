@@ -20,6 +20,8 @@ key decisions behind every major choice.
 9. [Known constraints and out-of-scope](#9-known-constraints-and-out-of-scope)
 10. [Glossary](#10-glossary)
 11. [Key decisions quick reference](#11-key-decisions-quick-reference)
+12. [Analytics pipeline](#12-analytics-pipeline)
+13. [ML pipeline](#13-ml-pipeline) → [ml-pipelines.md](ml-pipelines.md)
 
 ---
 
@@ -176,6 +178,18 @@ runtime. Resource limits are enforced only when `HELION_RUNTIME=rust`.
 | `GET` | `/ws/jobs/{id}/logs` | First-message | WebSocket live log stream |
 | `GET` | `/ws/metrics` | First-message | WebSocket live cluster metrics |
 | `GET` | `/ws/events` | First-message | WebSocket event stream (subscribe with topic patterns) |
+| `POST` | `/api/datasets` | Bearer | Register a dataset `{name, version, uri, size_bytes, sha256, tags}` (feature 16) |
+| `GET` | `/api/datasets` | Bearer | List datasets (paginated) |
+| `GET` | `/api/datasets/{name}/{version}` | Bearer | Fetch single dataset |
+| `DELETE` | `/api/datasets/{name}/{version}` | Bearer | Delete dataset metadata (bytes remain) |
+| `POST` | `/api/models` | Bearer | Register a model with lineage `{name, version, uri, framework, source_job_id, source_dataset, metrics}` |
+| `GET` | `/api/models` | Bearer | List models (paginated) |
+| `GET` | `/api/models/{name}/latest` | Bearer | Fetch most-recently-registered version by `CreatedAt` |
+| `GET` | `/api/models/{name}/{version}` | Bearer | Fetch single model |
+| `DELETE` | `/api/models/{name}/{version}` | Bearer | Delete model metadata (bytes remain) |
+| `GET` | `/api/services` | Bearer | List live inference-service endpoints (feature 17) |
+| `GET` | `/api/services/{job_id}` | Bearer | Lookup one service's upstream URL |
+| `GET` | `/workflows/{id}/lineage` | Bearer | Workflow DAG joined with job status + ResolvedOutputs + registered models (feature 18 Pipelines view) |
 
 ---
 
@@ -301,6 +315,13 @@ instructions, cgroup v2 overhead measurements, and seccomp filtering latency.
 | **mTLS** | Mutual TLS. Both client and server present and verify certificates. Prevents unauthorised nodes from connecting. |
 | **PQC** | Post-Quantum Cryptography. NIST completed standardisation of ML-KEM and ML-DSA in 2024. |
 | **seccomp-bpf** | Linux kernel feature that restricts which syscalls a process can make. Used by the Rust runtime for job isolation. |
+| **Artifact store** | Object-storage abstraction for ML job bytes. S3-compatible (MinIO in dev); `file://` fallback for local testing. Addressed by `s3://<bucket>/jobs/<job-id>/<path>`. See [ml-pipelines.md](ml-pipelines.md). |
+| **Stager** | Node-side component that prepares a per-job working directory: downloads declared inputs before `Run()`, uploads declared outputs after exit 0. Drives the `HELION_INPUT_*` / `HELION_OUTPUT_*` env vars. |
+| **`from:` reference** | Workflow YAML syntax for "rewrite this input's URI to the upstream job's resolved output URI at dispatch time." Splits at last dot so workflow job names with dots still work. |
+| **ResolvedOutputs** | Per-job record of the `(name, uri, sha256, size)` tuples the coordinator persists once the stager uploads on exit 0. Downstream `from:` references read from here. Attested via scheme + prefix + suffix + declared-name checks. |
+| **Dataset / model registry** | Metadata store for named, versioned ML artifacts. Lineage-bearing (model → source job → source dataset) and metric-bearing. Bytes stay in the artifact store; registry holds pointers. |
+| **Service job** | Long-running job with a `service: {port, health_path}` block. Runtime skips timeout enforcement; node runs a readiness prober and reports ready/unhealthy transitions. Exposed via `GET /api/services/{id}`. |
+| **CUDA_VISIBLE_DEVICES** | Env var set by the runtime on GPU jobs (list of claimed device indices) and on CPU jobs running on GPU-equipped nodes (empty string, hides all devices from the process). |
 
 ---
 
@@ -321,7 +342,10 @@ instructions, cgroup v2 overhead measurements, and seccomp filtering latency.
 | Crash recovery | Grace period + retry | Fixes v1 naive recovery. 15 s default grace period; configurable. |
 | JWT storage (dashboard) | In-memory only | Never `localStorage`/`sessionStorage`. Intentional for a security-focused project. |
 | Audit log | Append-only, BadgerDB | Every security and job event recorded. Never updated or deleted in normal operation. |
-| Analytics store | PostgreSQL (opt-in) | Dual-database: BadgerDB for operational hot path, PostgreSQL for historical analytics. Opt-in via `HELION_ANALYTICS_DSN`. |
+| Analytics store | PostgreSQL (opt-in) | Triple-tier storage: BadgerDB for operational hot path, object store for ML artifact bytes, PostgreSQL for historical analytics. Opt-in via `HELION_ANALYTICS_DSN`. |
+| ML artifact store | S3-compatible, `file://` fallback | Separate from operational metadata: terabytes of training bytes don't belong in BadgerDB. Addressed by `s3://<bucket>/jobs/<job-id>/<path>`; integrity via SHA-256 propagated end-to-end. See [ml-pipelines.md](ml-pipelines.md). |
+| ML artifact passing | `from:` references resolved at dispatch | Data flow between workflow jobs is declarative: `from: upstream.OUTPUT` rewrites to the concrete URI once the upstream reports `ResolvedOutputs`. Resolver reads only the coordinator's persisted attested record — compromised node cannot inject foreign URIs. |
+| Inference serving | In-process service jobs with readiness probes | No separate serving control plane. `service: {port, health_path}` on any job turns it into a long-running subprocess; node runs an edge-triggered probe loop and surfaces the upstream URL via `/api/services/{id}`. Routing / LB / autoscaling out of scope. |
 
 ---
 
@@ -362,3 +386,147 @@ on startup.
 The `analytics.Backfill()` function reads the existing BadgerDB audit trail and
 inserts historical events into PostgreSQL, so analytics coverage extends back before
 the sink was deployed. Idempotent — safe to run multiple times.
+
+---
+
+## 13. ML pipeline
+
+Helion's ML slice (features 11–19) turns the base orchestrator
+into one that runs a training → registry → serve pipeline
+end-to-end without a separate ML control plane. See
+[ml-pipelines.md](ml-pipelines.md) for the user-facing guide;
+this section is the architecture brief.
+
+### Three-tier storage
+
+The operational dual-store (BadgerDB + optional PostgreSQL)
+extends to three tiers when ML is in use:
+
+```
+                      ┌─────────────────┐
+  operational metadata│    BadgerDB     │  <── Stager.Finalize attests
+       + ResolvedOutputs│  (coordinator)  │      the URI here
+                      └────────┬────────┘
+                               │ reads
+                   ┌───────────▼────────────┐
+                   │   Node Stager (S3)     │  <── downloads / uploads
+                   │   ┌──────────────────┐ │      artifact bytes
+                   │   │  Object store    │ │
+ ML artifact bytes │   │  (S3 / MinIO)    │ │
+                   │   │  file:// fallback│ │
+                   │   └──────────────────┘ │
+                   └────────────────────────┘
+
+  historical events  ┌─────────────────┐
+                     │   PostgreSQL    │  <── analytics sink, opt-in
+                     │   (analytics)   │
+                     └─────────────────┘
+```
+
+Each tier has a distinct access pattern:
+
+- **BadgerDB (operational metadata).** Small, frequent writes
+  (job transitions, heartbeats, registry records). Authoritative
+  for `ResolvedOutputs` — the attested `(name, uri, sha256,
+  size)` tuples downstream jobs reference.
+- **Object store (ML artifact bytes).** Large, infrequent writes
+  (one upload per job output on exit 0). Addressed by
+  `s3://<bucket>/jobs/<job-id>/<path>`. Never reached by the
+  coordinator — the node-side Stager is the only writer. Integrity
+  via SHA-256 propagated with every URI.
+- **PostgreSQL (analytics).** Append-only historical facts for
+  the analytics dashboard. Opt-in via `HELION_ANALYTICS_DSN`.
+
+BadgerDB is **never written** by ML hot paths that move bytes;
+the object store is **never read** by the dashboard. Each tier's
+unavailability degrades a different capability:
+
+| Tier down | Effect |
+|---|---|
+| BadgerDB | Coordinator unusable — scheduling + registry + auth all blocked |
+| Object store | New ML jobs fail at Stager.Finalize (upload) or dispatch (download); operational control plane unaffected |
+| PostgreSQL | Analytics dashboard loses historical data; operational state intact |
+
+### Component map
+
+See [COMPONENTS.md § 5](COMPONENTS.md#5-ml-subsystems) for
+internals. Summary:
+
+- **`internal/artifacts/`** — `Store` interface with `LocalStore`
+  + `S3Store` implementations. `GetAndVerify` reads a URI into a
+  capped buffer, hashes it, and returns `ErrChecksumMismatch` on
+  digest mismatch.
+- **`internal/staging/`** — node-side `Stager` that prepares
+  per-job workdirs (downloads inputs, mints `HELION_INPUT_*`)
+  and finalises on exit 0 (uploads outputs, emits resolved URIs
+  back to the node agent for `ReportResult`).
+- **`internal/cluster/workflow_resolve.go`** — dispatch-time
+  resolver that rewrites `from:` references to the upstream's
+  attested URI + SHA-256.
+- **`internal/registry/`** — BadgerDB-backed dataset + model
+  registry. Shares the coordinator's DB under `datasets/<name>/
+  <version>` and `models/<name>/<version>` prefixes.
+- **`internal/cluster/service_registry.go`** — in-memory map of
+  live inference-service endpoints. Populated by
+  `ReportServiceEvent`, cleared on JobCompletionCallback.
+  Deliberately not persisted — a stale entry from a previous
+  coordinator run would point at a gone node:port; next probe
+  tick re-populates.
+- **`internal/nodeserver/service_prober.go`** — long-running
+  goroutine alongside a service job's subprocess. Polls
+  `127.0.0.1:<port><health_path>` every 5 s, emits
+  edge-triggered ready/unhealthy events (never one per tick).
+
+### Wire contracts added
+
+Two proto additions in `proto/node.proto`:
+
+```protobuf
+message DispatchRequest {
+  // ... existing fields ...
+  repeated ArtifactBinding inputs  = 10;   // feature 12
+  repeated ArtifactBinding outputs = 11;
+  ServiceSpec              service = 12;   // feature 17
+  uint32                   gpus    = 13;   // feature 15
+  map<string, string>      node_selector = 14; // feature 14
+}
+
+message ArtifactBinding {
+  string name       = 1;
+  string uri        = 2;
+  string local_path = 3;
+  string sha256     = 4;  // feature 13 — verified-download attestation
+}
+
+message ServiceSpec {
+  uint32 port              = 1;
+  string health_path       = 2;
+  uint32 health_initial_ms = 3;
+}
+```
+
+One new `ReportServiceEvent` RPC on `CoordinatorService` (feature
+17) that the node-side prober calls on ready/unhealthy
+transitions.
+
+### Trust boundary
+
+The coordinator is the trust boundary for cross-job data flow.
+Nodes never talk to each other; every artifact URI that reaches
+a downstream job's inputs has been:
+
+1. Reported by the upstream node via `ReportResult`.
+2. Filtered through `attestOutputs` (scheme + `jobs/<job-id>/`
+   prefix + `local_path` suffix + declared-name match).
+3. Persisted on the upstream's Job record.
+4. Read back by the resolver at the downstream's dispatch time.
+
+A compromised node cannot inject cross-job URIs, foreign schemes,
+renamed outputs, or undeclared output names. Integrity of the
+*bytes* behind the URI is enforced by the downstream's Stager
+via `artifacts.GetAndVerify` — the SHA-256 travels with the URI,
+so store-side MITM, leaked S3 credentials, and bit rot are all
+caught before the downstream process sees the file. See
+[ml-pipelines.md § 9](ml-pipelines.md#9-security-model--token-scoping-and-attestation)
+for the full model and [SECURITY.md § 1](SECURITY.md#1-threat-model)
+for the threat table.

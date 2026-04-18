@@ -25,7 +25,7 @@ relates to `audits/` and `deferred/`.
 | 07 | Observability improvements | **Done** | P2 | [07-observability.md](07-observability.md) |
 | 08 | Deferred-enhancements index (legacy) | Archived | — | [08-deferred-enhancements.md](08-deferred-enhancements.md) |
 | 09 | Analytics pipeline (BadgerDB → PostgreSQL) | **Done** | P1 | [09-analytics-pipeline.md](09-analytics-pipeline.md) |
-| 10 | Minimal ML pipeline (umbrella) | In progress (steps 1–9 done; 10 pending) | P1 | [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) |
+| 10 | Minimal ML pipeline (umbrella) | **Done** (all 10 slices landed + audited + acceptance-green) | P1 | [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) |
 | ~~11~~ | ~~ML — Artifact store abstraction~~ | **Implemented**; moved to [`implemented/11-ml-artifact-store.md`](implemented/11-ml-artifact-store.md) | P1 | — |
 | ~~12~~ | ~~ML — Job spec: inputs/outputs/working_dir~~ | **Implemented**; moved to [`implemented/12-ml-job-io-staging.md`](implemented/12-ml-job-io-staging.md) | P1 | — |
 | ~~13~~ | ~~ML — Inter-job artifact passing in workflows~~ | **Implemented**; moved to [`implemented/13-ml-workflow-artifact-passing.md`](implemented/13-ml-workflow-artifact-passing.md) | P1 | — |
@@ -35,7 +35,7 @@ relates to `audits/` and `deferred/`.
 | ~~17~~ | ~~ML — Inference jobs~~ | **Implemented** (Go runtime; Rust parity deferred/20); moved to [`implemented/17-ml-inference-jobs.md`](implemented/17-ml-inference-jobs.md) | P1 | — |
 | ~~18~~ | ~~ML — Dashboard module~~ | **Implemented + audited**; moved to [`implemented/18-ml-dashboard-module.md`](implemented/18-ml-dashboard-module.md) | P2 | — |
 | ~~19~~ | ~~ML — End-to-end iris demo~~ | **Implemented + acceptance-green (2026-04-18)**; moved to [`implemented/19-ml-end-to-end-demo.md`](implemented/19-ml-end-to-end-demo.md) | P1 | — |
-| 20 | ML — Documentation | Pending | P2 | [20-ml-documentation.md](20-ml-documentation.md) |
+| ~~20~~ | ~~ML — Documentation~~ | **Implemented**; moved to [`implemented/20-ml-documentation.md`](implemented/20-ml-documentation.md) | P2 | — |
 
 ### Priority definitions
 

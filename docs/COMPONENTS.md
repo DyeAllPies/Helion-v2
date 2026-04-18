@@ -243,3 +243,192 @@ reach terminal state (see [workflow_lifecycle.go](../internal/cluster/workflow_l
 Wiring happens at coordinator startup via `workflows.SetEventBus(eventBus)`.
 Without this wiring the analytics sink would never persist workflow rows to
 the `events` table.
+
+---
+
+## 5. ML subsystems
+
+Features 11–19 added five components on top of the base
+orchestrator. Each has a focused responsibility and is wired
+into the cluster at coordinator startup by opt-in env vars —
+nothing is required for non-ML deployments. See
+[ml-pipelines.md](ml-pipelines.md) for the user-facing guide.
+
+### 5.1 Artifact store — `internal/artifacts/`
+
+Object-storage abstraction for ML job bytes. Interface:
+
+```go
+type Store interface {
+    Put(ctx context.Context, uri string, r io.Reader) error
+    Get(ctx context.Context, uri string) (io.ReadCloser, error)
+    Stat(ctx context.Context, uri string) (Info, error)
+    // GetAndVerify reads into a capped buffer, hashes, returns
+    // ErrChecksumMismatch if the digest doesn't match.
+    GetAndVerify(ctx context.Context, uri, sha256 string) ([]byte, error)
+    GetAndVerifyTo(ctx context.Context, uri, sha256, dst string) error
+}
+```
+
+Two implementations:
+
+- **`LocalStore`** — filesystem-backed, `file://` URIs. Used for
+  local development and tests.
+- **`S3Store`** — `minio-go` client against any S3-compatible
+  endpoint (AWS, MinIO, Ceph). Enabled via
+  `HELION_ARTIFACTS_BACKEND=s3` + `HELION_ARTIFACTS_S3_*` env.
+
+URI shape for node-generated artifacts:
+`s3://<bucket>/jobs/<job-id>/<output-local-path>`. The
+`jobs/<job-id>/` prefix is load-bearing for feature-13's
+cross-job integrity attestation — `attestOutputs` rejects any
+URI that doesn't match the reporting job's ID.
+
+### 5.2 Staging — `internal/staging/`
+
+Node-side orchestration of per-job working directories.
+
+```go
+func (s *Stager) Prepare(ctx context.Context, job *cpb.Job) (*Prepared, error)
+func (s *Stager) Finalize(ctx context.Context, p *Prepared, success bool) ([]ResolvedOutput, error)
+```
+
+**Prepare** (before `Runtime.Run`):
+
+1. Create a workdir under `$HELION_WORK_ROOT/<job-id>/` (falls
+   back to `$TMPDIR/helion-jobs/` when unset) with mode `0o700`.
+2. For each declared input, `GetAndVerify` the URI into the
+   workdir at the declared `local_path`. Missing SHA-256 falls
+   back to a plain `Get` (plain-URI inputs with no committed
+   digest — e.g. `/jobs`-submit direct URIs).
+3. Export one `HELION_INPUT_<NAME>` env var per input with the
+   absolute workdir path.
+4. Export one `HELION_OUTPUT_<NAME>` env var per declared output
+   with the expected absolute path.
+
+**Finalize** (after `Runtime.Run`):
+
+- On `success=true` (exit 0 + no `KillReason`), for each
+  declared output: stat the file at the expected path, compute
+  SHA-256, `Put` to
+  `s3://<bucket>/jobs/<job-id>/<local-path>`. Returns a
+  `ResolvedOutput` slice the node agent copies into the
+  `ReportResult` RPC.
+- On `success=false` (failure, timeout, crash), skip uploads.
+- Always clean the workdir subtree (including any
+  `.helion-stage-*.tmp` files from mid-flight downloads).
+
+Security posture: node agents started without
+`HELION_ARTIFACTS_BACKEND` have `stager == nil`; their Dispatch
+handler rejects any job declaring Inputs/Outputs/WorkingDir with
+a descriptive error rather than running the command silently
+without bindings. This blocks "unconfigured node accepts blind
+run" as a failure mode.
+
+### 5.3 Workflow artifact resolver — `internal/cluster/workflow_resolve.go`
+
+Pure function called by the dispatch loop just before sending a
+job to its assigned node:
+
+```go
+func ResolveJobInputs(job *cpb.Job, jobs JobLookup) (*cpb.Job, error)
+```
+
+Walks `job.Inputs`; for each input with a non-empty `From`
+(`"<upstream_name>.<OUTPUT_NAME>"`, last-dot split so dotted job
+names still work), looks up the upstream's `ResolvedOutputs`,
+and rewrites the input's URI + SHA-256. Returns a defensive
+copy — the persisted Job record retains the original `From`
+field so lineage stays auditable across retries.
+
+Errors are deliberate: `ErrResolveUpstreamMissing`,
+`ErrResolveUpstreamNotCompleted`, `ErrResolveOutputMissing` —
+each a specific transition reason the dispatch loop translates
+into a `Failed` state with a descriptive message. Emits
+`ml.resolve_failed` events to the bus (feature 18 Pipelines
+view surfaces these).
+
+### 5.4 Registry — `internal/registry/`
+
+BadgerDB-backed dataset + model metadata store. Shares the
+coordinator's DB under `datasets/<name>/<version>` and
+`models/<name>/<version>` key prefixes (no separate DB file —
+metadata is small and low-traffic compared to jobs).
+
+```go
+type Store interface {
+    RegisterDataset(ctx, *Dataset) error
+    GetDataset(name, version string) (*Dataset, error)
+    ListDatasets(ctx, page, size int) ([]*Dataset, int, error)
+    DeleteDataset(ctx, name, version string) error
+    // ... parallel set for models ...
+    LatestModel(name string) (*Model, error)
+    ListBySourceJob(ctx, sourceJobID string) ([]*Model, error)
+}
+```
+
+`Model.SourceJobID` + `Model.SourceDataset` are the lineage
+pointers; the registrar is trusted to stamp them correctly
+(matching the broader trust model where node-reported outputs
+are gated by `attestOutputs` but user-supplied metadata at the
+REST boundary rides on the JWT subject).
+
+Validation lives in `registry/validate.go`: k8s-DNS-label
+charset for names, broader charset for versions, k8s-label-
+shaped bounds on tags (≤32 entries, 63-byte keys, 253-byte
+values), `math.IsInf` / `math.IsNaN` rejection on metric floats,
+partial lineage pointer rejection.
+
+REST surface in `internal/api/handlers_registry.go`: every
+endpoint rides the shared `authMiddleware` + per-subject
+`registryQueryAllow` (2 rps burst 30); success emits an audit
+event + bus event. Routes register only when
+`SetRegistryStore` is called at coordinator startup, so a
+non-ML deployment returns 404 from the mux.
+
+### 5.5 Service mode — `internal/nodeserver/service_prober.go` + `internal/cluster/service_registry.go`
+
+Long-running inference jobs with readiness probing.
+
+**Node-side prober.** Launched by `nodeserver.Dispatch` when
+`DispatchRequest.service != nil`. Forks the runtime into a
+detached goroutine (so the Dispatch RPC can ACK immediately —
+the subprocess never returns on its own) and runs
+`probeService` alongside it:
+
+```
+loop:
+  ready = GET http://127.0.0.1:<port><health_path>  (2s timeout)
+  if ready != last: ReportServiceEvent(...)
+  sleep 5s
+  on ctx.Done(): exit (ReportServiceEvent only records live
+                       state — "gone" is inferred from the job
+                       reaching a terminal state)
+```
+
+Edge-triggered: a happy service emits exactly one
+`service.ready` across its entire lifetime. The 4 KiB
+body-drain cap on the probe response bounds goroutine cost
+against a misbehaving `/healthz`.
+
+**Coordinator-side registry.** In-memory
+`map[job_id]ServiceEndpoint`; `Upsert` on every
+`ReportServiceEvent`, `Delete` on the JobCompletionCallback
+that fires when the service job reaches a terminal state.
+Backs two endpoints:
+
+- `GET /api/services` — list all currently-tracked services.
+- `GET /api/services/{job_id}` — one service's upstream URL.
+
+Not persisted: a coordinator restart starts with an empty map,
+and the next node-side probe tick re-populates within ~5 s.
+Persisting would risk surfacing stale entries pointing at gone
+nodes — worse than a brief empty state.
+
+**Workflow-scoped tokens.** The iris `submit.py` mints a
+short-lived `job`-role JWT via `POST /admin/tokens` and injects
+it into each job's env — in-workflow scripts that need to call
+back into the registry use that scoped token instead of the
+operator's root admin. `adminMiddleware` rejects the `job` role
+at 403 so a leaked token cannot mint more tokens or revoke
+nodes. See [ml-pipelines.md § 9](ml-pipelines.md#9-security-model--token-scoping-and-attestation).
