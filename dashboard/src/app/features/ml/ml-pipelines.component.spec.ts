@@ -73,11 +73,19 @@ describe('MlPipelinesComponent', () => {
     expect(apiSpy.getWorkflows).toHaveBeenCalledWith(2, 50);
   });
 
-  it('statusChipClass maps statuses to colour classes', () => {
+  it('statusChipClass maps statuses to distinct colour classes', () => {
     expect(component.statusChipClass('running')).toContain('chip-running');
     expect(component.statusChipClass('completed')).toContain('chip-completed');
     expect(component.statusChipClass('failed')).toContain('chip-failed');
     expect(component.statusChipClass('cancelled')).toContain('chip-failed');
+    expect(component.statusChipClass('timeout')).toContain('chip-failed');
+    expect(component.statusChipClass('lost')).toContain('chip-failed');
+    // Each transitional state gets its own class so the list row
+    // doesn't collapse pending/scheduled/dispatching into one
+    // neutral chip (feature 21 walkthrough needed the distinction).
+    expect(component.statusChipClass('pending')).toContain('chip-pending');
+    expect(component.statusChipClass('scheduled')).toContain('chip-scheduled');
+    expect(component.statusChipClass('dispatching')).toContain('chip-dispatching');
     expect(component.statusChipClass('whatever')).toContain('chip-default');
   });
 });

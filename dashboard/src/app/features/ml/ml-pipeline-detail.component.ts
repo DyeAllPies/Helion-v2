@@ -199,11 +199,18 @@ import { WorkflowLineage } from '../../shared/models';
     }
     .model-link:hover { text-decoration: underline; }
 
-    .chip.chip-running { background: rgba(68, 160, 200, 0.15); color: #68b4d4; }
-    .chip.chip-completed { background: rgba(68, 181, 95, 0.15); color: var(--color-completed); }
-    .chip.chip-failed { background: rgba(244, 67, 54, 0.15); color: var(--color-error); }
-    .chip.chip-default { background: var(--color-surface-2); color: var(--color-muted); }
-    .chip.chip-pending { background: rgba(180, 180, 180, 0.1); color: var(--color-muted); }
+    /* Status-chip palette. Each transitional state gets its own
+       distinctive colour so a viewer can see the DAG progress at
+       a glance (pending -> dispatching -> running -> completed).
+       Vars come from styles.scss; matches the workflow-detail
+       border-left palette (feature 4 job state machine). */
+    .chip.chip-pending     { background: rgba(255, 171, 64, 0.12); color: var(--color-pending); }
+    .chip.chip-scheduled   { background: rgba(255, 171, 64, 0.12); color: var(--color-pending); }
+    .chip.chip-dispatching { background: rgba(129, 140, 248, 0.15); color: var(--color-dispatching); }
+    .chip.chip-running     { background: rgba(68, 160, 200, 0.18); color: #68b4d4; }
+    .chip.chip-completed   { background: rgba(68, 181, 95, 0.15); color: var(--color-completed); }
+    .chip.chip-failed      { background: rgba(244, 67, 54, 0.15); color: var(--color-error); }
+    .chip.chip-default     { background: var(--color-surface-2); color: var(--color-muted); }
   `],
 })
 export class MlPipelineDetailComponent implements OnInit, AfterViewInit, OnDestroy {
@@ -287,10 +294,14 @@ export class MlPipelineDetailComponent implements OnInit, AfterViewInit, OnDestr
 
   statusChipClass(status: string): string {
     const s = (status || '').toLowerCase();
-    if (s === 'running')    return 'chip chip-running';
-    if (s === 'completed')  return 'chip chip-completed';
-    if (s === 'failed' || s === 'cancelled') return 'chip chip-failed';
-    if (s === 'pending' || s === 'scheduled' || s === 'dispatching') return 'chip chip-pending';
+    if (s === 'running')      return 'chip chip-running';
+    if (s === 'completed')    return 'chip chip-completed';
+    if (s === 'failed' || s === 'cancelled' || s === 'timeout' || s === 'lost') {
+      return 'chip chip-failed';
+    }
+    if (s === 'dispatching')  return 'chip chip-dispatching';
+    if (s === 'scheduled')    return 'chip chip-scheduled';
+    if (s === 'pending')      return 'chip chip-pending';
     return 'chip chip-default';
   }
 

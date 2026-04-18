@@ -120,14 +120,23 @@ describe('MlPipelineDetailComponent', () => {
     expect(component.formatBytes(3 * 1024 * 1024)).toBe('3.0 MiB');
   });
 
-  it('statusChipClass pins every known status to a class', () => {
+  it('statusChipClass pins every known status to a distinct class', () => {
     fixture.detectChanges();
+    // Terminal states.
     expect(component.statusChipClass('running')).toContain('chip-running');
     expect(component.statusChipClass('completed')).toContain('chip-completed');
     expect(component.statusChipClass('failed')).toContain('chip-failed');
     expect(component.statusChipClass('cancelled')).toContain('chip-failed');
+    expect(component.statusChipClass('timeout')).toContain('chip-failed');
+    expect(component.statusChipClass('lost')).toContain('chip-failed');
+    // Transitional states each get their own class so the DAG view
+    // colour-codes progress (pending → scheduled → dispatching →
+    // running). Regression guard against the previous behaviour
+    // where all three transitional states shared chip-pending grey.
     expect(component.statusChipClass('pending')).toContain('chip-pending');
-    expect(component.statusChipClass('scheduled')).toContain('chip-pending');
+    expect(component.statusChipClass('scheduled')).toContain('chip-scheduled');
+    expect(component.statusChipClass('dispatching')).toContain('chip-dispatching');
+    // Unknown falls through to the neutral default.
     expect(component.statusChipClass('unknown')).toContain('chip-default');
   });
 });
