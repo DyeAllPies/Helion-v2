@@ -50,6 +50,7 @@ Security & code-quality audits, one file per run.
 | [done/2026-04-18-08](done/2026-04-18-08.md) | Feature-17 third-pass audit — 4 Test Gaps fixed (3 unpinned validator branches + `JobResponse.Service` round-trip); confirms "passes find finer gaps" calibration and recommends feature 18 next |
 | [done/2026-04-18-09](done/2026-04-18-09.md) | Feature-17 fourth-pass audit — 3 Test Gaps fixed (two `/api/services` auth-wrapper 401 tests + `ReportServiceEvent` empty-JobId `InvalidArgument`); declares feature-17 saturation, names "first-line defense unpinned" gap class |
 | [done/2026-04-18-10](done/2026-04-18-10.md) | Feature-17 fifth-pass audit — `helion_services_total` Prometheus gauge emission + nil-counter omission; recants pass-09 saturation, generalises "enumerate every consumer surface (HTTP, gRPC, audit, metrics)" |
+| [done/2026-04-18-11](done/2026-04-18-11.md) | Feature-17 sixth-pass audit — `Job.Service` BadgerDB Save→LoadAll roundtrip + forward-compat; recants pass-10 saturation, extends the rule to cover producer surfaces (persistence) |
 
 ## Workflow
 
