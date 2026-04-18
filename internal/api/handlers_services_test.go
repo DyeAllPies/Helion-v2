@@ -107,3 +107,34 @@ func TestListServices_NotFoundWhenRegistryUnwired(t *testing.T) {
 		t.Fatalf("want 404, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
+
+// TestGetService_IPv6NodeAddress_WrapsBrackets pins the buildUpstreamURL
+// IPv6 branch — NodeAddress like "[::1]:9090" must render as
+// "http://[::1]:<port><path>", not "http://::1:<port><path>" which
+// every HTTP client rejects as malformed. The IPv4 happy path is
+// covered by TestGetService_LiveEndpoint_Returns200; without this
+// companion a regression dropping the `net.ParseIP(...).To4() == nil`
+// bracket-wrap would silently break every IPv6-addressed deployment.
+func TestGetService_IPv6NodeAddress_WrapsBrackets(t *testing.T) {
+	srv, sr := newServiceServer(t)
+	sr.Upsert(cpb.ServiceEndpoint{
+		JobID:       "inf-v6",
+		NodeID:      "node-v6",
+		NodeAddress: "[::1]:9090",
+		Port:        8080,
+		HealthPath:  "/healthz",
+		Ready:       true,
+		UpdatedAt:   time.Now(),
+	})
+
+	rr := do(srv, "GET", "/api/services/inf-v6", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp api.ServiceEndpointResponse
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	want := "http://[::1]:8080/healthz"
+	if resp.UpstreamURL != want {
+		t.Errorf("UpstreamURL = %q, want %q", resp.UpstreamURL, want)
+	}
+}

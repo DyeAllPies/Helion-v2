@@ -328,6 +328,67 @@ func TestLogCoordinatorStop_StoresReason(t *testing.T) {
 	}
 }
 
+// TestLogServiceEvent_Ready_Unhealthy pins the feature-17 audit
+// emission shape: event type flips between "service.ready" and
+// "service.unhealthy" on ready transitions; actor is stamped as
+// "node:<nodeID>" so audit queries can group by reporting node;
+// and every field the downstream SIEM / dashboard needs
+// (job_id / port / health_path / consecutive_failures) lands in
+// details. Every peer method (LogJobSubmit, LogNodeRegister,
+// LogSecurityViolation, etc.) has a matching event-type +
+// details test; LogServiceEvent was the only one missing.
+// A refactor renaming the event strings or dropping details
+// fields would silently break the audit query path without
+// tripping any feature-17 handler test (which goes through the
+// mockAuditLogger, not this real implementation).
+func TestLogServiceEvent_Ready_Unhealthy(t *testing.T) {
+	t.Run("ready transition emits service.ready", func(t *testing.T) {
+		store := newMockStore()
+		logger := audit.NewLogger(store, 0)
+
+		_ = logger.LogServiceEvent(context.Background(), "node-a", "svc-1", true, 8080, "/healthz", 0)
+
+		ev := storedEvent(t, store)
+		if ev.Type != "service.ready" {
+			t.Errorf("type: got %q, want %q", ev.Type, "service.ready")
+		}
+		if ev.Actor != "node:node-a" {
+			t.Errorf("actor: got %q, want %q", ev.Actor, "node:node-a")
+		}
+		if ev.Details["job_id"] != "svc-1" {
+			t.Errorf("job_id: %v", ev.Details["job_id"])
+		}
+		// JSON decodes numeric Details values back as float64.
+		if ev.Details["port"] != float64(8080) {
+			t.Errorf("port: %v", ev.Details["port"])
+		}
+		if ev.Details["health_path"] != "/healthz" {
+			t.Errorf("health_path: %v", ev.Details["health_path"])
+		}
+		if ev.Details["consecutive_failures"] != float64(0) {
+			t.Errorf("consecutive_failures: %v", ev.Details["consecutive_failures"])
+		}
+	})
+
+	t.Run("unhealthy transition emits service.unhealthy with failure count", func(t *testing.T) {
+		store := newMockStore()
+		logger := audit.NewLogger(store, 0)
+
+		_ = logger.LogServiceEvent(context.Background(), "node-b", "svc-2", false, 9000, "/ready", 3)
+
+		ev := storedEvent(t, store)
+		if ev.Type != "service.unhealthy" {
+			t.Errorf("type: got %q, want %q", ev.Type, "service.unhealthy")
+		}
+		if ev.Actor != "node:node-b" {
+			t.Errorf("actor: got %q, want %q", ev.Actor, "node:node-b")
+		}
+		if ev.Details["consecutive_failures"] != float64(3) {
+			t.Errorf("consecutive_failures: %v", ev.Details["consecutive_failures"])
+		}
+	})
+}
+
 // ── QueryEvents ───────────────────────────────────────────────────────────────
 
 // seedEvents logs n events of different types for query tests.
