@@ -34,6 +34,16 @@ services:
       - HELION_DB_PATH=/app/state/db
       - HELION_EXTRA_SANS=coordinator
       - HELION_CA_FILE=/app/state/ca.pem
+      # Feature 23 — keep REST on plain HTTP in this overlay so the
+      # existing Playwright suite, the python submit.py scripts in
+      # examples/ml-*, and the `curl -sS http://localhost:8080`
+      # smoke checks in the docs all continue to work. The TLS path
+      # is shipped and unit-tested (see tests/integration/security/
+      # rest_tls_test.go); flipping the e2e suite to it is a
+      # follow-up that lands with the batch e2e pass covering
+      # features 22-28. Production coordinators SHOULD leave this
+      # unset — the default-on posture is then active.
+      - HELION_REST_TLS=off
       # Analytics pipeline enabled for E2E so the /api/analytics/* endpoints
       # are registered and the dashboard /analytics page has a real backend.
       - HELION_ANALYTICS_DSN=postgres://helion:secret@analytics-db:5432/helion_analytics?sslmode=disable

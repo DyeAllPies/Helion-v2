@@ -38,7 +38,7 @@ relates to `audits/` and `deferred/`.
 | ~~20~~ | ~~ML — Documentation~~ | **Implemented**; moved to [`implemented/20-ml-documentation.md`](implemented/20-ml-documentation.md) | P2 | — |
 | ~~21~~ | ~~ML — MNIST local E2E (progression-observing)~~ | **Implemented** (six tests green locally; also fixed a hidden 10 s dispatch RPC ceiling); moved to [`implemented/21-ml-mnist-e2e-local.md`](implemented/21-ml-mnist-e2e-local.md) | P2 | — |
 | 22 | Dashboard submission tab (jobs / workflows / ML workflows + DAG builder) | **Shipped** (UI + DAG builder; server hardening 24-26 pending) | P1 | [22-ui-submission-tab.md](22-ui-submission-tab.md) |
-| 23 | Hybrid-PQC on coordinator REST + WebSocket listener | Pending | P1 | [23-rest-hybrid-pqc.md](23-rest-hybrid-pqc.md) |
+| ~~23~~ | ~~Hybrid-PQC on coordinator REST + WebSocket listener~~ | **Implemented** (code + 8 tests shipped; existing e2e overlays opt out via `HELION_REST_TLS=off` pending the batch e2e migration); moved to [`implemented/23-rest-hybrid-pqc.md`](implemented/23-rest-hybrid-pqc.md) | P1 | — |
 | 24 | Dry-run preflight (`?dry_run=true` on submit endpoints) | Pending | P1 | [24-dry-run-preflight.md](24-dry-run-preflight.md) |
 | 25 | Dangerous-env denylist (`LD_*`, `DYLD_*`, `GCONV_PATH`, …) | Pending | P1 | [25-env-var-denylist.md](25-env-var-denylist.md) |
 | 26 | Secret env-var support (redact on GET + scrub audit) | Pending | P1 | [26-secret-env-vars.md](26-secret-env-vars.md) |

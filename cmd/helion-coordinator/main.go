@@ -379,12 +379,67 @@ func main() {
 			slog.Int("buffer_limit", sinkCfg.BufferLimit))
 	}
 
-	go func() {
-		log.Info("HTTP API listening", slog.String("addr", httpAddr))
-		if err := apiSrv.Serve(httpAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("HTTP server stopped", slog.Any("err", err))
+	// ── REST + WebSocket listener (feature 23) ────────────────────────────
+	//
+	// Serves over TLS 1.3 with the hybrid-PQC curve preferences by default.
+	// The dashboard + in-workflow Python scripts both talk to this listener,
+	// so upgrading it covers every dashboard → coordinator byte and every
+	// in-job callback (register.py posting to /api/models etc.).
+	//
+	// Three knobs:
+	//
+	//   HELION_REST_TLS=off     — serve plain HTTP instead. Dev-only
+	//                             escape hatch; logged as a WARN so the
+	//                             choice is visible on every startup.
+	//
+	//   HELION_PQC_REQUIRED=1   — refuse to start if ApplyHybridKEM silently
+	//                             fell back to classical-only (Go runtime
+	//                             GODEBUG=tlskyber=0 or pre-1.23 toolchain).
+	//                             Production coordinators should set this so
+	//                             "hybrid where supported" hardens into
+	//                             "hybrid or don't start".
+	//
+	// The gRPC listener already runs on the same hybrid KEM setup (see the
+	// dispatch-side wiring below); this just plumbs the same enhancement
+	// onto the REST side too.
+	restTLSDisabled := strings.EqualFold(os.Getenv("HELION_REST_TLS"), "off")
+	if restTLSDisabled {
+		log.Warn("HELION_REST_TLS=off — REST listener will serve plaintext; dev use only",
+			slog.String("addr", httpAddr))
+		go func() {
+			log.Info("HTTP API listening (plaintext)", slog.String("addr", httpAddr))
+			if err := apiSrv.Serve(httpAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("HTTP server stopped", slog.Any("err", err))
+			}
+		}()
+	} else {
+		restTLSCfg, err := bundle.CA.EnhancedTLSConfig(bundle.CertPEM, bundle.KeyPEM)
+		if err != nil {
+			log.Error("REST TLS config", slog.Any("err", err))
+			os.Exit(1)
 		}
-	}()
+		// HELION_PQC_REQUIRED guard: check after ApplyHybridKEM ran so we
+		// catch the silent-fallback case. hybridKEMEnabled() inside the
+		// pqcrypto package reads the runtime's GODEBUG kyber flag; if it
+		// returned false ApplyHybridKEM did nothing and CurvePreferences
+		// is empty. That's a compliance failure in strict mode.
+		if os.Getenv("HELION_PQC_REQUIRED") == "1" {
+			if !hasKyberCurve(restTLSCfg.CurvePreferences) {
+				log.Error("HELION_PQC_REQUIRED=1 but hybrid KEM missing from REST CurvePreferences",
+					slog.String("hint", "check Go version (≥1.23) + GODEBUG (tlskyber not disabled)"))
+				os.Exit(1)
+			}
+			log.Info("REST listener PQC-compliant", slog.String("kem", "X25519+ML-KEM-768"))
+		}
+		go func() {
+			log.Info("HTTP API listening (TLS + hybrid KEM)",
+				slog.String("addr", httpAddr),
+				slog.String("kem", "X25519+ML-KEM-768"))
+			if err := apiSrv.ServeTLS(httpAddr, restTLSCfg); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("HTTPS server stopped", slog.Any("err", err))
+			}
+		}()
+	}
 
 	// ── Job dispatch loop ────────────────────────────────────────────────
 	policy := cluster.PolicyFromEnv()
@@ -500,6 +555,23 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// hasKyberCurve reports whether a tls.Config's CurvePreferences list
+// contains the hybrid ML-KEM-768 curve ID (0x6399, assigned by Go 1.23+
+// for X25519Kyber768Draft00). Used by the HELION_PQC_REQUIRED startup
+// check so an operator who asked for strict PQ compliance gets a clear
+// failure instead of a silent plaintext-equivalent handshake when the
+// Go runtime's Kyber support has been turned off by GODEBUG or build
+// flag.
+func hasKyberCurve(prefs []tls.CurveID) bool {
+	const kyberID = tls.CurveID(0x6399)
+	for _, c := range prefs {
+		if c == kyberID {
+			return true
+		}
+	}
+	return false
 }
 
 func envInt(key string, def int) int {

@@ -90,6 +90,22 @@ the session requires breaking both simultaneously.
 - Implemented in `internal/pqcrypto/hybrid.go` using the Cloudflare `circl` library
   (ML-KEM primitives from NIST FIPS 203)
 
+**Surfaces covered.** Hybrid-KEM applies to BOTH coordinator-facing listeners:
+
+1. **coordinator ↔ node (gRPC, :9090)** — wired since the initial post-quantum pass
+   via `ServerCredentials()` + `ClientCredentials()` on `auth.Bundle`.
+2. **coordinator ↔ dashboard / in-workflow scripts (REST + WebSocket, :8080)** — added
+   in feature 23. `api.Server.ServeTLS(addr, cfg)` expects a `*tls.Config` built via
+   `bundle.CA.EnhancedTLSConfig(certPEM, keyPEM)`, the exact same path the gRPC
+   listener uses. The coordinator main wires this by default; opt-out requires
+   explicit `HELION_REST_TLS=off` and emits a WARN log on every startup.
+
+**Strict-mode enforcement.** Set `HELION_PQC_REQUIRED=1` on the coordinator to fail
+startup if `ApplyHybridKEM` silently produced a config without the Kyber curve
+(e.g. on a Go runtime with `GODEBUG=tlskyber=0`). Without this flag the coordinator
+falls back to classical-only curves when the runtime does not support Kyber; with the
+flag it refuses to start, guaranteeing the production posture never silently downgrades.
+
 **Why now?** The threat is harvest-now-decrypt-later: an adversary can record encrypted
 coordinator↔node traffic today and decrypt it once a sufficiently powerful quantum computer
 exists. Building hybrid PQC at design time costs relatively little; retrofitting it is

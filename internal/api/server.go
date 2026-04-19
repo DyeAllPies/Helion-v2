@@ -54,6 +54,7 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -285,30 +286,77 @@ func (s *Server) Handler() http.Handler {
 	return s.mux
 }
 
-// Serve starts listening on addr. Blocks until the server is closed.
-// Returns http.ErrServerClosed on graceful shutdown — callers should treat
-// that as a clean exit.
+// Serve starts listening on addr in plain HTTP. Blocks until the server
+// is closed. Returns http.ErrServerClosed on graceful shutdown — callers
+// should treat that as a clean exit.
+//
+// Feature 23 shipped ServeTLS as the preferred entry point; Serve stays
+// available for explicit opt-outs (dev overlays that set
+// HELION_REST_TLS=off). Production coordinators should always use
+// ServeTLS so the dashboard traffic rides a TLS 1.3 + hybrid-KEM
+// handshake end to end.
 func (s *Server) Serve(addr string) error {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("api.Server listen %s: %w", addr, err)
 	}
-	// AUDIT L6 (fixed): IdleTimeout prevents keep-alive connections from being held
-	// open indefinitely, limiting the resource impact of slow or idle clients.
-	// AUDIT 2026-04-12-01/L1 (fixed): ReadHeaderTimeout limits how long the
-	// server waits for request headers, countering Slowloris-style attacks
-	// that trickle headers one byte at a time to hold connection slots open.
-	hsrv := &http.Server{
+	hsrv := s.buildHTTPServer(nil)
+	s.httpSrvMu.Lock()
+	s.httpSrv = hsrv
+	s.httpSrvMu.Unlock()
+	return hsrv.Serve(lis)
+}
+
+// ServeTLS starts listening on addr with the supplied TLS config. Blocks
+// until the server is closed.
+//
+// cfg MUST already carry Certificates + ClientAuth + the hybrid-KEM
+// curve preferences — callers build it via `bundle.CA.EnhancedTLSConfig`
+// (see cmd/helion-coordinator/main.go and internal/pqcrypto/hybrid.go).
+// ServeTLS intentionally does NOT populate any of those fields itself;
+// passing a half-configured cfg is a programming error and returns
+// right away rather than silently serving plaintext.
+//
+// Covers both REST routes and WebSocket upgrades — /ws/* handlers live on
+// the same s.mux and ride the same listener, so a single TLS upgrade
+// secures every dashboard → coordinator byte.
+func (s *Server) ServeTLS(addr string, cfg *tls.Config) error {
+	if cfg == nil || len(cfg.Certificates) == 0 {
+		return fmt.Errorf("api.Server ServeTLS: cfg must carry at least one certificate")
+	}
+	lis, err := tls.Listen("tcp", addr, cfg)
+	if err != nil {
+		return fmt.Errorf("api.Server tls listen %s: %w", addr, err)
+	}
+	hsrv := s.buildHTTPServer(cfg)
+	s.httpSrvMu.Lock()
+	s.httpSrv = hsrv
+	s.httpSrvMu.Unlock()
+	return hsrv.Serve(lis)
+}
+
+// buildHTTPServer centralises the http.Server construction for Serve and
+// ServeTLS so both paths share the same timeouts + handler registration.
+// Pass a non-nil cfg to attach it to TLSConfig (only meaningful for the
+// TLS path; a tls.Listen already enforces the same cfg on the wire, but
+// setting it here also lets http.Server auto-upgrade to HTTP/2 over TLS
+// and exposes the TLSConfig via request introspection if a middleware
+// needs it).
+//
+// AUDIT L6 (fixed): IdleTimeout prevents keep-alive connections from being held
+// open indefinitely, limiting the resource impact of slow or idle clients.
+// AUDIT 2026-04-12-01/L1 (fixed): ReadHeaderTimeout limits how long the
+// server waits for request headers, countering Slowloris-style attacks
+// that trickle headers one byte at a time to hold connection slots open.
+func (s *Server) buildHTTPServer(cfg *tls.Config) *http.Server {
+	return &http.Server{
 		Handler:           s.mux,
+		TLSConfig:         cfg,
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	s.httpSrvMu.Lock()
-	s.httpSrv = hsrv
-	s.httpSrvMu.Unlock()
-	return hsrv.Serve(lis)
 }
 
 // Shutdown gracefully stops the HTTP server.
