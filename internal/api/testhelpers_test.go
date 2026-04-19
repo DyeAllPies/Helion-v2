@@ -64,6 +64,20 @@ func (m *mockJobStore) List(_ context.Context, _ string, _, _ int) ([]*cpb.Job, 
 	return jobs, len(jobs), nil
 }
 
+// ListAll satisfies the feature-37 JobStoreIface extension.
+// The mock ignores the status filter — tests that need status
+// filtering populate jobs and call List with a specific filter.
+func (m *mockJobStore) ListAll(_ context.Context, _ string) ([]*cpb.Job, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	var jobs []*cpb.Job
+	for _, j := range m.jobs {
+		jobs = append(jobs, j)
+	}
+	return jobs, nil
+}
+
 func (m *mockJobStore) CancelJob(_ context.Context, jobID, _ string) error {
 	j, ok := m.jobs[jobID]
 	if !ok {

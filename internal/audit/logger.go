@@ -123,6 +123,23 @@ const (
 	EventOperatorCertIssued  = "operator_cert_issued"
 	EventOperatorCertReject  = "operator_cert_reject"
 	EventOperatorCertMissing = "operator_cert_missing"
+
+	// Feature 37 — authorization-policy denials.
+	//
+	//   EventAuthzDeny — fires on every 403 emitted by the
+	//   authz evaluator. Detail carries the policy code
+	//   ("not_owner", "admin_required", "node_not_allowed",
+	//   "job_scope_mismatch", "legacy_owner_admin_only",
+	//   "anonymous_denied", …), the action attempted, and
+	//   the resource kind + id + owner. A sudden drop in
+	//   authz_deny volume after a deploy is an alert — the
+	//   policy engine may have silently widened.
+	//
+	// Distinct from EventAuthFailure (feature 35): that event
+	// covers AUTHENTICATION failures (401 — bad/missing JWT);
+	// this event covers AUTHORISATION denials (403 — valid
+	// identity but policy refused).
+	EventAuthzDeny = "authz_deny"
 )
 
 // Event represents a single audit log entry.

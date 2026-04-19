@@ -18,6 +18,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	"github.com/DyeAllPies/Helion-v2/internal/authz"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/DyeAllPies/Helion-v2/internal/principal"
 )
@@ -105,6 +106,17 @@ const (
 //     non-admin REST surface + token TTL.
 var validRoles = map[string]bool{"admin": true, "node": true, "job": true}
 
+// devAdminPrincipal is the synthetic Principal stamped on every
+// request when Server.DisableAuth() is active. Feature 37 funnels
+// every authz decision through `authz.Allow`; anonymous is denied
+// by design, so dev mode needs SOME well-formed identity to keep
+// the handler path identical to production.
+//
+// The display name is deliberately unambiguous — any audit event
+// carrying this Principal in production is an alarm: it means
+// DisableAuth is on in a prod binary, which is a misconfiguration.
+var devAdminPrincipal = principal.User("dev-admin-disableauth", "admin")
+
 // ── authMiddleware ────────────────────────────────────────────────────────────
 
 // authMiddleware validates JWT Bearer tokens and injects claims into context.
@@ -115,7 +127,21 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// Server.DisableAuth() explicitly.
 		if s.tokenManager == nil {
 			if s.disableAuth {
-				next.ServeHTTP(w, r)
+				// Feature 37 — DisableAuth is a dev-only mode.
+				// Stamp a synthetic dev-admin Principal so the
+				// unified authz evaluator sees a well-formed
+				// identity and doesn't have to carry a bypass
+				// branch. Anonymous would be denied by every
+				// Allow rule; using a named dev-admin keeps the
+				// authz path identical to production.
+				//
+				// This is documented as a dev-mode shortcut.
+				// `Server.DisableAuth()` is feature-gated on a
+				// startup flag; a production deploy that ever
+				// flips it has bigger problems than this one
+				// principal.
+				ctx := principal.NewContext(r.Context(), devAdminPrincipal)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 			slog.Error("auth middleware: tokenManager is nil and DisableAuth not set")
@@ -239,20 +265,24 @@ func classifyAuthFailure(err error) string {
 
 // ── adminMiddleware ───────────────────────────────────────────────────────────
 
-// adminMiddleware rejects requests whose JWT role is not "admin".
-// Must be composed inside authMiddleware so claims are already in context.
+// adminMiddleware enforces ActionAdmin against SystemResource
+// via the unified feature-37 authz evaluator.
+//
+// Pre-feature-37 this middleware read `claims.Role` directly.
+// Feature 37 reshapes the check so every 403 flows through one
+// policy point (internal/authz.Allow), emits one audit event
+// type (EventAuthzDeny), and carries a machine-readable deny
+// code on the response body.
+//
+// Must be composed inside authMiddleware so a Principal is in
+// context. DisableAuth mode stamps a synthetic dev-admin
+// Principal in authMiddleware; that principal satisfies
+// ActionAdmin trivially, so tests that use DisableAuth keep
+// working without a special bypass here.
 func (s *Server) adminMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// AUDIT H2 (fixed): when tokenManager is nil and DisableAuth has NOT
-		// been set, authMiddleware already short-circuited with 500, so this
-		// branch is never reached in that case. When DisableAuth is set (test
-		// path) we fall through without a role check — same as before.
-		if s.tokenManager != nil {
-			claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims)
-			if !ok || claims.Role != "admin" {
-				writeError(w, http.StatusForbidden, "admin role required")
-				return
-			}
+		if !s.authzCheck(w, r, authz.ActionAdmin, authz.SystemResource()) {
+			return
 		}
 		next.ServeHTTP(w, r)
 	}

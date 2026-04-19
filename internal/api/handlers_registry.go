@@ -24,6 +24,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	"github.com/DyeAllPies/Helion-v2/internal/authz"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	"github.com/DyeAllPies/Helion-v2/internal/registry"
@@ -114,6 +115,11 @@ func (s *Server) handleRegisterDataset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Feature 37 — gate dataset register on ActionWrite.
+	if !s.authzCheck(w, r, authz.ActionWrite,
+		authz.DatasetResource(d.Name+"/"+d.Version, d.OwnerPrincipal)) {
+		return
+	}
 
 	// Feature 24 — dry-run short-circuit. Validators above already
 	// ran; skip the durable RegisterDataset call, skip the event
@@ -202,6 +208,13 @@ func (s *Server) handleGetDataset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// Feature 37 — first per-dataset RBAC. Pre-37 this endpoint
+	// had no check beyond rate limiting; any authenticated caller
+	// could fetch any dataset metadata.
+	if !s.authzCheck(w, r, authz.ActionRead,
+		authz.DatasetResource(name+"/"+version, d.OwnerPrincipal)) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, "handleGetDataset", datasetToResponse(d))
 }
@@ -214,19 +227,52 @@ func (s *Server) handleListDatasets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, size := parsePageSize(r)
-	datasets, total, err := s.datasets.ListDatasets(r.Context(), page, size)
+	// Feature 37 — fetch enough rows to filter per-row through
+	// authz.Allow and still satisfy the caller's page window.
+	// ListDatasets paginates server-side, so a non-admin might
+	// see fewer rows than requested. Use a very large page size
+	// to approximate an unfiltered fetch at MVP scale (<10k
+	// datasets expected per deployment); scope push-down is
+	// deferred per the feature-37 spec.
+	const fetchSize = 10_000
+	all, total, err := s.datasets.ListDatasets(r.Context(), 1, fetchSize)
 	if err != nil {
 		slog.Error("list datasets failed", slog.Any("err", err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	p := principal.FromContext(r.Context())
+	permitted := make([]*registry.Dataset, 0, len(all))
+	for _, d := range all {
+		if authz.Allow(p, authz.ActionRead,
+			authz.DatasetResource(d.Name+"/"+d.Version, d.OwnerPrincipal)) == nil {
+			permitted = append(permitted, d)
+		}
+	}
+	// If the caller can see everything (admin / dev-admin), trust
+	// the store's total. Otherwise the filtered count is the real
+	// total.
+	if len(permitted) != len(all) {
+		total = len(permitted)
+	}
+
+	start := (page - 1) * size
+	if start > len(permitted) {
+		start = len(permitted)
+	}
+	end := start + size
+	if end > len(permitted) {
+		end = len(permitted)
+	}
+	window := permitted[start:end]
+
 	resp := DatasetListResponse{
-		Datasets: make([]DatasetResponse, len(datasets)),
+		Datasets: make([]DatasetResponse, len(window)),
 		Total:    total,
 		Page:     page,
 		Size:     size,
 	}
-	for i, d := range datasets {
+	for i, d := range window {
 		resp.Datasets[i] = datasetToResponse(d)
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -243,6 +289,23 @@ func (s *Server) handleDeleteDataset(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	version := r.PathValue("version")
+	// Feature 37 — fetch BEFORE delete so the authz decision
+	// has the authoritative owner. Pre-37 had no per-dataset
+	// RBAC on delete.
+	existing, err := s.datasets.GetDataset(name, version)
+	if err != nil {
+		if errors.Is(err, registry.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "dataset not found")
+			return
+		}
+		slog.Error("load dataset for delete failed", slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !s.authzCheck(w, r, authz.ActionDelete,
+		authz.DatasetResource(name+"/"+version, existing.OwnerPrincipal)) {
+		return
+	}
 	if err := s.datasets.DeleteDataset(r.Context(), name, version); err != nil {
 		if errors.Is(err, registry.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "dataset not found")
@@ -315,6 +378,11 @@ func (s *Server) handleRegisterModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := registry.ValidateModel(m); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Feature 37 — gate model register on ActionWrite.
+	if !s.authzCheck(w, r, authz.ActionWrite,
+		authz.ModelResource(m.Name+"/"+m.Version, m.OwnerPrincipal)) {
 		return
 	}
 
@@ -399,6 +467,11 @@ func (s *Server) handleGetModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// Feature 37 — per-model RBAC (admin OR owner).
+	if !s.authzCheck(w, r, authz.ActionRead,
+		authz.ModelResource(name+"/"+version, m.OwnerPrincipal)) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, "handleGetModel", modelToResponse(m))
 }
@@ -421,6 +494,12 @@ func (s *Server) handleLatestModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// Feature 37 — per-model RBAC. The "latest" resolver is a
+	// read and follows the same ActionRead policy as GetModel.
+	if !s.authzCheck(w, r, authz.ActionRead,
+		authz.ModelResource(m.Name+"/"+m.Version, m.OwnerPrincipal)) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, "handleLatestModel", modelToResponse(m))
 }
@@ -433,19 +512,44 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, size := parsePageSize(r)
-	models, total, err := s.models.ListModels(r.Context(), page, size)
+	// Feature 37 — filter-in-memory. See handleListDatasets for
+	// the scope-push-down tradeoff.
+	const fetchSize = 10_000
+	all, total, err := s.models.ListModels(r.Context(), 1, fetchSize)
 	if err != nil {
 		slog.Error("list models failed", slog.Any("err", err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	p := principal.FromContext(r.Context())
+	permitted := make([]*registry.Model, 0, len(all))
+	for _, m := range all {
+		if authz.Allow(p, authz.ActionRead,
+			authz.ModelResource(m.Name+"/"+m.Version, m.OwnerPrincipal)) == nil {
+			permitted = append(permitted, m)
+		}
+	}
+	if len(permitted) != len(all) {
+		total = len(permitted)
+	}
+
+	start := (page - 1) * size
+	if start > len(permitted) {
+		start = len(permitted)
+	}
+	end := start + size
+	if end > len(permitted) {
+		end = len(permitted)
+	}
+	window := permitted[start:end]
+
 	resp := ModelListResponse{
-		Models: make([]ModelResponse, len(models)),
+		Models: make([]ModelResponse, len(window)),
 		Total:  total,
 		Page:   page,
 		Size:   size,
 	}
-	for i, m := range models {
+	for i, m := range window {
 		resp.Models[i] = modelToResponse(m)
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -462,6 +566,20 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	version := r.PathValue("version")
+	existing, err := s.models.GetModel(name, version)
+	if err != nil {
+		if errors.Is(err, registry.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "model not found")
+			return
+		}
+		slog.Error("load model for delete failed", slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !s.authzCheck(w, r, authz.ActionDelete,
+		authz.ModelResource(name+"/"+version, existing.OwnerPrincipal)) {
+		return
+	}
 	if err := s.models.DeleteModel(r.Context(), name, version); err != nil {
 		if errors.Is(err, registry.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "model not found")

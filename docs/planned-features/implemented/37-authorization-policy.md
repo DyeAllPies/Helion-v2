@@ -1,8 +1,8 @@
 # Feature: Authorization policy engine + middleware
 
 **Priority:** P1
-**Status:** Pending
-**Parent slice:** depends on [feature 35 — principal model](35-principal-model.md) and [feature 36 — resource ownership](36-resource-ownership.md)
+**Status:** Implemented (2026-04-19)
+**Parent slice:** depends on [feature 35 — principal model](./35-principal-model.md) and [feature 36 — resource ownership](./36-resource-ownership.md)
 **Affected files:**
 new `internal/authz/` package (Action enum + Allow evaluator +
 DenyError + per-resource rules),
@@ -346,5 +346,128 @@ Regression:
 
 ## Implementation status
 
-_Not started. Planned 2026-04-19 as part of the IAM foundation
-discussed in features 35–38._
+_Implemented 2026-04-19._
+
+### What shipped
+
+- New `internal/authz/` package: `Allow(p, action, res)` pure
+  evaluator with typed `Action`, `ResourceKind`, `*DenyError`.
+  Constructors (`JobResource`, `WorkflowResource`,
+  `DatasetResource`, `ModelResource`, `ServiceResource`,
+  `SystemResource`) give handlers a one-line construction
+  path.
+- `internal/authz/rules.go` holds the per-kind action
+  allow-lists for node + service + job principals. Nodes have
+  an empty REST table (rule 3 denies every REST action);
+  service principals get narrow per-service grants
+  (`service:dispatcher` reads/cancels jobs;
+  `service:retry_loop` reads/writes/cancels; etc).
+- `adminMiddleware` rewritten as a single
+  `authz.Allow(ActionAdmin, SystemResource())` call. The
+  pre-feature-37 `claims.Role != "admin"` branch is gone.
+- `handleGetJob` now calls `authz.Allow(ActionRead, jobResource)`.
+  The pre-feature-37 AUDIT L1 string compare
+  (`claims.Subject == job.SubmittedBy`) is removed — it served
+  the same purpose but lacked Kind awareness, so a node JWT
+  subject that matched a user's SubmittedBy would have silently
+  passed. Feature 37 fixes that by keying on the typed
+  Principal ID, which is prefix-qualified with Kind.
+- `handleCancelJob`, `handleSubmitJob` gain authz checks. In
+  particular, submit now denies Kind=node JWTs — a major
+  exploit vector in the pre-feature-37 code.
+- New per-workflow RBAC: `handleGetWorkflow`,
+  `handleCancelWorkflow`. Pre-37 had NO per-workflow check;
+  every authenticated user could read and cancel every
+  workflow.
+- New per-dataset / per-model RBAC: `handleGetDataset`,
+  `handleListDatasets`, `handleDeleteDataset`, and the Model
+  counterparts. Pre-37 had no per-registry check beyond rate
+  limiting.
+- New per-service RBAC on `GET /api/services`,
+  `GET /api/services/{job_id}`. `ServiceEndpoint.OwnerPrincipal`
+  from feature 36 is consulted.
+- `ListJobs`, `ListWorkflows`, `ListDatasets`, `ListModels`,
+  `ListServices` filter per-row via `authz.Allow(ActionRead)`
+  before paginating. Total counts reflect the permitted
+  subset, not the unfiltered store count.
+- `ForbiddenResponse` shape carries `error: "forbidden"` +
+  the typed deny `code`. Dashboard tooling can key off
+  Code; legacy consumers keep reading Error.
+- `EventAuthzDeny` audit event (new constant in
+  `internal/audit/logger.go`). Every 403 carries code,
+  action, resource kind + id + owner, requesting principal,
+  path + method. Analytics panel from feature 28 picks it up
+  without schema changes.
+- DisableAuth mode now stamps a synthetic
+  `user:dev-admin-disableauth` Principal instead of leaving
+  anonymous. This eliminates the "nil Principal in dev
+  mode" bypass branches that used to live in every auth-
+  sensitive middleware.
+
+### Legacy / back-compat cleanup
+
+Per the security-hardening directive, these pre-feature-37
+behaviours were removed outright rather than carried forward:
+
+- **`claims.Subject == job.SubmittedBy` RBAC check.** Deleted
+  from `handleGetJob`. Replaced by typed authz. A pre-feature-35
+  node JWT with `Subject=alice` would have silently passed this
+  check for a job submitted by `user:alice`; the new check keys
+  on Kind-prefixed IDs, so the collision is impossible.
+- **`role=node` JWT → admin actions.** Pre-37 a JWT with
+  `role=node` would stamp `KindNode` but the AUDIT L1 check
+  didn't care about Kind, so a node JWT could submit jobs via
+  REST. Feature 37's rule 3 denies every REST action for
+  KindNode regardless of the Job's OwnerPrincipal.
+- **`adminMiddleware` DisableAuth fall-through.** Pre-37 the
+  middleware had `if s.tokenManager != nil` guarding the
+  role check, silently passing every admin request when
+  DisableAuth was set. Now DisableAuth stamps a dev-admin
+  Principal upstream and the middleware calls Allow like
+  any other path — same code path for dev + prod.
+- **Test fixtures using `role=node` as a human convenience
+  role.** Pre-37 the RBAC tests used `tm.GenerateToken(..., "node", ...)`
+  because the old SubmittedBy check ignored role. Post-37
+  those JWTs correctly fail — tests were updated to use
+  `role=user`, matching real-world usage.
+
+### Deferred
+
+- **Scope push-down on list endpoints.** Filter-in-memory
+  scales fine at MVP sizes (<10k active resources per
+  kind). A store-level owner filter would be a follow-up
+  when a deployment hits the cliff.
+- **Per-attribute policies.** "Alice can read jobs but only
+  the status field" — out of scope; revisit if multiple
+  deployments ask.
+- **Admin-editable policy file.** Today rules are Go code;
+  a runtime-loadable config expands blast radius of a
+  policy edit significantly.
+- **Reveal-secret policy narrowing.** `ActionReveal` today
+  allows the owner through rule 6; in practice the route
+  sits under `/admin/*` so only admins reach the handler.
+  A future slice could expose reveal to the owner directly
+  by moving the route out of `/admin/`; the authz engine is
+  already ready for it.
+
+### Tests added
+
+- `internal/authz/authz_test.go`
+  - `TestAllow_Table` — ~40 rows covering every deny code,
+    the admin short-circuit, node denial, service
+    allow-list, job-scoped tokens, owner match, and the
+    legacy sentinel.
+  - `TestAllow_UnknownKind_FailsClosed`.
+  - `TestAllow_DenyErrorCarriesContext`.
+- `internal/api/authz_integration_test.go`
+  - `TestAuthz_WorkflowRead_NonOwner403`
+  - `TestAuthz_WorkflowCancel_NonOwner403`
+  - `TestAuthz_ListJobs_FiltersOutOthers`
+  - `TestAuthz_ListWorkflows_FiltersOutOthers`
+  - `TestAuthz_AuthzDeny_EmitsAuditEvent`
+  - `TestAuthz_ForbiddenResponseCarriesCode`
+  - `TestAuthz_NodeRoleJWT_CannotSubmitJobs`
+- Existing `TestGetJob_*` RBAC tests updated to use
+  `role=user` JWTs.
+- `TestAuthMiddleware_NodeRole_StampsNodePrincipal` updated
+  to assert 403 + `authz_deny` event under the new policy.

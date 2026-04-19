@@ -283,6 +283,14 @@ type JobStoreIface interface {
 	Submit(ctx context.Context, j *cpb.Job) error
 	Get(jobID string) (*cpb.Job, error)
 	List(ctx context.Context, statusFilter string, page, size int) ([]*cpb.Job, int, error)
+	// Feature 37 — ListAll returns every job that matches the
+	// status filter (empty filter = every job) WITHOUT
+	// pagination. The list endpoint loads the full matching set,
+	// filters per-row via authz.Allow(ActionRead), and paginates
+	// the permitted subset. An alternative scope-push-down
+	// (where the store filters by owner) is deferred per the
+	// feature 37 spec.
+	ListAll(ctx context.Context, statusFilter string) ([]*cpb.Job, error)
 	GetJobsByStatus(ctx context.Context, status string) ([]*cpb.Job, error)
 	CancelJob(ctx context.Context, jobID, reason string) error
 }

@@ -82,8 +82,12 @@ func TestAuthMiddleware_StampsUserPrincipal(t *testing.T) {
 
 func TestAuthMiddleware_NodeRole_StampsNodePrincipal(t *testing.T) {
 	// A JWT carrying role=node resolves to KindNode. Feature 37
-	// will refuse REST actions for node principals; for feature
-	// 35 we just assert the Kind stamp is right.
+	// refuses REST actions for node principals — a compromised
+	// node's JWT cannot stand up fake jobs via the REST surface.
+	// The typed Principal on the emitted audit event must still
+	// be `node:gpu-01` (feature 35's Kind stamp is orthogonal to
+	// the authz decision), and the event type is now
+	// `authz_deny` rather than `job_submit`.
 	tm, _ := auth.NewTokenManager(context.Background(), newTokenStore())
 	store := newAuditStore()
 	auditLog := audit.NewLogger(store, 0)
@@ -93,33 +97,33 @@ func TestAuthMiddleware_NodeRole_StampsNodePrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("token: %v", err)
 	}
-	// A node-role JWT that happens to hit a REST handler — the
-	// handler will accept today (feature 37 tightens this); the
-	// emitted audit row must carry the node Principal.
 	body := `{"id":"p-35-node","command":"echo"}`
 	rr := doWithToken(srv, "POST", "/jobs", body, tok)
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("submit: want 201, got %d: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("submit: want 403, got %d: %s", rr.Code, rr.Body.String())
 	}
 
 	entries, _ := store.Scan(context.Background(), "audit:", 0)
-	var seen bool
+	var seenDeny bool
 	for _, raw := range entries {
 		var ev audit.Event
 		_ = json.Unmarshal(raw, &ev)
-		if ev.Type != audit.EventJobSubmit {
+		if ev.Type != audit.EventAuthzDeny {
 			continue
 		}
-		seen = true
+		seenDeny = true
 		if ev.Principal != "node:gpu-01" {
 			t.Errorf("Principal: want 'node:gpu-01', got %q", ev.Principal)
 		}
 		if ev.PrincipalKind != string(principal.KindNode) {
 			t.Errorf("PrincipalKind: want 'node', got %q", ev.PrincipalKind)
 		}
+		if ev.Details["code"] != "node_not_allowed" {
+			t.Errorf("deny code: want node_not_allowed, got %v", ev.Details["code"])
+		}
 	}
-	if !seen {
-		t.Fatal("no job_submit audit event found")
+	if !seenDeny {
+		t.Fatal("no authz_deny audit event found")
 	}
 }
 

@@ -58,25 +58,10 @@ func (a *JobStoreAdapter) CancelJob(ctx context.Context, jobID, reason string) e
 
 // List implements paginated list with filtering.
 func (a *JobStoreAdapter) List(ctx context.Context, statusFilter string, page, size int) ([]*cpb.Job, int, error) {
-	// Get all jobs
-	var allJobs []*cpb.Job
-	var err error
-
-	if statusFilter != "" {
-		// Filter by status
-		allJobs, err = a.store.GetJobsByStatus(ctx, statusFilter)
-		if err != nil {
-			return nil, 0, err
-		}
-	} else {
-		// Get all jobs
-		allJobs = a.store.List()
+	allJobs, err := a.ListAll(ctx, statusFilter)
+	if err != nil {
+		return nil, 0, err
 	}
-
-	// Sort newest first so recently submitted jobs always appear on page 1.
-	sort.Slice(allJobs, func(i, j int) bool {
-		return allJobs[i].CreatedAt.After(allJobs[j].CreatedAt)
-	})
 
 	total := len(allJobs)
 
@@ -92,6 +77,30 @@ func (a *JobStoreAdapter) List(ctx context.Context, statusFilter string, page, s
 	}
 
 	return allJobs[start:end], total, nil
+}
+
+// ListAll returns every matching job sorted newest-first with no
+// pagination. Feature 37 callers run authz.Allow(ActionRead)
+// per row against the returned set and paginate the permitted
+// subset in the handler.
+func (a *JobStoreAdapter) ListAll(ctx context.Context, statusFilter string) ([]*cpb.Job, error) {
+	var allJobs []*cpb.Job
+	var err error
+
+	if statusFilter != "" {
+		allJobs, err = a.store.GetJobsByStatus(ctx, statusFilter)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		allJobs = a.store.List()
+	}
+
+	sort.Slice(allJobs, func(i, j int) bool {
+		return allJobs[i].CreatedAt.After(allJobs[j].CreatedAt)
+	})
+
+	return allJobs, nil
 }
 
 // TerminalJobDurations returns elapsed seconds for all completed/failed jobs.

@@ -727,7 +727,10 @@ func rbacFixture(t *testing.T) (*api.Server, *auth.TokenManager, *cluster.JobSto
 
 func TestGetJob_OwnerCanReadOwnJob(t *testing.T) {
 	srv, tm, _ := rbacFixture(t)
-	tok, _ := tm.GenerateToken(context.Background(), "alice", "node", time.Minute)
+	// Feature 37 — human testers use role=user; the legacy
+	// role=node shortcut used here pre-feature-37 now maps to
+	// KindNode (authz rule 3 denies every REST action).
+	tok, _ := tm.GenerateToken(context.Background(), "alice", "user", time.Minute)
 
 	// Submit a job as alice.
 	body := `{"id":"rbac-1","command":"echo"}`
@@ -751,8 +754,8 @@ func TestGetJob_OwnerCanReadOwnJob(t *testing.T) {
 
 func TestGetJob_ForbiddenForNonOwner_Returns403(t *testing.T) {
 	srv, tm, _ := rbacFixture(t)
-	aliceTok, _ := tm.GenerateToken(context.Background(), "alice", "node", time.Minute)
-	bobTok, _ := tm.GenerateToken(context.Background(), "bob", "node", time.Minute)
+	aliceTok, _ := tm.GenerateToken(context.Background(), "alice", "user", time.Minute)
+	bobTok, _ := tm.GenerateToken(context.Background(), "bob", "user", time.Minute)
 
 	// Alice submits.
 	rr := doWithToken(srv, "POST", "/jobs", `{"id":"rbac-2","command":"echo"}`, aliceTok)
@@ -769,7 +772,7 @@ func TestGetJob_ForbiddenForNonOwner_Returns403(t *testing.T) {
 
 func TestGetJob_AdminCanReadAnyJob(t *testing.T) {
 	srv, tm, _ := rbacFixture(t)
-	aliceTok, _ := tm.GenerateToken(context.Background(), "alice", "node", time.Minute)
+	aliceTok, _ := tm.GenerateToken(context.Background(), "alice", "user", time.Minute)
 	adminTok, _ := tm.GenerateToken(context.Background(), "root", "admin", time.Minute)
 
 	// Alice submits.
@@ -811,7 +814,7 @@ func TestGetJob_LegacyJobWithoutSubmittedBy_Returns403ForNonAdmin(t *testing.T) 
 		t.Fatalf("legacy submit: %v", err)
 	}
 
-	tok, _ := tm.GenerateToken(ctx, "alice", "node", time.Minute)
+	tok, _ := tm.GenerateToken(ctx, "alice", "user", time.Minute)
 	rr := doWithToken(srv, "GET", "/jobs/legacy", "", tok)
 	if rr.Code != http.StatusForbidden {
 		t.Errorf("legacy job, non-admin: want 403, got %d: %s", rr.Code, rr.Body.String())

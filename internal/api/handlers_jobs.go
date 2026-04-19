@@ -18,6 +18,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	"github.com/DyeAllPies/Helion-v2/internal/authz"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
@@ -636,6 +637,24 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	// clean up.
 	job.OwnerPrincipal = principal.FromContext(r.Context()).ID
 
+	// Feature 37 — gate job submission on ActionWrite against a
+	// Job resource owned by the caller. The owner check (rule 6)
+	// trivially passes because we just stamped the caller as
+	// owner, BUT the kind-based rules still apply:
+	//   - Kind=node → denied (node JWTs cannot submit via REST).
+	//     Closes a major feature-37 exploit vector: a compromised
+	//     node's mTLS-derived JWT cannot stand up fake jobs on the
+	//     coordinator.
+	//   - Kind=anonymous → denied (no DisableAuth bypass reaches
+	//     here; the middleware now stamps dev-admin instead).
+	//   - Kind=service → denied unless the service has an
+	//     ActionWrite/job allow in internal/authz/rules.go
+	//     (today only workflow_runner + retry_loop do).
+	if !s.authzCheck(w, r, authz.ActionWrite,
+		authz.JobResource(job.ID, job.OwnerPrincipal, job.WorkflowID)) {
+		return
+	}
+
 	// Feature 25 — dynamic-loader env-var denylist. Must run AFTER the
 	// pure shape checks (validateSubmitRequest already handled count +
 	// empty/NUL keys) and BEFORE the dry-run branch so a dry-run of a
@@ -763,19 +782,16 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// AUDIT L1 (fixed): per-job RBAC. When auth is enabled, only admins and
-	// the original submitter can read a job. Dev mode (nil tokenManager) and
-	// explicit DisableAuth skip the check so existing tooling keeps working.
-	if s.tokenManager != nil {
-		claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims)
-		if !ok {
-			writeError(w, http.StatusForbidden, "forbidden")
-			return
-		}
-		if claims.Role != "admin" && claims.Subject != job.SubmittedBy {
-			writeError(w, http.StatusForbidden, "forbidden")
-			return
-		}
+	// Feature 37 — unified authz. Replaces the legacy AUDIT L1
+	// `claims.Subject == job.SubmittedBy` check: same fail-closed
+	// semantics (admin OR owner) but the decision goes through the
+	// typed policy engine, emits EventAuthzDeny on refusal, and
+	// returns a machine-readable deny code to clients. DisableAuth
+	// stamps a dev-admin principal upstream, so the dev path still
+	// passes this check without a bypass branch here.
+	if !s.authzCheck(w, r, authz.ActionRead,
+		authz.JobResource(job.ID, job.OwnerPrincipal, job.WorkflowID)) {
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -784,6 +800,21 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	// Feature 37 — load the job BEFORE mutating so the authz
+	// decision sees the authoritative OwnerPrincipal. Pre-feature-37
+	// this endpoint had no per-job RBAC; any authenticated user
+	// could cancel any job. The Load + Allow pattern matches
+	// handleGetJob above.
+	job, err := s.jobs.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	if !s.authzCheck(w, r, authz.ActionCancel,
+		authz.JobResource(job.ID, job.OwnerPrincipal, job.WorkflowID)) {
+		return
+	}
 
 	if err := s.jobs.CancelJob(r.Context(), id, "cancelled via API"); err != nil {
 		if errors.Is(err, cluster.ErrJobNotFound) {
@@ -853,17 +884,52 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get jobs from store
-	jobs, total, err := s.jobs.List(r.Context(), statusFilter, page, size)
+	// Feature 37 — fetch the full status-filtered set, filter
+	// per-row via authz.Allow(ActionRead), then paginate the
+	// permitted subset. This matches the filter-in-memory
+	// strategy the spec chose over a scope-push-down into the
+	// store. At MVP scale (< ~1000 active jobs) the overhead is
+	// negligible; a follow-up slice can wire a store-level
+	// owner filter if a deployment hits the cliff.
+	//
+	// A non-admin caller sees exactly the jobs they own (or
+	// share via feature 38 when it lands). Admin / dev-admin
+	// see everything because authz.Allow short-circuits for
+	// them. A deny does NOT emit EventAuthzDeny per-row — that
+	// would flood the audit log with expected filtering
+	// decisions; only handler-level denials (e.g. unauthorised
+	// access to a single resource) are audited.
+	allJobs, err := s.jobs.ListAll(r.Context(), statusFilter)
 	if err != nil {
 		slog.Error("list jobs failed", slog.Any("err", err))
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
-	// Convert to response format
-	jobResponses := make([]JobResponse, len(jobs))
-	for i, job := range jobs {
+	p := principal.FromContext(r.Context())
+	permitted := make([]*cpb.Job, 0, len(allJobs))
+	for _, job := range allJobs {
+		if authz.Allow(p, authz.ActionRead,
+			authz.JobResource(job.ID, job.OwnerPrincipal, job.WorkflowID)) == nil {
+			permitted = append(permitted, job)
+		}
+	}
+	total := len(permitted)
+
+	// Paginate after filtering so the total reflects what the
+	// caller is actually permitted to see.
+	start := (page - 1) * size
+	if start > total {
+		start = total
+	}
+	end := start + size
+	if end > total {
+		end = total
+	}
+	window := permitted[start:end]
+
+	jobResponses := make([]JobResponse, len(window))
+	for i, job := range window {
 		jobResponses[i] = jobToResponse(job)
 	}
 

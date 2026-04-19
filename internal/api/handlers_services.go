@@ -20,7 +20,9 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/DyeAllPies/Helion-v2/internal/authz"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -64,13 +66,22 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snapshot := s.services.Snapshot()
+	// Feature 37 — filter per-row. Pre-37 every authenticated
+	// caller saw every live service endpoint. The owner stamp
+	// came from feature 36's ServiceEndpoint.OwnerPrincipal
+	// (inherited from the owning Job).
+	p := principal.FromContext(r.Context())
 	resp := ServiceListResponse{
 		Services: make([]ServiceEndpointResponse, 0, len(snapshot)),
-		Total:    len(snapshot),
 	}
 	for _, ep := range snapshot {
+		if authz.Allow(p, authz.ActionRead,
+			authz.ServiceResource(ep.JobID, ep.OwnerPrincipal)) != nil {
+			continue
+		}
 		resp.Services = append(resp.Services, toServiceEndpointResponse(ep))
 	}
+	resp.Total = len(resp.Services)
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, "handleListServices", resp)
 }
@@ -88,6 +99,12 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 	ep, ok := s.services.Get(jobID)
 	if !ok {
 		writeError(w, http.StatusNotFound, "no live service for this job")
+		return
+	}
+	// Feature 37 — per-service RBAC. Pre-37 had no check, so
+	// any authenticated caller could fetch any upstream URL.
+	if !s.authzCheck(w, r, authz.ActionRead,
+		authz.ServiceResource(ep.JobID, ep.OwnerPrincipal)) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

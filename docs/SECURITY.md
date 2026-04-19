@@ -474,6 +474,113 @@ for the slice reconciliation and test inventory.
 
 ---
 
+## 5c. Authorization policy (feature 37)
+
+Every authz decision in the coordinator funnels through one
+function: `authz.Allow(principal, action, resource)`. The
+evaluator is pure, table-driven, and fails closed on every
+unexpected input. Handlers that mutate or read a resource load
+it from the store, construct an `*authz.Resource`, and call
+`Allow` before serving. Denials produce a 403 response carrying
+a stable machine-readable `code` and emit an `authz_deny`
+audit event.
+
+### Actions
+
+| Action | Endpoint examples |
+|---|---|
+| `read` | GET /jobs/{id}, /workflows/{id}, /api/datasets/.../{name}/{version} |
+| `list` | GET /jobs, /workflows, /api/datasets, /api/models, /api/services |
+| `write` | POST /jobs, /workflows, /api/datasets, /api/models |
+| `cancel` | POST /jobs/{id}/cancel, DELETE /workflows/{id} |
+| `delete` | DELETE /api/datasets/..., DELETE /api/models/... |
+| `reveal` | POST /admin/jobs/{id}/reveal-secret |
+| `admin` | POST /admin/nodes/{id}/revoke, /admin/tokens, /admin/operator-certs |
+
+### Rule precedence
+
+1. `nil` Principal → deny (`nil_principal`).
+2. `Kind=user` or `Kind=operator` with `Role=admin` → allow
+   every action (break-glass).
+3. `Kind=node` → deny on every REST action. A compromised
+   node's mTLS-derived JWT cannot stand up fake jobs or read
+   user-owned workflows via REST. Nodes still act on the
+   internal gRPC surface (`Register`, `Heartbeat`,
+   `ReportResult`, `StreamLogs`, `ReportServiceEvent`), which
+   is governed by separate per-kind allow-lists.
+4. `Kind=service` → narrow per-service allow-list in
+   `internal/authz/rules.go`. `service:retry_loop` can cancel
+   jobs it's retrying; `service:dispatcher` can read/cancel
+   jobs it's dispatching. The table is a compile-time artifact
+   — a new service that needs an action goes through a code
+   review.
+5. `Kind=job` → workflow-scoped tokens may only read jobs
+   belonging to the same workflow (the token's subject IS the
+   workflow ID). No write/cancel/delete.
+6. `Kind=user` or `Kind=operator` (non-admin) → allow iff
+   `p.ID == res.OwnerPrincipal` (owner check).
+7. `Kind=anonymous` → deny everywhere.
+8. Unknown kind → deny (`unknown_kind`).
+
+Resources with `OwnerPrincipal == "legacy:"` (the feature-36
+backfill sentinel for records without a recoverable owner)
+are admin-only. Resources of `Kind=system` require admin.
+
+### Denial codes
+
+A 403 body carries both the legacy shape and the new typed
+deny code:
+
+```json
+{"error": "forbidden", "code": "not_owner"}
+```
+
+Codes: `nil_principal`, `nil_resource`, `anonymous_denied`,
+`not_owner`, `legacy_owner_admin_only`, `node_not_allowed`,
+`service_not_allowed`, `job_scope_mismatch`, `admin_required`,
+`system_non_admin_action`, `unknown_kind`.
+
+### Audit emission
+
+Every deny emits an `EventAuthzDeny` audit event with the
+deny code, attempted action, resource kind + id + owner,
+requesting principal, and request path. A sudden drop in
+`authz_deny` volume after a deploy is an alert — the policy
+engine may have silently widened.
+
+Distinct from `EventAuthFailure` (feature 35), which covers
+authentication failures (401 — bad/missing JWT). Feature 37
+covers authorisation denials (403 — valid identity but
+policy refused).
+
+### List-endpoint filtering
+
+`list` endpoints (jobs, workflows, datasets, models,
+services) fetch the full matching set and filter per-row
+through `authz.Allow(ActionRead)` before paginating. A
+non-admin caller sees only their own resources; admin sees
+everything. Per-row denials do NOT audit — the filter is
+expected behaviour, not a security event.
+
+A scope-push-down (store-level owner filter) is deferred
+until deployments hit the filter-in-memory cliff (>10k active
+resources).
+
+### DisableAuth + dev mode
+
+`Server.DisableAuth()` stamps a synthetic `dev-admin`
+Principal on every request (a `KindUser` with `Role=admin`).
+This keeps the authz path identical between dev and prod —
+no bypass branches inside the evaluator or middleware — and
+produces an unambiguous audit signal (`principal ==
+user:dev-admin-disableauth`) if DisableAuth ever leaks into
+a prod binary.
+
+See [`docs/planned-features/implemented/37-authorization-policy.md`](planned-features/implemented/37-authorization-policy.md)
+for the slice reconciliation and test inventory.
+
+---
+
 ## 6. Audit logging
 
 Every security and operational event is written to an append-only log in BadgerDB.

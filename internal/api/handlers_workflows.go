@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
+	"github.com/DyeAllPies/Helion-v2/internal/authz"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
@@ -268,6 +269,16 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 		wf.Priority = *req.Priority
 	}
 
+	// Feature 37 — gate workflow creation on ActionWrite. Kind=node
+	// and Kind=anonymous principals are refused; users/operators
+	// pass because they just stamped themselves as owner. This
+	// check must run BEFORE the dry-run path so a dry-run probe
+	// from a node-JWT produces a consistent 403.
+	if !s.authzCheck(w, r, authz.ActionWrite,
+		authz.WorkflowResource(wf.ID, wf.OwnerPrincipal)) {
+		return
+	}
+
 	// Feature 24 — dry-run short-circuit for workflows. We still need
 	// DAG validation to fire (cycles, unknown deps, unknown `from`
 	// references), but we must NOT persist, NOT materialise jobs, and
@@ -350,6 +361,14 @@ func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Feature 37 — first time this endpoint has any per-workflow
+	// RBAC. Pre-37, any authenticated user could read any
+	// workflow. Now: admin OR workflow owner.
+	if !s.authzCheck(w, r, authz.ActionRead,
+		authz.WorkflowResource(wf.ID, wf.OwnerPrincipal)) {
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, "handleGetWorkflow", workflowToResponse(wf, s.workflowJobStore))
 }
@@ -384,7 +403,20 @@ func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 		return all[i].CreatedAt.After(all[j].CreatedAt)
 	})
 
-	total := len(all)
+	// Feature 37 — filter per-row via authz.Allow(ActionRead).
+	// Matches the handleListJobs strategy; see that comment for
+	// the scope-push-down tradeoff. Per-row denials do NOT
+	// audit — the filter is expected behaviour, not a
+	// security event.
+	p := principal.FromContext(r.Context())
+	permitted := make([]*cpb.Workflow, 0, len(all))
+	for _, wf := range all {
+		if authz.Allow(p, authz.ActionRead,
+			authz.WorkflowResource(wf.ID, wf.OwnerPrincipal)) == nil {
+			permitted = append(permitted, wf)
+		}
+	}
+	total := len(permitted)
 
 	// Paginate.
 	start := (page - 1) * size
@@ -395,7 +427,7 @@ func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 	if end > total {
 		end = total
 	}
-	pageItems := all[start:end]
+	pageItems := permitted[start:end]
 
 	responses := make([]WorkflowResponse, len(pageItems))
 	for i, wf := range pageItems {
@@ -413,6 +445,20 @@ func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCancelWorkflow(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	// Feature 37 — fetch the workflow first so the authz
+	// decision sees the authoritative owner. Pre-37 had no
+	// per-workflow RBAC on cancel; any authenticated user
+	// could cancel any workflow.
+	wf, err := s.workflowStore.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+	if !s.authzCheck(w, r, authz.ActionCancel,
+		authz.WorkflowResource(wf.ID, wf.OwnerPrincipal)) {
+		return
+	}
 
 	if err := s.workflowStore.Cancel(r.Context(), id, s.workflowJobStore); err != nil {
 		if errors.Is(err, cluster.ErrWorkflowNotFound) {
