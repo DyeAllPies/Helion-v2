@@ -46,13 +46,34 @@ Chart.register(
       <p class="page-sub">Historical metrics from the analytics database</p>
     </div>
     <div class="date-range">
+      <!--
+        Quick-range buttons for minute-scale views. The existing
+        date inputs stay for day-level drilldowns; clicking a
+        quick-range sets an ISO-timestamp override so sub-day
+        windows (e.g. "last 10 min") reach the backend intact
+        instead of being rounded to day boundaries.
+      -->
+      <div class="quick-ranges" role="group" aria-label="Quick range">
+        <button type="button" class="quick-range"
+                [class.quick-range--active]="activeQuickRange === '1m'"
+                (click)="setQuickRange('1m')">LAST&nbsp;1&nbsp;MIN</button>
+        <button type="button" class="quick-range"
+                [class.quick-range--active]="activeQuickRange === '10m'"
+                (click)="setQuickRange('10m')">LAST&nbsp;10&nbsp;MIN</button>
+        <button type="button" class="quick-range"
+                [class.quick-range--active]="activeQuickRange === '1h'"
+                (click)="setQuickRange('1h')">LAST&nbsp;HOUR</button>
+        <button type="button" class="quick-range"
+                [class.quick-range--active]="activeQuickRange === '24h'"
+                (click)="setQuickRange('24h')">LAST&nbsp;24&nbsp;H</button>
+      </div>
       <label class="range-label">
         FROM
-        <input type="date" class="range-input" [ngModel]="fromDate" (ngModelChange)="fromDate = $event; reload()">
+        <input type="date" class="range-input" [ngModel]="fromDate" (ngModelChange)="onDateInputChange($event, 'from')">
       </label>
       <label class="range-label">
         TO
-        <input type="date" class="range-input" [ngModel]="toDate" (ngModelChange)="toDate = $event; reload()">
+        <input type="date" class="range-input" [ngModel]="toDate" (ngModelChange)="onDateInputChange($event, 'to')">
       </label>
     </div>
   </header>
@@ -174,7 +195,7 @@ Chart.register(
     .page-sub   { font-size: 11px; color: var(--color-muted); margin: 0; }
 
     .date-range {
-      display: flex; gap: 12px; align-items: flex-end;
+      display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
     }
     .range-label {
       display: flex; flex-direction: column; gap: 4px;
@@ -186,6 +207,26 @@ Chart.register(
       font-family: var(--font-mono); font-size: 12px;
       padding: 6px 10px;
       &:focus { outline: none; border-color: var(--color-accent); }
+    }
+
+    .quick-ranges {
+      display: flex; gap: 4px; align-items: stretch;
+    }
+    .quick-range {
+      background: var(--color-surface); border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm); color: var(--color-muted);
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
+      padding: 6px 10px;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .quick-range:hover {
+      color: #e8edf2; border-color: var(--color-accent-dim);
+    }
+    .quick-range--active {
+      background: rgba(192, 132, 252, 0.12);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
 
     .error-banner {
@@ -264,6 +305,17 @@ export class AnalyticsDashboardComponent implements OnInit {
   loading  = true;
   error    = '';
 
+  /**
+   * When a quick-range button is active we round-trip ISO instants
+   * (`rangeFromISO` / `rangeToISO`) to the backend instead of the
+   * day-truncated fromDate/toDate. Empty strings mean "fall back to
+   * the day inputs" — the existing behaviour. Editing a day input
+   * clears these so the UI never lies about which range is active.
+   */
+  rangeFromISO = '';
+  rangeToISO   = '';
+  activeQuickRange: '' | '1m' | '10m' | '1h' | '24h' = '';
+
   // Throughput
   throughputLabels:  string[] = [];
   completedData:     number[] = [];
@@ -297,12 +349,55 @@ export class AnalyticsDashboardComponent implements OnInit {
     this.reload();
   }
 
+  /**
+   * Snap the range to a rolling window ending at "now". Emits a
+   * full ISO-8601 timestamp so sub-day windows (e.g. 1 min) reach
+   * the backend intact instead of being rounded to midnight. Also
+   * updates the day inputs so the displayed FROM/TO still show a
+   * human-friendly date for the current window.
+   */
+  setQuickRange(key: '1m' | '10m' | '1h' | '24h'): void {
+    const now = new Date();
+    const deltaMs: Record<typeof key, number> = {
+      '1m':  60_000,
+      '10m': 600_000,
+      '1h':  3_600_000,
+      '24h': 86_400_000,
+    };
+    const from = new Date(now.getTime() - deltaMs[key]);
+    this.rangeFromISO = from.toISOString();
+    this.rangeToISO   = now.toISOString();
+    // Mirror into the day inputs so the visible FROM/TO still
+    // bracket the quick window. For sub-day ranges both end up
+    // equal to today; for 24h they may straddle midnight.
+    this.fromDate = this.toDateStr(from);
+    this.toDate   = this.toDateStr(now);
+    this.activeQuickRange = key;
+    this.reload();
+  }
+
+  /**
+   * When the user types into a day input we switch back to day-
+   * level mode. Clearing the ISO overrides ensures reload() builds
+   * the query from the day strings instead of stale instants.
+   */
+  onDateInputChange(value: string, field: 'from' | 'to'): void {
+    if (field === 'from') this.fromDate = value;
+    else                  this.toDate   = value;
+    this.rangeFromISO     = '';
+    this.rangeToISO       = '';
+    this.activeQuickRange = '';
+    this.reload();
+  }
+
   reload(): void {
     this.loading = true;
     this.error   = '';
 
-    const from = this.fromDate + 'T00:00:00Z';
-    const to   = this.toDate + 'T23:59:59Z';
+    // Prefer the ISO instants a quick-range button set (minute
+    // granularity); fall back to the day inputs otherwise.
+    const from = this.rangeFromISO || this.fromDate + 'T00:00:00Z';
+    const to   = this.rangeToISO   || this.toDate   + 'T23:59:59Z';
 
     let pending = 5;
     const done = () => { if (--pending === 0) this.loading = false; };

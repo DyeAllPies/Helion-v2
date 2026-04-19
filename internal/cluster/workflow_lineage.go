@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	"github.com/DyeAllPies/Helion-v2/internal/registry"
@@ -43,14 +44,24 @@ type WorkflowLineage struct {
 // and the registered models (if any) that point back at it via
 // SourceJobID. DependsOn uses the workflow-local job name (not the
 // generated JobID), matching how workflow specs declare edges.
+//
+// Timing + node placement fields (DispatchedAt, FinishedAt, NodeID)
+// are surfaced so the dashboard can render per-job elapsed/run-
+// duration indicators and attribute each job to the node that
+// executed it. Zero time.Time serialises to Go's zero-instant,
+// which the frontend treats as "not started yet" via omitempty —
+// so pending jobs don't carry misleading 1970-epoch timestamps.
 type LineageJob struct {
-	Name             string                `json:"name"`
-	JobID            string                `json:"job_id,omitempty"` // generated, empty before Start()
-	Status           string                `json:"status"`
-	Command          string                `json:"command,omitempty"`
-	DependsOn        []string              `json:"depends_on,omitempty"`
-	Outputs          []LineageOutput       `json:"outputs,omitempty"`
-	ModelsProduced   []LineageModelRef     `json:"models_produced,omitempty"`
+	Name           string            `json:"name"`
+	JobID          string            `json:"job_id,omitempty"` // generated, empty before Start()
+	Status         string            `json:"status"`
+	Command        string            `json:"command,omitempty"`
+	DependsOn      []string          `json:"depends_on,omitempty"`
+	Outputs        []LineageOutput   `json:"outputs,omitempty"`
+	ModelsProduced []LineageModelRef `json:"models_produced,omitempty"`
+	NodeID         string            `json:"node_id,omitempty"`
+	DispatchedAt   *time.Time        `json:"dispatched_at,omitempty"`
+	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
 }
 
 // LineageOutput is a trimmed ArtifactOutput — URI / size / sha256
@@ -160,6 +171,19 @@ func BuildWorkflowLineage(
 		if wfJob.JobID != "" {
 			if job, jerr := jobs.Get(wfJob.JobID); jerr == nil && job != nil {
 				lj.Status = job.Status.String()
+				lj.NodeID = job.NodeID
+				// Serialise only non-zero timestamps — a never-
+				// dispatched pending job must not look like it
+				// started in 1970. Pointer-to-time matches the
+				// `omitempty` on the JSON tag.
+				if !job.DispatchedAt.IsZero() {
+					t := job.DispatchedAt
+					lj.DispatchedAt = &t
+				}
+				if !job.FinishedAt.IsZero() {
+					t := job.FinishedAt
+					lj.FinishedAt = &t
+				}
 				for _, out := range job.ResolvedOutputs {
 					lj.Outputs = append(lj.Outputs, LineageOutput{
 						Name: out.Name, URI: out.URI, Size: out.Size, SHA256: out.SHA256,

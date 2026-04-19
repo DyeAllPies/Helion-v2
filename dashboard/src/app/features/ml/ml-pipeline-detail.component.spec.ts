@@ -12,7 +12,7 @@ import { provideAnimations } from '@angular/platform-browser/animations';
 import { of, throwError } from 'rxjs';
 
 import {
-  MlPipelineDetailComponent, buildMermaidSpec,
+  MlPipelineDetailComponent, buildMermaidSpec, formatElapsed,
 } from './ml-pipeline-detail.component';
 import { ApiService } from '../../core/services/api.service';
 import { WorkflowLineage } from '../../shared/models';
@@ -179,6 +179,23 @@ describe('buildMermaidSpec', () => {
     expect(spec).toContain('train --> serve');
   });
 
+  it('assigns each node a classDef bucket matching its status', () => {
+    // Feature 21: mermaid nodes are coloured via classDef bindings
+    // that mirror the job-card chip palette. Regression guard in
+    // case someone reverts the classDef block.
+    const spec = buildMermaidSpec(makeLineage());
+    expect(spec).toContain('classDef st-completed');
+    expect(spec).toContain('classDef st-running');
+    expect(spec).toContain('classDef st-pending');
+    expect(spec).toContain('classDef st-failed');
+    // Class assignments — train is completed, serve is running.
+    // Order of the `class <ids> <cls>` lines isn't guaranteed (the
+    // builder buckets by class) so match per-node rather than a
+    // fixed string.
+    expect(spec).toMatch(/class\s+[^\n]*\btrain\b[^\n]*\bst-completed\b/);
+    expect(spec).toMatch(/class\s+[^\n]*\bserve\b[^\n]*\bst-running\b/);
+  });
+
   it('emits dashed arrows with labels for artifact edges', () => {
     const spec = buildMermaidSpec(makeLineage());
     expect(spec).toContain('train -. "MODEL → CHECKPOINT" .-> serve');
@@ -209,7 +226,33 @@ describe('buildMermaidSpec', () => {
       jobs: [{ name: 'solo', status: 'completed' }],
       artifact_edges: [],
     }));
-    // Only the node line plus the flowchart header.
-    expect(spec.split('\n').length).toBe(2);
+    // Header + node line + 6 classDef lines + 1 class assignment = 9.
+    // Keeping this tight: if someone adds/removes a classDef bucket
+    // they'll need to update this number too, which is a forcing
+    // function to keep the buckets intentional.
+    expect(spec.split('\n').length).toBe(9);
+    expect(spec).toContain('solo[');
+    expect(spec).toMatch(/class\s+solo\s+st-completed/);
+  });
+});
+
+describe('formatElapsed', () => {
+  it('renders sub-minute durations with one decimal of seconds', () => {
+    expect(formatElapsed(650)).toBe('0.7 s');
+    expect(formatElapsed(4120)).toBe('4.1 s');
+    expect(formatElapsed(59500)).toBe('59.5 s');
+  });
+
+  it('renders minute-plus durations as "<m> min <s> s"', () => {
+    expect(formatElapsed(60_000)).toBe('1 min 0 s');
+    expect(formatElapsed(67_000)).toBe('1 min 7 s');
+    expect(formatElapsed(185_000)).toBe('3 min 5 s');
+  });
+
+  it('clamps negative durations to zero', () => {
+    // Negative ms only happens if a clock-drifted node reports
+    // finished_at before dispatched_at. Never render `-0.3 s` in
+    // the UI — it looks like a bug.
+    expect(formatElapsed(-500)).toBe('0 s');
   });
 });

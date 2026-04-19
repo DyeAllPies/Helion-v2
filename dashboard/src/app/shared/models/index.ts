@@ -352,6 +352,11 @@ export interface LineageJob {
   depends_on?:      string[];
   outputs?:         LineageOutput[];
   models_produced?: LineageModelRef[];
+  // Populated once the job is dispatched. `omitempty` on the Go
+  // side means all three fields are absent on pending jobs.
+  node_id?:         string;
+  dispatched_at?:   string;   // RFC-3339 UTC
+  finished_at?:     string;   // RFC-3339 UTC
 }
 
 export interface ArtifactEdge {

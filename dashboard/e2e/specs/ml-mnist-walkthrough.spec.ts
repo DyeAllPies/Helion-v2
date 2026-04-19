@@ -317,7 +317,28 @@ test.describe('Feature 21 — MNIST walkthrough (video recording)', () => {
         .filter({ hasText: SERVE_JOB_ID })
         .locator('.chip-ready'),
     ).toContainText(/READY/i, { timeout: 15_000 });
-    // Closing beat so the final frame has the READY chip visible.
+    await page.waitForTimeout(PAUSE_LONG);
+
+    // 10. Analytics — prove the pipeline also ran through the
+    //     cross-cutting observability stack (events → analytics
+    //     sink → PostgreSQL → Analytics dashboard). The MNIST
+    //     workflow takes ~60 s end-to-end, so the default 7-day
+    //     window would bury the just-completed run in noise.
+    //     Click the "Last 10 min" quick-range button — it sends
+    //     ISO-instant boundaries to the backend (not day-truncated
+    //     dates), so the chart zooms to the window containing our
+    //     four just-completed jobs. Makes the "we ran, and it's
+    //     already visible to ops" beat land immediately.
+    await page.click('a.nav-link >> text=Analytics');
+    await expect(page).toHaveURL(/\/analytics$/);
+    const tenMinBtn = page.locator('button.quick-range').filter({ hasText: /LAST\s*10\s*MIN/ });
+    await expect(tenMinBtn).toBeVisible({ timeout: 10_000 });
+    await tenMinBtn.click();
+    // Throughput chart is the headline panel — wait for the canvas
+    // (ng2-charts renders into a <canvas>) before the linger pause
+    // so the final frame actually shows a chart rather than a
+    // loading spinner.
+    await expect(page.locator('canvas').first()).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(PAUSE_LONG);
   });
 });
