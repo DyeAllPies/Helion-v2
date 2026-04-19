@@ -378,10 +378,19 @@ func (s *Server) handleAnalyticsQueueWait(w http.ResponseWriter, r *http.Request
 
 	// Same bucket-allowlist treatment as throughput — see
 	// parseBucketParam for the SQL-injection guard rationale.
+	//
+	// Bucket + filter on `started_at`, not `submitted_at`. The
+	// metric is "how long did this job wait before running", and
+	// that measurement becomes known at started_at. Keying on
+	// submitted_at caused the series to disappear from a rolling
+	// "LAST 10 MIN" view once the submit instant scrolled off the
+	// left edge — even though the job itself was only seconds old
+	// and its wait sample was entirely relevant to the window the
+	// user was looking at.
 	bucket := parseBucketParam(r)
 	query := fmt.Sprintf(`
 		SELECT
-			date_trunc('%s', submitted_at) AS hour,
+			date_trunc('%s', started_at) AS hour,
 			COALESCE(AVG(EXTRACT(EPOCH FROM (started_at - submitted_at)) * 1000), 0) AS avg_wait_ms,
 			COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (
 				ORDER BY EXTRACT(EPOCH FROM (started_at - submitted_at)) * 1000
@@ -389,8 +398,8 @@ func (s *Server) handleAnalyticsQueueWait(w http.ResponseWriter, r *http.Request
 			COUNT(*) AS job_count
 		FROM job_summary
 		WHERE started_at IS NOT NULL
-		  AND submitted_at >= $1
-		  AND submitted_at < $2
+		  AND started_at >= $1
+		  AND started_at < $2
 		GROUP BY 1
 		ORDER BY 1
 	`, bucket)

@@ -172,6 +172,41 @@ func TestAnalyticsQueueWait_BucketParam_HonouredBySQL(t *testing.T) {
 	}
 }
 
+// TestAnalyticsQueueWait_BucketsAndFiltersOnStartedAt pins the
+// column we time-slice on. Keying on `submitted_at` makes the
+// queue-wait series vanish from a rolling "LAST 10 MIN" view as
+// soon as the submit instant scrolls off the left edge, even
+// though the job just ran and its wait sample is obviously
+// relevant to the current window. The metric is known at
+// started_at — that's when the wait is measured — so both the
+// GROUP BY bucket and the range filter must use started_at.
+func TestAnalyticsQueueWait_BucketsAndFiltersOnStartedAt(t *testing.T) {
+	db := &mockAnalyticsDB{rows: &mockRows{}}
+	srv := newAnalyticsServer(db)
+	doGet(t, srv, "/api/analytics/queue-wait?bucket=second")
+
+	// The bucket expression must reference started_at, NOT
+	// submitted_at. If this flips back to submitted_at the
+	// walkthrough's queue-wait chart will age out of the 10-min
+	// window mid-recording.
+	if !strings.Contains(db.lastSQL, "date_trunc('second', started_at)") {
+		t.Errorf("queue-wait SQL must bucket on started_at; got: %s", db.lastSQL)
+	}
+	if strings.Contains(db.lastSQL, "date_trunc('second', submitted_at)") {
+		t.Errorf("queue-wait SQL must NOT bucket on submitted_at; got: %s", db.lastSQL)
+	}
+
+	// The WHERE clause must filter on started_at too — otherwise
+	// a rolling window that's younger than submitted_at would
+	// still discard the row.
+	if !strings.Contains(db.lastSQL, "started_at >= $1") {
+		t.Errorf("queue-wait WHERE must filter started_at >= from; got: %s", db.lastSQL)
+	}
+	if !strings.Contains(db.lastSQL, "started_at < $2") {
+		t.Errorf("queue-wait WHERE must filter started_at < to; got: %s", db.lastSQL)
+	}
+}
+
 func TestAnalyticsNodeReliability_EmptyResult_Returns200(t *testing.T) {
 	db := &mockAnalyticsDB{rows: &mockRows{}}
 	srv := newAnalyticsServer(db)

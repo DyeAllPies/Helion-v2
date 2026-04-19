@@ -44,12 +44,18 @@ Chart.register(
 <div class="page">
   <header class="page-header">
     <div>
-      <h1 class="page-title">ANALYTICS</h1>
+      <h1 class="page-title">
+        ANALYTICS
+        <span class="live-dot" *ngIf="lastUpdated"
+              title="Live — auto-refreshes every {{ activeRefreshSeconds() }} s"
+              aria-label="Live"></span>
+      </h1>
       <p class="page-sub">
         Live metrics from the analytics database
         <span class="page-sub__live" *ngIf="lastUpdated"
               [attr.aria-label]="'Auto-refreshed at ' + lastUpdated.toLocaleTimeString()">
           · updated {{ lastUpdated | date:'HH:mm:ss' }} · bucket <strong>{{ activeBucket }}</strong>
+          · refresh every <strong>{{ activeRefreshSeconds() }} s</strong>
         </span>
       </p>
     </div>
@@ -194,6 +200,24 @@ Chart.register(
   `,
   styles: [`
     .page { padding: 28px 32px; }
+
+    /* Live-polling indicator — a small pulsing dot next to the
+       page title. Pulses once per second (independent of the
+       actual poll cadence; that's surfaced in the subtitle). The
+       dot's role is the at-a-glance "this view is live" cue. */
+    .live-dot {
+      display: inline-block;
+      width: 8px; height: 8px; margin-left: 10px;
+      border-radius: 50%;
+      background: #44b55f;
+      box-shadow: 0 0 6px rgba(68,181,95,0.8);
+      animation: live-pulse 1.3s ease-in-out infinite;
+      vertical-align: middle;
+    }
+    @keyframes live-pulse {
+      0%, 100% { opacity: 0.35; transform: scale(0.85); }
+      50%      { opacity: 1;    transform: scale(1.15); }
+    }
 
     .page-header {
       display: flex; align-items: flex-start; justify-content: space-between;
@@ -382,16 +406,19 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
 
   /**
    * Start (or restart) the live-refresh loop. Ticks at
-   * environment.tokenRefreshMs (5 s dev, 10 s prod) — the same
-   * cadence the Nodes list uses. `startWith(0)` fires an
-   * immediate load so the view never sits empty between the
-   * mount and the first tick. User-driven changes (quick-range
-   * click, date-input edit) call this to resubscribe so the
-   * clock restarts from zero with the new parameters.
+   * environment.analyticsRefreshMs (2 s dev, 5 s prod). Chosen
+   * faster than the 5-s tokenRefreshMs that the Nodes list uses
+   * because the MNIST walkthrough watches jobs pile onto the
+   * chart in real time — a 5-s poll made individual completions
+   * land in batches, which felt laggy. The read path is a single
+   * indexed GROUP BY on job_summary and does NOT alter the
+   * server-side write rate: events still batch to PostgreSQL
+   * every 200 ms via the analytics sink, independent of how
+   * often any dashboard polls.
    */
   private startPolling(): void {
     this.pollSub?.unsubscribe();
-    this.pollSub = interval(environment.tokenRefreshMs).pipe(
+    this.pollSub = interval(environment.analyticsRefreshMs).pipe(
       startWith(0),
     ).subscribe(() => this.reload());
   }
@@ -426,9 +453,15 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
     // auto-select finer buckets so the x-axis actually shows
     // the activity pattern. 24h stays on hour so we don't send
     // 86 400 datapoints to Chart.js.
-    this.activeBucket = key === '1m'       ? 'second'
-                      : (key === '10m' || key === '1h') ? 'minute'
-                      : 'hour';
+    // Bucket picked to keep each job-completion visible as its
+    // own spike rather than fusing four close-in-time events into
+    // one smooth bell. Second-resolution for 1m and 10m — even
+    // 600 buckets over 10 min stay readable with autoSkip on the
+    // tick labels, and the sequence of individual job completions
+    // now reads as distinct events instead of a single bump.
+    this.activeBucket = (key === '1m' || key === '10m') ? 'second'
+                      : key === '1h'                    ? 'minute'
+                      :                                   'hour';
     this.startPolling();
   }
 
@@ -582,7 +615,18 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
     animation: { duration: 300 },
     scales: {
       x: {
-        ticks: { color: '#4a5568', font: { family: "'JetBrains Mono'", size: 10 }, maxRotation: 45, autoSkip: false },
+        // autoSkip + maxTicksLimit keeps the axis readable at
+        // second-resolution (600 buckets over 10 min) — Chart.js
+        // picks ~10 evenly-spaced labels instead of rendering
+        // every tick. Without this the labels collide into a
+        // solid grey smear.
+        ticks: {
+          color:         '#4a5568',
+          font:          { family: "'JetBrains Mono'", size: 10 },
+          maxRotation:   45,
+          autoSkip:      true,
+          maxTicksLimit: 10,
+        },
         grid:  { color: 'rgba(42,48,64,0.6)' },
         title: {
           display: true,
@@ -615,36 +659,46 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
   };
 
   get throughputChartData(): ChartData<'line'> {
+    // tension: 0 makes each completed-job spike a sharp vertical
+    // jump instead of getting smoothed into a bell curve. At
+    // second-resolution across a 10-min window, four MNIST jobs
+    // now appear as four discrete staircases (point goes up to
+    // N at the completion second, back to 0 the next second)
+    // rather than one smooth hump centred on whichever bucket
+    // happened to collect them all.
     return {
       labels: this.throughputLabels,
       datasets: [
         {
           label: 'Completed', data: this.completedData,
           borderColor: '#66bb6a', backgroundColor: 'rgba(102,187,106,0.08)',
-          fill: true, tension: 0.3, pointRadius: 2, pointBackgroundColor: '#66bb6a',
+          fill: true, tension: 0, pointRadius: 0, pointHoverRadius: 3,
+          stepped: false,
         },
         {
           label: 'Failed', data: this.failedData,
           borderColor: '#ff5252', backgroundColor: 'rgba(255,82,82,0.08)',
-          fill: true, tension: 0.3, pointRadius: 2, pointBackgroundColor: '#ff5252',
+          fill: true, tension: 0, pointRadius: 0, pointHoverRadius: 3,
         },
       ]
     };
   }
 
   get queueWaitChartData(): ChartData<'line'> {
+    // Same discrete-spike styling as throughput — each job's
+    // queue wait is one measurement, not a continuous signal.
     return {
       labels: this.queueWaitLabels,
       datasets: [
         {
           label: 'Avg Wait (ms)', data: this.avgWaitData,
           borderColor: '#c084fc', backgroundColor: 'rgba(192,132,252,0.08)',
-          fill: true, tension: 0.3, pointRadius: 2, pointBackgroundColor: '#c084fc',
+          fill: true, tension: 0, pointRadius: 0, pointHoverRadius: 3,
         },
         {
           label: 'P95 Wait (ms)', data: this.p95WaitData,
           borderColor: '#ffab40', backgroundColor: 'rgba(255,171,64,0.06)',
-          fill: true, tension: 0.3, pointRadius: 2, pointBackgroundColor: '#ffab40',
+          fill: true, tension: 0, pointRadius: 0, pointHoverRadius: 3,
         },
       ]
     };
@@ -670,6 +724,15 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
 
   private toDateStr(d: Date): string {
     return d.toISOString().slice(0, 10);
+  }
+
+  /**
+   * Surface the active poll interval (in seconds) so the page
+   * header can say "refresh every 2 s" instead of hiding the
+   * cadence. Pure accessor over environment; exported for tests.
+   */
+  activeRefreshSeconds(): number {
+    return Math.round(environment.analyticsRefreshMs / 1000);
   }
 }
 

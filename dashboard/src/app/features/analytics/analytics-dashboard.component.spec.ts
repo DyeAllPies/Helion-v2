@@ -474,7 +474,7 @@ describe('AnalyticsDashboardComponent quick-range → bucket mapping', () => {
 
   afterEach(() => fixture.destroy());
 
-  it('LAST 10 MIN selects minute-bucket + a 10-minute window (walkthrough guard)', () => {
+  it('LAST 10 MIN selects second-bucket + a 10-minute window (walkthrough guard)', () => {
     apiSpy.getAnalyticsThroughput.calls.reset();
     apiSpy.getAnalyticsQueueWait.calls.reset();
 
@@ -482,18 +482,20 @@ describe('AnalyticsDashboardComponent quick-range → bucket mapping', () => {
     component.setQuickRange('10m');
     const after = Date.now();
 
-    // Bucket picked by the quick-range: minute, not hour. A hour-
-    // bucket on a 10-minute window collapses to one bar, which is
-    // exactly the regression this test guards against.
-    expect(component.activeBucket).toBe('minute');
+    // Bucket picked by the quick-range: SECOND, not minute. At
+    // minute resolution all four MNIST jobs (which complete
+    // within a single minute) land in one bar and fuse into a
+    // smooth bell curve — the viewer sees one event, not four.
+    // Second resolution makes each completion a discrete spike.
+    expect(component.activeBucket).toBe('second');
     expect(component.activeQuickRange).toBe('10m');
 
     // The API call carried the bucket param through.
     expect(apiSpy.getAnalyticsThroughput).toHaveBeenCalled();
     const throughputArgs = apiSpy.getAnalyticsThroughput.calls.mostRecent().args;
-    expect(throughputArgs[2]).toBe('minute'); // third arg is bucket
+    expect(throughputArgs[2]).toBe('second'); // third arg is bucket
     expect(apiSpy.getAnalyticsQueueWait).toHaveBeenCalled();
-    expect(apiSpy.getAnalyticsQueueWait.calls.mostRecent().args[2]).toBe('minute');
+    expect(apiSpy.getAnalyticsQueueWait.calls.mostRecent().args[2]).toBe('second');
 
     // Window width = 10 minutes within a small tolerance for the
     // wall clock passing between `before` and the call.
@@ -523,12 +525,23 @@ describe('AnalyticsDashboardComponent quick-range → bucket mapping', () => {
 
   it('editing a day input reverts activeBucket to hour + clears the quick-range', () => {
     component.setQuickRange('10m');
-    expect(component.activeBucket).toBe('minute');
+    // LAST 10 MIN now auto-picks second-resolution so individual
+    // job completions appear as discrete spikes rather than
+    // fusing into one smoothed bump.
+    expect(component.activeBucket).toBe('second');
 
     component.onDateInputChange('2026-04-01', 'from');
     expect(component.activeBucket).toBe('hour');
     expect(component.activeQuickRange).toBe('');
     expect(component.rangeFromISO).toBe('');
+  });
+
+  it('activeRefreshSeconds reflects the analyticsRefreshMs env var', () => {
+    // The page header shows "refresh every N s" so the viewer
+    // sees how fresh the numbers are. Value comes from the
+    // environment config, which dev pins at 2 s. Prod is 5 s
+    // but unit tests always load the dev environment.
+    expect(component.activeRefreshSeconds()).toBe(2);
   });
 
   it('completed-bar total rises as more jobs complete across successive polls', () => {
@@ -634,7 +647,7 @@ describe('AnalyticsDashboardComponent zero-fill', () => {
 
   afterEach(() => fixture.destroy());
 
-  it('LAST 10 MIN fills all 10 minute buckets even when the backend only returns 2', () => {
+  it('LAST 10 MIN fills all 600 second buckets even when the backend only returns 2', () => {
     // Before this test existed the repro loop was:
     //   1. code change
     //   2. docker compose rebuild (~60 s)
@@ -644,48 +657,47 @@ describe('AnalyticsDashboardComponent zero-fill', () => {
     // which was 3+ minutes per iteration. This test reproduces
     // the exact pathology (sparse backend rows) and runs in ms.
     //
-    // Arrange: the backend returns only two of the ten minutes
-    // that fall in a LAST 10 MIN window — jobs completed in the
-    // 3rd and 7th minute and every other minute was empty.
+    // Arrange: the backend returns only two of the SIX HUNDRED
+    // seconds that fall in a LAST 10 MIN window (now that the
+    // quick-range auto-picks second-resolution so individual job
+    // completions show as discrete spikes rather than fusing
+    // into a single smoothed minute-long bump).
     const now = Date.now();
-    // Pin ten bucket starts that cover a 10-minute window rooted
-    // at "now". The two non-empty buckets are at indices 3 and 7
-    // in that sequence.
-    const bucketAt = (minsBeforeNow: number): string =>
+    const bucketAt = (secsBeforeNow: number): string =>
       new Date(
-        Math.floor((now - minsBeforeNow * 60_000) / 60_000) * 60_000,
+        Math.floor((now - secsBeforeNow * 1_000) / 1_000) * 1_000,
       ).toISOString();
 
     apiSpy.getAnalyticsThroughput.and.returnValue(of({
       from: '', to: '',
       data: [
-        { hour: bucketAt(7), status: 'completed', job_count: 1, avg_duration_ms: 0, p95_duration_ms: 0 },
-        { hour: bucketAt(3), status: 'completed', job_count: 2, avg_duration_ms: 0, p95_duration_ms: 0 },
+        // Two distant seconds so the chart shows two separate
+        // spikes rather than one blob.
+        { hour: bucketAt(420), status: 'completed', job_count: 1, avg_duration_ms: 0, p95_duration_ms: 0 },
+        { hour: bucketAt(180), status: 'completed', job_count: 2, avg_duration_ms: 0, p95_duration_ms: 0 },
       ],
     }));
 
     // Act: switch to LAST 10 MIN — the walkthrough's quick-range
-    // click. This drives `bucket='minute'` AND a 10-minute window.
+    // click. This drives `bucket='second'` AND a 10-minute window.
     component.setQuickRange('10m');
 
-    // Assert: x-axis carries every minute in the window so the
-    // chart reads as a timeline, not a scatter of random bars.
-    // LAST 10 MIN with minute bucketing gives ten buckets
-    // (the inclusive-of-start / exclusive-of-end enumeration
-    // may produce 10 exactly or 11 if `to` lands on a bucket
-    // boundary mid-millisecond; either is right).
-    expect(component.throughputLabels.length).toBeGreaterThanOrEqual(10);
-    expect(component.throughputLabels.length).toBeLessThanOrEqual(11);
+    // Assert: x-axis carries every second in the window so each
+    // job completion becomes a visible discrete event. 10 min =
+    // 600 seconds; allow a one-bucket slop for boundary rounding.
+    expect(component.activeBucket).toBe('second');
+    expect(component.throughputLabels.length).toBeGreaterThanOrEqual(599);
+    expect(component.throughputLabels.length).toBeLessThanOrEqual(601);
     expect(component.completedData.length).toBe(component.throughputLabels.length);
 
     // The two non-empty buckets carry the counts we sent; every
     // other bucket is zero. This is exactly what the walkthrough
-    // video's viewer should see: a mostly-flat line with two
-    // bars that match the job-completion timeline.
+    // video's viewer should see: a flat baseline with two sharp
+    // vertical spikes at the completion seconds.
     const nonZeros = component.completedData.filter(v => v !== 0);
     expect(nonZeros.sort()).toEqual([1, 2]);
     const zeroCount = component.completedData.filter(v => v === 0).length;
-    expect(zeroCount).toBeGreaterThanOrEqual(8); // most of the window is empty
+    expect(zeroCount).toBeGreaterThanOrEqual(595); // almost every second is empty
   });
 
   it('LAST 1 MIN zero-fills all 60 second buckets', () => {
