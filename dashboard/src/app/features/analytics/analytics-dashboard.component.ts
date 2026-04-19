@@ -6,15 +6,16 @@
 //
 // All views share a date-range picker (default: last 7 days).
 
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration, ChartData } from 'chart.js';
+import { Subscription, interval, startWith } from 'rxjs';
 import {
   Chart, LineElement, PointElement, LineController,
   BarElement, BarController,
-  CategoryScale, LinearScale, Filler, Tooltip, Legend
+  CategoryScale, LinearScale, Filler, Tooltip, Legend, Title
 } from 'chart.js';
 import { MatTableModule } from '@angular/material/table';
 import { MatSortModule } from '@angular/material/sort';
@@ -27,11 +28,12 @@ import {
   AnalyticsQueueWaitRow,
   AnalyticsWorkflowOutcomeRow,
 } from '../../shared/models';
+import { environment } from '../../../environments/environment';
 
 Chart.register(
   LineElement, PointElement, LineController,
   BarElement, BarController,
-  CategoryScale, LinearScale, Filler, Tooltip, Legend
+  CategoryScale, LinearScale, Filler, Tooltip, Legend, Title
 );
 
 @Component({
@@ -43,7 +45,13 @@ Chart.register(
   <header class="page-header">
     <div>
       <h1 class="page-title">ANALYTICS</h1>
-      <p class="page-sub">Historical metrics from the analytics database</p>
+      <p class="page-sub">
+        Live metrics from the analytics database
+        <span class="page-sub__live" *ngIf="lastUpdated"
+              [attr.aria-label]="'Auto-refreshed at ' + lastUpdated.toLocaleTimeString()">
+          · updated {{ lastUpdated | date:'HH:mm:ss' }} · bucket <strong>{{ activeBucket }}</strong>
+        </span>
+      </p>
     </div>
     <div class="date-range">
       <!--
@@ -298,7 +306,7 @@ Chart.register(
     .retry-duration { font-size: 10px; color: var(--color-muted); }
   `]
 })
-export class AnalyticsDashboardComponent implements OnInit {
+export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
 
   fromDate = '';
   toDate   = '';
@@ -315,6 +323,25 @@ export class AnalyticsDashboardComponent implements OnInit {
   rangeFromISO = '';
   rangeToISO   = '';
   activeQuickRange: '' | '1m' | '10m' | '1h' | '24h' = '';
+
+  /**
+   * Time-series bucket width. Drives the `bucket` query parameter
+   * on /analytics/throughput and /analytics/queue-wait, and picks
+   * the x-axis label granularity ("14:32:05" for second, "14:32"
+   * for minute, "Apr 18 14:00" for hour). Narrower windows auto-
+   * select a finer bucket so a 1-minute view shows per-second
+   * counts instead of a single hour-long bar.
+   */
+  activeBucket: 'hour' | 'minute' | 'second' = 'hour';
+
+  /**
+   * Timestamp of the most recent successful poll. Surfaced on the
+   * page header so the viewer can see the dashboard is live and
+   * how fresh the numbers are.
+   */
+  lastUpdated: Date | null = null;
+
+  private pollSub?: Subscription;
 
   // Throughput
   throughputLabels:  string[] = [];
@@ -346,7 +373,27 @@ export class AnalyticsDashboardComponent implements OnInit {
     weekAgo.setDate(weekAgo.getDate() - 7);
     this.fromDate = this.toDateStr(weekAgo);
     this.toDate   = this.toDateStr(now);
-    this.reload();
+    this.startPolling();
+  }
+
+  ngOnDestroy(): void {
+    this.pollSub?.unsubscribe();
+  }
+
+  /**
+   * Start (or restart) the live-refresh loop. Ticks at
+   * environment.tokenRefreshMs (5 s dev, 10 s prod) — the same
+   * cadence the Nodes list uses. `startWith(0)` fires an
+   * immediate load so the view never sits empty between the
+   * mount and the first tick. User-driven changes (quick-range
+   * click, date-input edit) call this to resubscribe so the
+   * clock restarts from zero with the new parameters.
+   */
+  private startPolling(): void {
+    this.pollSub?.unsubscribe();
+    this.pollSub = interval(environment.tokenRefreshMs).pipe(
+      startWith(0),
+    ).subscribe(() => this.reload());
   }
 
   /**
@@ -373,7 +420,16 @@ export class AnalyticsDashboardComponent implements OnInit {
     this.fromDate = this.toDateStr(from);
     this.toDate   = this.toDateStr(now);
     this.activeQuickRange = key;
-    this.reload();
+    // Pick a bucket that keeps the chart meaningful for the
+    // window size: hour-bucketing a 60-second window would
+    // collapse everything into a single bar. Smaller windows
+    // auto-select finer buckets so the x-axis actually shows
+    // the activity pattern. 24h stays on hour so we don't send
+    // 86 400 datapoints to Chart.js.
+    this.activeBucket = key === '1m'       ? 'second'
+                      : (key === '10m' || key === '1h') ? 'minute'
+                      : 'hour';
+    this.startPolling();
   }
 
   /**
@@ -387,7 +443,8 @@ export class AnalyticsDashboardComponent implements OnInit {
     this.rangeFromISO     = '';
     this.rangeToISO       = '';
     this.activeQuickRange = '';
-    this.reload();
+    this.activeBucket     = 'hour';
+    this.startPolling();
   }
 
   reload(): void {
@@ -396,18 +453,40 @@ export class AnalyticsDashboardComponent implements OnInit {
 
     // Prefer the ISO instants a quick-range button set (minute
     // granularity); fall back to the day inputs otherwise.
+    // Re-compute the "to" end each reload so polling keeps the
+    // right edge of the window rolling with wall-clock time —
+    // otherwise a sub-day window stays pinned to the moment the
+    // user clicked the quick-range button and never shows new
+    // data again.
+    if (this.rangeFromISO && this.activeQuickRange !== '') {
+      const deltaMs: Record<'1m' | '10m' | '1h' | '24h', number> = {
+        '1m':  60_000,
+        '10m': 600_000,
+        '1h':  3_600_000,
+        '24h': 86_400_000,
+      };
+      const now = new Date();
+      this.rangeFromISO = new Date(now.getTime() - deltaMs[this.activeQuickRange]).toISOString();
+      this.rangeToISO   = now.toISOString();
+    }
     const from = this.rangeFromISO || this.fromDate + 'T00:00:00Z';
     const to   = this.rangeToISO   || this.toDate   + 'T23:59:59Z';
+    const bucket = this.activeBucket;
 
     let pending = 5;
-    const done = () => { if (--pending === 0) this.loading = false; };
+    const done = () => {
+      if (--pending === 0) {
+        this.loading     = false;
+        this.lastUpdated = new Date();
+      }
+    };
     const fail = (msg: string) => (err: unknown) => {
       console.error(msg, err);
       this.error = `Failed to load ${msg}`;
       done();
     };
 
-    this.api.getAnalyticsThroughput(from, to).subscribe({
+    this.api.getAnalyticsThroughput(from, to, bucket).subscribe({
       next: resp => { this.processThroughput(resp.data ?? []); done(); },
       error: fail('throughput'),
     });
@@ -422,7 +501,7 @@ export class AnalyticsDashboardComponent implements OnInit {
       error: fail('retry effectiveness'),
     });
 
-    this.api.getAnalyticsQueueWait(from, to).subscribe({
+    this.api.getAnalyticsQueueWait(from, to, bucket).subscribe({
       next: resp => { this.processQueueWait(resp.data ?? []); done(); },
       error: fail('queue wait'),
     });
@@ -436,30 +515,31 @@ export class AnalyticsDashboardComponent implements OnInit {
   // ── Data processors ────────────────────────────────────────────────────
 
   private processThroughput(rows: AnalyticsThroughputRow[]): void {
-    // Index by the raw ISO hour (the key the backend emits from
-    // date_trunc('hour', ...)). We aggregate on that key, then
-    // project it into a display label *after* sorting so the
-    // x-axis is chronologically ordered (sorting the localised
-    // label is wrong: it puts "Apr 4" after "Apr 30").
-    const hours      = new Set<string>();
-    const completed  = new Map<string, number>();
-    const failed     = new Map<string, number>();
+    // Index by the raw ISO bucket start (the `hour` field carries
+    // whatever bucket width the server returned — hour, minute,
+    // or second — see parseBucketParam on the backend). We aggregate
+    // on that key, then project it into a display label *after*
+    // sorting so the x-axis is chronologically ordered (sorting
+    // the localised label is wrong: it puts "Apr 4" after "Apr 30").
+    const buckets      = new Set<string>();
+    const completed    = new Map<string, number>();
+    const failed       = new Map<string, number>();
     for (const r of rows) {
-      hours.add(r.hour);
+      buckets.add(r.hour);
       if (r.status === 'completed') completed.set(r.hour, r.job_count);
       if (r.status === 'failed')    failed.set(r.hour, r.job_count);
     }
-    const sortedHours       = [...hours].sort();
-    this.throughputLabels   = sortedHours.map(formatHourLabel);
-    this.completedData      = sortedHours.map(h => completed.get(h) ?? 0);
-    this.failedData         = sortedHours.map(h => failed.get(h) ?? 0);
+    const sortedBuckets   = [...buckets].sort();
+    this.throughputLabels = sortedBuckets.map(b => formatBucketLabel(b, this.activeBucket));
+    this.completedData    = sortedBuckets.map(h => completed.get(h) ?? 0);
+    this.failedData       = sortedBuckets.map(h => failed.get(h) ?? 0);
   }
 
   private processQueueWait(rows: AnalyticsQueueWaitRow[]): void {
-    // The backend already returns rows ordered by hour; we project
-    // each row's ISO hour into the same display label as the
-    // throughput chart so both panels share an x-axis format.
-    this.queueWaitLabels = rows.map(r => formatHourLabel(r.hour));
+    // The backend already returns rows ordered by bucket start;
+    // we project each into the same display label as the throughput
+    // chart so both panels share an x-axis format.
+    this.queueWaitLabels = rows.map(r => formatBucketLabel(r.hour, this.activeBucket));
     this.avgWaitData = rows.map(r => r.avg_wait_ms);
     this.p95WaitData = rows.map(r => r.p95_wait_ms);
   }
@@ -489,8 +569,15 @@ export class AnalyticsDashboardComponent implements OnInit {
     animation: { duration: 300 },
     scales: {
       x: {
-        ticks: { color: '#4a5568', font: { family: "'JetBrains Mono'", size: 10 }, maxRotation: 45 },
+        ticks: { color: '#4a5568', font: { family: "'JetBrains Mono'", size: 10 }, maxRotation: 45, autoSkip: false },
         grid:  { color: 'rgba(42,48,64,0.6)' },
+        title: {
+          display: true,
+          text:    'time',
+          color:   '#8896aa',
+          font:    { family: "'JetBrains Mono'", size: 10 },
+          padding: { top: 8 },
+        },
       },
       y: {
         ticks: { color: '#4a5568', font: { family: "'JetBrains Mono'", size: 10 } },
@@ -574,31 +661,55 @@ export class AnalyticsDashboardComponent implements OnInit {
 }
 
 /**
- * Format a backend-side hourly bucket into a compact x-axis label
- * (e.g. "Apr 18, 14:00").
+ * Format a backend-side bucket-start instant into a compact x-axis
+ * label whose resolution matches the bucket width. The original
+ * bug chain that led to this:
  *
- * Bug this fixes: the original call
+ *   1. Original code called `toLocaleDateString(undefined,
+ *      { month, day, hour })`. `toLocaleDateString` silently drops
+ *      the `hour` option — so every bucket collapsed to "Apr 18"
+ *      and sub-hour windows showed a naked date.
+ *   2. The first fix (formatHourLabel) switched to `toLocaleString`
+ *      so the hour appeared, but the backend still bucketed by
+ *      hour — a 1-minute window produced a single data point with
+ *      a fixed "14:00" label and no visible motion.
  *
- *   toLocaleDateString(undefined, { month, day, hour })
+ * This second fix pairs a per-bucket-width format with the
+ * matching backend bucket. "second" → "14:32:05" (plus a date
+ * prefix when the window straddles midnight), "minute" → "14:32",
+ * "hour" → "Apr 18 14:00". Returns the original string when the
+ * input is unparseable so a malformed row doesn't blank the chart.
  *
- * silently drops the `hour` option — `toLocaleDateString` only
- * renders date fields. Every bucket collapsed to the same "Apr 18"
- * string, so multi-hour windows showed one x-axis tick and
- * sub-hour windows showed a naked date with no time context.
- * `toLocaleString` honours the `hour` field, and we pin `hour12:
- * false` so the label is unambiguous in 24-hour locales too.
- *
- * Exported for unit testing; callers use it to project a sorted
- * list of ISO hours into the displayed label array.
+ * Exported for unit testing — the component only calls through
+ * this helper.
  */
-export function formatHourLabel(iso: string): string {
+export function formatBucketLabel(iso: string, bucket: 'hour' | 'minute' | 'second'): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    month:   'short',
-    day:     'numeric',
-    hour:    '2-digit',
-    minute:  '2-digit',
-    hour12:  false,
-  });
+  const opts: Intl.DateTimeFormatOptions = { hour12: false };
+  if (bucket === 'second') {
+    opts.hour   = '2-digit';
+    opts.minute = '2-digit';
+    opts.second = '2-digit';
+  } else if (bucket === 'minute') {
+    opts.hour   = '2-digit';
+    opts.minute = '2-digit';
+  } else {
+    // Hour buckets always span the day boundary at some point,
+    // so the date prefix is worth the horizontal space.
+    opts.month  = 'short';
+    opts.day    = 'numeric';
+    opts.hour   = '2-digit';
+    opts.minute = '2-digit';
+  }
+  return d.toLocaleString(undefined, opts);
+}
+
+/**
+ * Back-compat alias. Some existing callers + tests still import
+ * `formatHourLabel`; delegates to `formatBucketLabel(..., 'hour')`
+ * so nothing else needs to change.
+ */
+export function formatHourLabel(iso: string): string {
+  return formatBucketLabel(iso, 'hour');
 }

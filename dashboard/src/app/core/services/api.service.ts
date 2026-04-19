@@ -139,8 +139,10 @@ export class ApiService {
 
   // ── Analytics ───────────────────────────────────────────────────────────────
 
-  getAnalyticsThroughput(from: string, to: string): Observable<AnalyticsThroughputResponse> {
-    const params = new HttpParams().set('from', from).set('to', to);
+  getAnalyticsThroughput(
+    from: string, to: string, bucket: 'hour' | 'minute' | 'second' = 'hour',
+  ): Observable<AnalyticsThroughputResponse> {
+    const params = new HttpParams().set('from', from).set('to', to).set('bucket', bucket);
     return this.http.get<AnalyticsThroughputResponse>(
       `${this.base}/api/analytics/throughput`, { params });
   }
@@ -155,8 +157,10 @@ export class ApiService {
       `${this.base}/api/analytics/retry-effectiveness`);
   }
 
-  getAnalyticsQueueWait(from: string, to: string): Observable<AnalyticsQueueWaitResponse> {
-    const params = new HttpParams().set('from', from).set('to', to);
+  getAnalyticsQueueWait(
+    from: string, to: string, bucket: 'hour' | 'minute' | 'second' = 'hour',
+  ): Observable<AnalyticsQueueWaitResponse> {
+    const params = new HttpParams().set('from', from).set('to', to).set('bucket', bucket);
     return this.http.get<AnalyticsQueueWaitResponse>(
       `${this.base}/api/analytics/queue-wait`, { params });
   }

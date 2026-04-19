@@ -24,6 +24,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -32,6 +33,32 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/jackc/pgx/v5"
 )
+
+// analyticsBuckets is the allowlist of bucket widths the time-series
+// analytics endpoints accept via the `bucket` query param. The values
+// are spliced into a raw SQL statement via fmt.Sprintf (date_trunc is
+// not parameterisable in pgx), so any caller-supplied bucket MUST go
+// through parseBucketParam below — never directly into the query
+// string. Adding a new bucket here is a two-step change: update this
+// map AND verify Postgres' date_trunc accepts it.
+var analyticsBuckets = map[string]struct{}{
+	"hour":   {},
+	"minute": {},
+	"second": {},
+}
+
+// parseBucketParam returns a bucket string that is guaranteed to be
+// in analyticsBuckets. Defaults to "hour" (preserves the original
+// behaviour for callers who don't send the param). Unknown values
+// fall back to the default rather than 400 — the frontend can't
+// always predict which bucket it needs before seeing the data.
+func parseBucketParam(r *http.Request) string {
+	v := r.URL.Query().Get("bucket")
+	if _, ok := analyticsBuckets[v]; ok {
+		return v
+	}
+	return "hour"
+}
 
 // ── Query interface ──────────────────────────────────────────────────────
 
@@ -162,9 +189,14 @@ func (s *Server) handleAnalyticsThroughput(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	rows, err := s.analyticsDB.Query(r.Context(), `
+	// Bucket width is selectable via `?bucket=hour|minute|second`.
+	// The value is spliced into the SQL via fmt.Sprintf (date_trunc
+	// isn't parameterisable), so parseBucketParam's allowlist is
+	// the SQL-injection guard — no raw caller input hits the query.
+	bucket := parseBucketParam(r)
+	query := fmt.Sprintf(`
 		SELECT
-			date_trunc('hour', completed_at) AS hour,
+			date_trunc('%s', completed_at) AS hour,
 			final_status,
 			COUNT(*)                         AS job_count,
 			COALESCE(AVG(duration_ms), 0)    AS avg_duration_ms,
@@ -175,7 +207,8 @@ func (s *Server) handleAnalyticsThroughput(w http.ResponseWriter, r *http.Reques
 		  AND completed_at < $2
 		GROUP BY 1, 2
 		ORDER BY 1
-	`, from, to)
+	`, bucket)
+	rows, err := s.analyticsDB.Query(r.Context(), query, from, to)
 	if err != nil {
 		slog.Error("analytics throughput query failed", slog.Any("err", err))
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -343,9 +376,12 @@ func (s *Server) handleAnalyticsQueueWait(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	rows, err := s.analyticsDB.Query(r.Context(), `
+	// Same bucket-allowlist treatment as throughput — see
+	// parseBucketParam for the SQL-injection guard rationale.
+	bucket := parseBucketParam(r)
+	query := fmt.Sprintf(`
 		SELECT
-			date_trunc('hour', submitted_at) AS hour,
+			date_trunc('%s', submitted_at) AS hour,
 			COALESCE(AVG(EXTRACT(EPOCH FROM (started_at - submitted_at)) * 1000), 0) AS avg_wait_ms,
 			COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (
 				ORDER BY EXTRACT(EPOCH FROM (started_at - submitted_at)) * 1000
@@ -357,7 +393,8 @@ func (s *Server) handleAnalyticsQueueWait(w http.ResponseWriter, r *http.Request
 		  AND submitted_at < $2
 		GROUP BY 1
 		ORDER BY 1
-	`, from, to)
+	`, bucket)
+	rows, err := s.analyticsDB.Query(r.Context(), query, from, to)
 	if err != nil {
 		slog.Error("analytics queue wait query failed", slog.Any("err", err))
 		writeError(w, http.StatusInternalServerError, "internal error")

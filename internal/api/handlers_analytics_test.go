@@ -112,6 +112,66 @@ func TestAnalyticsThroughput_TimeRangeParams(t *testing.T) {
 	}
 }
 
+// TestAnalyticsThroughput_BucketParam_HonouredBySQL asserts that the
+// `bucket` query param drives the date_trunc width on both analytics
+// time-series endpoints. The parameter is allow-listed — any other
+// value silently falls back to "hour" — so this pair of assertions
+// is the injection guard we rely on.
+func TestAnalyticsThroughput_BucketParam_HonouredBySQL(t *testing.T) {
+	cases := []struct {
+		name   string
+		url    string
+		expect string
+	}{
+		{"default is hour", "/api/analytics/throughput", "date_trunc('hour'"},
+		{"minute accepted", "/api/analytics/throughput?bucket=minute", "date_trunc('minute'"},
+		{"second accepted", "/api/analytics/throughput?bucket=second", "date_trunc('second'"},
+		// Rejected values fall back to the default — this is the
+		// SQL-injection guard. A caller passing `hour'); DROP...`
+		// must land on the safe `hour` branch, not reach the query.
+		{"bogus falls back to hour", "/api/analytics/throughput?bucket=nanosecond", "date_trunc('hour'"},
+		{"injection attempt blocked", "/api/analytics/throughput?bucket=hour'%3B+DROP+TABLE+job_summary--", "date_trunc('hour'"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &mockAnalyticsDB{rows: &mockRows{}}
+			srv := newAnalyticsServer(db)
+			doGet(t, srv, tc.url)
+			if !strings.Contains(db.lastSQL, tc.expect) {
+				t.Errorf("SQL did not contain %q; got: %s", tc.expect, db.lastSQL)
+			}
+			// Neither "DROP" nor the injection tail should ever
+			// reach the query no matter what the caller sent.
+			if strings.Contains(strings.ToUpper(db.lastSQL), "DROP") {
+				t.Errorf("SQL contained DROP — injection guard leaked: %s", db.lastSQL)
+			}
+		})
+	}
+}
+
+// TestAnalyticsQueueWait_BucketParam_HonouredBySQL mirrors the
+// throughput test for the queue-wait endpoint (same allowlist
+// wiring, same injection concern).
+func TestAnalyticsQueueWait_BucketParam_HonouredBySQL(t *testing.T) {
+	cases := []struct {
+		url    string
+		expect string
+	}{
+		{"/api/analytics/queue-wait", "date_trunc('hour'"},
+		{"/api/analytics/queue-wait?bucket=minute", "date_trunc('minute'"},
+		{"/api/analytics/queue-wait?bucket=second", "date_trunc('second'"},
+		{"/api/analytics/queue-wait?bucket=bogus", "date_trunc('hour'"},
+	}
+	for _, tc := range cases {
+		db := &mockAnalyticsDB{rows: &mockRows{}}
+		srv := newAnalyticsServer(db)
+		doGet(t, srv, tc.url)
+		if !strings.Contains(db.lastSQL, tc.expect) {
+			t.Errorf("%s: SQL did not contain %q; got: %s", tc.url, tc.expect, db.lastSQL)
+		}
+	}
+}
+
 func TestAnalyticsNodeReliability_EmptyResult_Returns200(t *testing.T) {
 	db := &mockAnalyticsDB{rows: &mockRows{}}
 	srv := newAnalyticsServer(db)

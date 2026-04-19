@@ -9,7 +9,7 @@ import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testin
 import { provideAnimations } from '@angular/platform-browser/animations';
 import { Observable, of, throwError } from 'rxjs';
 
-import { AnalyticsDashboardComponent, formatHourLabel } from './analytics-dashboard.component';
+import { AnalyticsDashboardComponent, formatBucketLabel, formatHourLabel } from './analytics-dashboard.component';
 import { ApiService } from '../../core/services/api.service';
 import {
   AnalyticsThroughputResponse,
@@ -398,6 +398,48 @@ describe('AnalyticsDashboardComponent', () => {
     component.reload();
     expect(component.queueWaitLabels.length).toBe(2);
     expect(component.queueWaitLabels[0]).not.toBe(component.queueWaitLabels[1]);
+  });
+});
+
+describe('formatBucketLabel', () => {
+  it('renders second-resolution labels with hh:mm:ss', () => {
+    const label = formatBucketLabel('2026-04-18T14:32:05Z', 'second');
+    expect(label).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+  });
+
+  it('renders minute-resolution labels with hh:mm (no seconds)', () => {
+    const label = formatBucketLabel('2026-04-18T14:32:00Z', 'minute');
+    expect(label).toMatch(/\d{1,2}:\d{2}/);
+    // "14:32:00" would slip through the previous regex, so also
+    // assert the trailing :SS isn't there.
+    expect(label).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
+  });
+
+  it('renders hour-resolution labels with a date prefix', () => {
+    // Hour buckets can straddle midnight in a 24h window, so the
+    // label has to carry a date token. Check for "Apr" (month
+    // abbreviation) or "04" (numeric month) to be locale-neutral.
+    const label = formatBucketLabel('2026-04-18T14:00:00Z', 'hour');
+    expect(label).toMatch(/Apr|04/);
+    expect(label).toMatch(/\d{1,2}:\d{2}/);
+  });
+
+  it('returns the original string on malformed input', () => {
+    expect(formatBucketLabel('not-a-date', 'second')).toBe('not-a-date');
+    expect(formatBucketLabel('', 'minute')).toBe('');
+  });
+
+  it('same instant renders distinctly at different resolutions', () => {
+    const iso = '2026-04-18T14:32:05Z';
+    // Expectation: second-label (hh:mm:ss) differs from minute
+    // (hh:mm) and minute differs from hour (Apr 18 hh:mm). A
+    // regression that ignored the bucket arg would collapse all
+    // three to the same string.
+    const sec = formatBucketLabel(iso, 'second');
+    const min = formatBucketLabel(iso, 'minute');
+    const hr  = formatBucketLabel(iso, 'hour');
+    expect(sec).not.toBe(min);
+    expect(min).not.toBe(hr);
   });
 });
 
