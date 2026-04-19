@@ -103,7 +103,7 @@ Chart.register(
     <div class="chart-panel" *ngIf="throughputLabels.length > 0">
       <div class="chart-panel__header">
         <span class="material-icons" style="font-size:16px;color:var(--color-accent-dim)">bar_chart</span>
-        JOB THROUGHPUT — HOURLY
+        JOB THROUGHPUT · PER {{ activeBucket | uppercase }}
       </div>
       <div class="chart-wrap">
         <canvas baseChart [data]="throughputChartData" [options]="lineChartOptions" type="line"></canvas>

@@ -363,13 +363,17 @@ test.describe('Feature 21 — MNIST walkthrough (video recording)', () => {
     //     already visible to ops" beat land immediately.
     await page.click('a.nav-link >> text=Analytics');
     await expect(page).toHaveURL(/\/analytics$/);
-    // MNIST end-to-end finishes in ~60 s, so the tightest quick
-    // range still brackets the full run. Picking it shows that
-    // the analytics pipeline surfaces activity on a minute-scale
-    // window — not just hourly snapshots.
-    const oneMinBtn = page.locator('button.quick-range').filter({ hasText: /LAST\s*1\s*MIN/ });
-    await expect(oneMinBtn).toBeVisible({ timeout: 10_000 });
-    await oneMinBtn.click();
+    // The MNIST run is ~60 s, so LAST 10 MIN still brackets the
+    // full pipeline AND leaves headroom on either side. Minute-
+    // bucketing (auto-selected by the quick-range picker for 10m)
+    // gives the viewer several x-axis ticks so the job-completion
+    // progression reads as a sequence across the chart rather than
+    // a single stacked bar. We explicitly pick this range instead
+    // of LAST 1 MIN so the narrative beat "watch jobs pile up
+    // minute by minute" has a visible timeline to point at.
+    const tenMinBtn = page.locator('button.quick-range').filter({ hasText: /LAST\s*10\s*MIN/ });
+    await expect(tenMinBtn).toBeVisible({ timeout: 10_000 });
+    await tenMinBtn.click();
     // Throughput chart is the headline panel — wait for the canvas
     // (ng2-charts renders into a <canvas>) before the linger pause
     // so the final frame actually shows a chart rather than a

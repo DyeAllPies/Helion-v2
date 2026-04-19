@@ -401,6 +401,146 @@ describe('AnalyticsDashboardComponent', () => {
   });
 });
 
+// ── Quick-range → bucket mapping ────────────────────────────────────────
+//
+// The MNIST walkthrough video (docs/e2e-mnist-run.mp4) clicks
+// "LAST 10 MIN" to show jobs piling onto a minute-scale timeline.
+// If someone quietly flips the mapping so 10m falls back to hour
+// bucketing, the chart collapses to a single bar and the walkthrough
+// loses its narrative beat. These tests pin each quick-range to
+// the bucket + window width it currently produces.
+
+describe('AnalyticsDashboardComponent quick-range → bucket mapping', () => {
+  let fixture:   ComponentFixture<AnalyticsDashboardComponent>;
+  let component: AnalyticsDashboardComponent;
+  let apiSpy:    jasmine.SpyObj<ApiService>;
+
+  beforeEach(async () => {
+    apiSpy = mkApiSpy();
+    await TestBed.configureTestingModule({
+      imports: [AnalyticsDashboardComponent],
+      providers: [
+        provideAnimations(),
+        { provide: ApiService, useValue: apiSpy },
+      ],
+    }).compileComponents();
+    fixture   = TestBed.createComponent(AnalyticsDashboardComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+  });
+
+  afterEach(() => fixture.destroy());
+
+  it('LAST 10 MIN selects minute-bucket + a 10-minute window (walkthrough guard)', () => {
+    apiSpy.getAnalyticsThroughput.calls.reset();
+    apiSpy.getAnalyticsQueueWait.calls.reset();
+
+    const before = Date.now();
+    component.setQuickRange('10m');
+    const after = Date.now();
+
+    // Bucket picked by the quick-range: minute, not hour. A hour-
+    // bucket on a 10-minute window collapses to one bar, which is
+    // exactly the regression this test guards against.
+    expect(component.activeBucket).toBe('minute');
+    expect(component.activeQuickRange).toBe('10m');
+
+    // The API call carried the bucket param through.
+    expect(apiSpy.getAnalyticsThroughput).toHaveBeenCalled();
+    const throughputArgs = apiSpy.getAnalyticsThroughput.calls.mostRecent().args;
+    expect(throughputArgs[2]).toBe('minute'); // third arg is bucket
+    expect(apiSpy.getAnalyticsQueueWait).toHaveBeenCalled();
+    expect(apiSpy.getAnalyticsQueueWait.calls.mostRecent().args[2]).toBe('minute');
+
+    // Window width = 10 minutes within a small tolerance for the
+    // wall clock passing between `before` and the call.
+    const fromMs = Date.parse(throughputArgs[0] as string);
+    const toMs   = Date.parse(throughputArgs[1] as string);
+    expect(toMs - fromMs).toBe(10 * 60_000);
+    // `to` should hug "now" — within a few ms of when the button
+    // was clicked.
+    expect(toMs).toBeGreaterThanOrEqual(before);
+    expect(toMs).toBeLessThanOrEqual(after + 50); // jitter tolerance
+  });
+
+  it('LAST 1 MIN picks second-bucket; LAST HOUR picks minute-bucket; LAST 24 H picks hour-bucket', () => {
+    // Sibling coverage: the 10-min branch above is the one the
+    // walkthrough filmed, but all four branches matter and a
+    // single shared table would trip everyone at once if the
+    // mapping got mixed up.
+    component.setQuickRange('1m');
+    expect(component.activeBucket).toBe('second');
+
+    component.setQuickRange('1h');
+    expect(component.activeBucket).toBe('minute');
+
+    component.setQuickRange('24h');
+    expect(component.activeBucket).toBe('hour');
+  });
+
+  it('editing a day input reverts activeBucket to hour + clears the quick-range', () => {
+    component.setQuickRange('10m');
+    expect(component.activeBucket).toBe('minute');
+
+    component.onDateInputChange('2026-04-01', 'from');
+    expect(component.activeBucket).toBe('hour');
+    expect(component.activeQuickRange).toBe('');
+    expect(component.rangeFromISO).toBe('');
+  });
+
+  it('completed-bar total rises as more jobs complete across successive polls', () => {
+    // Simulates the walkthrough beat: view opens at "T+0" with
+    // one completed job in a minute bucket; the next poll tick
+    // arrives after three more jobs have finished in that same
+    // bucket. completedData must REPLACE, not accumulate, the
+    // previous array (each poll is a fresh snapshot of the store)
+    // but the total across successive responses must move
+    // upward, which is what the user sees on the chart.
+    //
+    // Regression guard: if the component ever stopped re-assigning
+    // completedData from the response (e.g. accidental no-op on
+    // "same labels"), the chart would freeze at the first value
+    // and the "jobs piling up" narrative would be dead.
+    const bucketMinute = '2026-04-18T22:26:00Z';
+
+    apiSpy.getAnalyticsThroughput.and.returnValue(of({
+      from: '', to: '',
+      data: [
+        { hour: bucketMinute, status: 'completed', job_count: 1, avg_duration_ms: 0, p95_duration_ms: 0 },
+      ],
+    }));
+    component.setQuickRange('10m'); // triggers one reload
+    expect(component.completedData).toEqual([1]);
+    const initialTotal = component.completedData.reduce((a, b) => a + b, 0);
+
+    // Next poll tick — three more jobs finished in the same minute.
+    apiSpy.getAnalyticsThroughput.and.returnValue(of({
+      from: '', to: '',
+      data: [
+        { hour: bucketMinute, status: 'completed', job_count: 4, avg_duration_ms: 0, p95_duration_ms: 0 },
+      ],
+    }));
+    component.reload();
+    expect(component.completedData).toEqual([4]);
+    const laterTotal = component.completedData.reduce((a, b) => a + b, 0);
+    expect(laterTotal).toBeGreaterThan(initialTotal);
+
+    // Third poll — a second bucket comes into view with 2 more
+    // completions. Sorted chronologically, so the earlier minute
+    // stays first in the array.
+    apiSpy.getAnalyticsThroughput.and.returnValue(of({
+      from: '', to: '',
+      data: [
+        { hour: bucketMinute,                status: 'completed', job_count: 4, avg_duration_ms: 0, p95_duration_ms: 0 },
+        { hour: '2026-04-18T22:27:00Z',      status: 'completed', job_count: 2, avg_duration_ms: 0, p95_duration_ms: 0 },
+      ],
+    }));
+    component.reload();
+    expect(component.completedData).toEqual([4, 2]);
+    expect(component.completedData.reduce((a, b) => a + b, 0)).toBeGreaterThan(laterTotal);
+  });
+});
+
 describe('formatBucketLabel', () => {
   it('renders second-resolution labels with hh:mm:ss', () => {
     const label = formatBucketLabel('2026-04-18T14:32:05Z', 'second');
