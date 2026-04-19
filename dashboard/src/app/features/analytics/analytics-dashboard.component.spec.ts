@@ -9,7 +9,10 @@ import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testin
 import { provideAnimations } from '@angular/platform-browser/animations';
 import { Observable, of, throwError } from 'rxjs';
 
-import { AnalyticsDashboardComponent, formatBucketLabel, formatHourLabel } from './analytics-dashboard.component';
+import {
+  AnalyticsDashboardComponent, formatBucketLabel, formatHourLabel,
+  bucketKey, enumerateBuckets,
+} from './analytics-dashboard.component';
 import { ApiService } from '../../core/services/api.service';
 import {
   AnalyticsThroughputResponse,
@@ -116,13 +119,19 @@ describe('AnalyticsDashboardComponent', () => {
     }));
     component.reload();
 
-    expect(component.throughputLabels.length).toBe(2);
-    expect(component.completedData.length).toBe(2);
-    expect(component.failedData.length).toBe(2);
-    // The sorted labels' completed counts must contain 5 and 7.
+    // Zero-fill now emits one label per bucket in the active window
+    // whether or not the backend returned a row for it (so the
+    // x-axis reads as a proper timeline instead of skipping quiet
+    // periods). The meaningful assertion is "the non-zero buckets
+    // line up with the rows we sent", not a specific total count.
+    expect(component.throughputLabels.length).toBe(component.completedData.length);
+    expect(component.throughputLabels.length).toBe(component.failedData.length);
     expect(component.completedData).toContain(5);
     expect(component.completedData).toContain(7);
     expect(component.failedData).toContain(2);
+    // Non-zero completed buckets must be exactly two (5 and 7) in
+    // the 10:00 and 11:00 slots; every other bucket zero-fills.
+    expect(component.completedData.filter(v => v !== 0).length).toBe(2);
   });
 
   it('uses 0 for buckets with no data in that status', () => {
@@ -133,7 +142,10 @@ describe('AnalyticsDashboardComponent', () => {
       ],
     }));
     component.reload();
-    expect(component.failedData).toEqual([0]); // no failed events → bucket is 0
+    // The completed bucket at 10:00 is 5; the failed series has no
+    // data in any bucket so the whole series is zero.
+    expect(component.completedData).toContain(5);
+    expect(component.failedData.every(v => v === 0)).toBeTrue();
   });
 
   // ── Queue wait ─────────────────────────────────────────────────────────
@@ -148,9 +160,15 @@ describe('AnalyticsDashboardComponent', () => {
     }));
     component.reload();
 
-    expect(component.queueWaitLabels.length).toBe(2);
-    expect(component.avgWaitData).toEqual([500, 300]);
-    expect(component.p95WaitData).toEqual([1500, 900]);
+    // Same zero-fill shape as throughput: all three arrays share
+    // the same bucket count; the two rows we sent surface as the
+    // only non-zero entries in each series.
+    expect(component.queueWaitLabels.length).toBe(component.avgWaitData.length);
+    expect(component.queueWaitLabels.length).toBeGreaterThanOrEqual(2);
+    expect(component.avgWaitData).toContain(500);
+    expect(component.avgWaitData).toContain(300);
+    expect(component.p95WaitData).toContain(1500);
+    expect(component.p95WaitData).toContain(900);
   });
 
   // ── Node reliability ──────────────────────────────────────────────────
@@ -219,10 +237,18 @@ describe('AnalyticsDashboardComponent', () => {
     }));
 
     component.reload();
-    expect(component.throughputLabels).toEqual([]);
+    // Zero-fill: even with no data the chart still enumerates
+    // every bucket in the window (so the empty timeline is
+    // visible). The meaningful invariant is "every bar is 0",
+    // not that the arrays are empty.
+    expect(component.completedData.every(v => v === 0)).toBeTrue();
+    expect(component.failedData.every(v => v === 0)).toBeTrue();
+    expect(component.avgWaitData.every(v => v === 0)).toBeTrue();
+    expect(component.p95WaitData.every(v => v === 0)).toBeTrue();
     expect(component.nodeRows).toEqual([]);
     expect(component.retryRows).toEqual([]);
-    expect(component.queueWaitLabels).toEqual([]);
+    // Workflow-outcomes still uses the old per-row label flow
+    // (no zero-fill there); its labels are [] on empty input.
     expect(component.workflowLabels).toEqual([]);
   });
 
@@ -358,15 +384,23 @@ describe('AnalyticsDashboardComponent', () => {
       ],
     } as AnalyticsThroughputResponse));
     component.reload();
-    expect(component.throughputLabels.length).toBe(2);
-    // Labels must be distinct (bug made them identical).
-    expect(component.throughputLabels[0]).not.toBe(component.throughputLabels[1]);
-    // Hour digits must appear in each label (locale-neutral check).
-    for (const label of component.throughputLabels) {
+    // Under zero-fill the labels array covers the whole window;
+    // pull out the positions where there's data and assert on
+    // those — the bug we're guarding against is "both rows
+    // collapse to the same label because the hour was dropped
+    // from toLocaleDateString", which would make the two non-
+    // zero labels identical.
+    const nonZeroLabels = component.throughputLabels.filter(
+      (_, i) => component.completedData[i] !== 0,
+    );
+    expect(nonZeroLabels.length).toBe(2);
+    expect(nonZeroLabels[0]).not.toBe(nonZeroLabels[1]);
+    for (const label of nonZeroLabels) {
       expect(label).toMatch(/\d{1,2}/);
     }
-    // Data arrays line up with the sorted hour sequence.
-    expect(component.completedData).toEqual([3, 5]);
+    // Data arrays carry the two counts somewhere in order.
+    const nonZeros = component.completedData.filter(v => v !== 0);
+    expect(nonZeros).toEqual([3, 5]);
   });
 
   it('throughput labels are sorted chronologically by the underlying ISO hour', () => {
@@ -382,9 +416,13 @@ describe('AnalyticsDashboardComponent', () => {
       ],
     } as AnalyticsThroughputResponse));
     component.reload();
-    // completedData[0] corresponds to the earliest hour — 7 (the
-    // 14:00 row), not 2 (the 16:00 row which came first in input).
-    expect(component.completedData).toEqual([7, 4, 2]);
+    // Under zero-fill the labels array spans the whole window,
+    // but the non-zero entries must still land in chronological
+    // order. Extract only the non-zero counts and check that
+    // they appear earliest-to-latest (7 @ 14:00, 4 @ 15:00, 2
+    // @ 16:00) — not the input order (2, 7, 4).
+    const nonZeros = component.completedData.filter(v => v !== 0);
+    expect(nonZeros).toEqual([7, 4, 2]);
   });
 
   it('queue-wait x-axis labels include the hour for each bucket', () => {
@@ -396,8 +434,13 @@ describe('AnalyticsDashboardComponent', () => {
       ],
     } as AnalyticsQueueWaitResponse));
     component.reload();
-    expect(component.queueWaitLabels.length).toBe(2);
-    expect(component.queueWaitLabels[0]).not.toBe(component.queueWaitLabels[1]);
+    // Pull out the labels whose avg_wait_ms is non-zero; each
+    // input row should still produce a distinct rendered label.
+    const nonZeroLabels = component.queueWaitLabels.filter(
+      (_, i) => component.avgWaitData[i] !== 0,
+    );
+    expect(nonZeroLabels.length).toBe(2);
+    expect(nonZeroLabels[0]).not.toBe(nonZeroLabels[1]);
   });
 });
 
@@ -501,7 +544,16 @@ describe('AnalyticsDashboardComponent quick-range → bucket mapping', () => {
     // completedData from the response (e.g. accidental no-op on
     // "same labels"), the chart would freeze at the first value
     // and the "jobs piling up" narrative would be dead.
-    const bucketMinute = '2026-04-18T22:26:00Z';
+    // Must fall inside the rolling 10-minute window the quick-range
+    // button carves out starting at "now"; a fixed historic date
+    // would land outside the window and zero-fill would drop it.
+    const now            = Date.now();
+    const bucketMinute   = new Date(
+      Math.floor((now - 3 * 60_000) / 60_000) * 60_000,
+    ).toISOString();
+    const secondMinute   = new Date(
+      Math.floor((now - 2 * 60_000) / 60_000) * 60_000,
+    ).toISOString();
 
     apiSpy.getAnalyticsThroughput.and.returnValue(of({
       from: '', to: '',
@@ -510,8 +562,11 @@ describe('AnalyticsDashboardComponent quick-range → bucket mapping', () => {
       ],
     }));
     component.setQuickRange('10m'); // triggers one reload
-    expect(component.completedData).toEqual([1]);
+    // Zero-fill puts ~10 labels on the x-axis; the non-zero entry
+    // is the bar for bucketMinute.
     const initialTotal = component.completedData.reduce((a, b) => a + b, 0);
+    expect(initialTotal).toBe(1);
+    expect(component.completedData).toContain(1);
 
     // Next poll tick — three more jobs finished in the same minute.
     apiSpy.getAnalyticsThroughput.and.returnValue(of({
@@ -521,9 +576,10 @@ describe('AnalyticsDashboardComponent quick-range → bucket mapping', () => {
       ],
     }));
     component.reload();
-    expect(component.completedData).toEqual([4]);
     const laterTotal = component.completedData.reduce((a, b) => a + b, 0);
+    expect(laterTotal).toBe(4);
     expect(laterTotal).toBeGreaterThan(initialTotal);
+    expect(component.completedData).toContain(4);
 
     // Third poll — a second bucket comes into view with 2 more
     // completions. Sorted chronologically, so the earlier minute
@@ -531,13 +587,181 @@ describe('AnalyticsDashboardComponent quick-range → bucket mapping', () => {
     apiSpy.getAnalyticsThroughput.and.returnValue(of({
       from: '', to: '',
       data: [
-        { hour: bucketMinute,                status: 'completed', job_count: 4, avg_duration_ms: 0, p95_duration_ms: 0 },
-        { hour: '2026-04-18T22:27:00Z',      status: 'completed', job_count: 2, avg_duration_ms: 0, p95_duration_ms: 0 },
+        { hour: bucketMinute, status: 'completed', job_count: 4, avg_duration_ms: 0, p95_duration_ms: 0 },
+        { hour: secondMinute, status: 'completed', job_count: 2, avg_duration_ms: 0, p95_duration_ms: 0 },
       ],
     }));
     component.reload();
-    expect(component.completedData).toEqual([4, 2]);
+    expect(component.completedData.reduce((a, b) => a + b, 0)).toBe(6);
     expect(component.completedData.reduce((a, b) => a + b, 0)).toBeGreaterThan(laterTotal);
+    // Non-zero entries carry the two counts in chronological
+    // order (4 first, 2 second).
+    const nonZeros = component.completedData.filter(v => v !== 0);
+    expect(nonZeros).toEqual([4, 2]);
+  });
+});
+
+// ── Zero-fill guard (the "before docker" test) ───────────────────────
+//
+// This is the test that pins the behaviour the walkthrough video
+// depends on: a 10-minute window with jobs completing in only one
+// or two minute buckets must still render 10 ticks on the x-axis,
+// not 1-2. Without zero-fill the chart silently hid quiet minutes
+// and the timeline looked empty even when jobs had just finished.
+//
+// Runs in ~5 ms via the component under test + spied ApiService —
+// no Playwright, no docker. Any regression that removes the
+// zero-fill path fails this test before anyone has to start a
+// cluster.
+describe('AnalyticsDashboardComponent zero-fill', () => {
+  let fixture:   ComponentFixture<AnalyticsDashboardComponent>;
+  let component: AnalyticsDashboardComponent;
+  let apiSpy:    jasmine.SpyObj<ApiService>;
+
+  beforeEach(async () => {
+    apiSpy = mkApiSpy();
+    await TestBed.configureTestingModule({
+      imports: [AnalyticsDashboardComponent],
+      providers: [
+        provideAnimations(),
+        { provide: ApiService, useValue: apiSpy },
+      ],
+    }).compileComponents();
+    fixture   = TestBed.createComponent(AnalyticsDashboardComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+  });
+
+  afterEach(() => fixture.destroy());
+
+  it('LAST 10 MIN fills all 10 minute buckets even when the backend only returns 2', () => {
+    // Before this test existed the repro loop was:
+    //   1. code change
+    //   2. docker compose rebuild (~60 s)
+    //   3. full Playwright spec (~90 s)
+    //   4. examine video frame
+    //   5. see the chart has one floating bar and no x-axis ticks
+    // which was 3+ minutes per iteration. This test reproduces
+    // the exact pathology (sparse backend rows) and runs in ms.
+    //
+    // Arrange: the backend returns only two of the ten minutes
+    // that fall in a LAST 10 MIN window — jobs completed in the
+    // 3rd and 7th minute and every other minute was empty.
+    const now = Date.now();
+    // Pin ten bucket starts that cover a 10-minute window rooted
+    // at "now". The two non-empty buckets are at indices 3 and 7
+    // in that sequence.
+    const bucketAt = (minsBeforeNow: number): string =>
+      new Date(
+        Math.floor((now - minsBeforeNow * 60_000) / 60_000) * 60_000,
+      ).toISOString();
+
+    apiSpy.getAnalyticsThroughput.and.returnValue(of({
+      from: '', to: '',
+      data: [
+        { hour: bucketAt(7), status: 'completed', job_count: 1, avg_duration_ms: 0, p95_duration_ms: 0 },
+        { hour: bucketAt(3), status: 'completed', job_count: 2, avg_duration_ms: 0, p95_duration_ms: 0 },
+      ],
+    }));
+
+    // Act: switch to LAST 10 MIN — the walkthrough's quick-range
+    // click. This drives `bucket='minute'` AND a 10-minute window.
+    component.setQuickRange('10m');
+
+    // Assert: x-axis carries every minute in the window so the
+    // chart reads as a timeline, not a scatter of random bars.
+    // LAST 10 MIN with minute bucketing gives ten buckets
+    // (the inclusive-of-start / exclusive-of-end enumeration
+    // may produce 10 exactly or 11 if `to` lands on a bucket
+    // boundary mid-millisecond; either is right).
+    expect(component.throughputLabels.length).toBeGreaterThanOrEqual(10);
+    expect(component.throughputLabels.length).toBeLessThanOrEqual(11);
+    expect(component.completedData.length).toBe(component.throughputLabels.length);
+
+    // The two non-empty buckets carry the counts we sent; every
+    // other bucket is zero. This is exactly what the walkthrough
+    // video's viewer should see: a mostly-flat line with two
+    // bars that match the job-completion timeline.
+    const nonZeros = component.completedData.filter(v => v !== 0);
+    expect(nonZeros.sort()).toEqual([1, 2]);
+    const zeroCount = component.completedData.filter(v => v === 0).length;
+    expect(zeroCount).toBeGreaterThanOrEqual(8); // most of the window is empty
+  });
+
+  it('LAST 1 MIN zero-fills all 60 second buckets', () => {
+    // The 1-minute view is the narrowest quick-range. With second
+    // bucketing it produces 60 x-axis ticks; a single completed
+    // job should render as one bar on a full timeline of zeros.
+    const now = Date.now();
+    const justNow = new Date(
+      Math.floor((now - 5_000) / 1_000) * 1_000,
+    ).toISOString();
+
+    apiSpy.getAnalyticsThroughput.and.returnValue(of({
+      from: '', to: '',
+      data: [
+        { hour: justNow, status: 'completed', job_count: 1, avg_duration_ms: 0, p95_duration_ms: 0 },
+      ],
+    }));
+    component.setQuickRange('1m');
+
+    // 60 second buckets in 60 seconds (± 1 for boundary rounding).
+    expect(component.throughputLabels.length).toBeGreaterThanOrEqual(59);
+    expect(component.throughputLabels.length).toBeLessThanOrEqual(61);
+    expect(component.completedData.filter(v => v !== 0).length).toBe(1);
+    expect(component.completedData.filter(v => v === 0).length).toBeGreaterThanOrEqual(58);
+  });
+});
+
+describe('enumerateBuckets', () => {
+  // Focused pure-function tests for the bucket enumerator used
+  // by zero-fill. Runs in microseconds with no DOM.
+  it('produces one label per minute in a 10-minute window', () => {
+    const from = '2026-04-18T14:00:00Z';
+    const to   = '2026-04-18T14:10:00Z';
+    const out  = enumerateBuckets(from, to, 'minute');
+    expect(out.length).toBe(10);
+    expect(out[0]).toBe('2026-04-18T14:00:00.000Z');
+    expect(out[9]).toBe('2026-04-18T14:09:00.000Z');
+  });
+
+  it('produces one label per second in a 1-minute window', () => {
+    const from = '2026-04-18T14:00:00Z';
+    const to   = '2026-04-18T14:01:00Z';
+    expect(enumerateBuckets(from, to, 'second').length).toBe(60);
+  });
+
+  it('rounds an unaligned "from" DOWN to the bucket boundary', () => {
+    const out = enumerateBuckets('2026-04-18T14:00:30.500Z', '2026-04-18T14:02:00Z', 'minute');
+    // Expect buckets at 14:00 and 14:01 — 14:00:30 rounds down
+    // to 14:00 so the enumeration starts there.
+    expect(out[0]).toBe('2026-04-18T14:00:00.000Z');
+    expect(out.length).toBe(2);
+  });
+
+  it('returns [] on malformed / inverted / equal bounds', () => {
+    expect(enumerateBuckets('not-a-date', '2026-04-18T14:00:00Z', 'minute')).toEqual([]);
+    expect(enumerateBuckets('2026-04-18T14:10:00Z', '2026-04-18T14:00:00Z', 'minute')).toEqual([]);
+    expect(enumerateBuckets('2026-04-18T14:00:00Z', '2026-04-18T14:00:00Z', 'minute')).toEqual([]);
+  });
+});
+
+describe('bucketKey', () => {
+  // Normalising the backend's `hour` field to the same bucket
+  // boundary we enumerate locally is what keeps the zero-fill
+  // lookup working — a backend row for 14:00:00 and an
+  // enumerated bucket at 14:00:00.000Z MUST hash to the same key.
+  it('truncates to the matching bucket start', () => {
+    expect(bucketKey('2026-04-18T14:23:45.678Z', 'hour'))
+      .toBe('2026-04-18T14:00:00.000Z');
+    expect(bucketKey('2026-04-18T14:23:45.678Z', 'minute'))
+      .toBe('2026-04-18T14:23:00.000Z');
+    expect(bucketKey('2026-04-18T14:23:45.678Z', 'second'))
+      .toBe('2026-04-18T14:23:45.000Z');
+  });
+
+  it('returns the original string on malformed input', () => {
+    expect(bucketKey('not-a-date', 'minute')).toBe('not-a-date');
   });
 });
 

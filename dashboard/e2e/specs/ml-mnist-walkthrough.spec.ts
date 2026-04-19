@@ -380,5 +380,34 @@ test.describe('Feature 21 — MNIST walkthrough (video recording)', () => {
     // loading spinner.
     await expect(page.locator('canvas').first()).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(PAUSE_LONG);
+
+    // Walk the camera down the analytics page so the viewer sees
+    // every panel the MNIST run populated — queue-wait chart
+    // below the throughput, then the node-reliability table
+    // (proves both mnist-node-rust and iris-node-2 contributed).
+    // Ordinary `window.scrollBy` didn't advance the viewport in
+    // the recorded webm (the `toBeVisible` check passed because
+    // Playwright's visibility test doesn't require viewport
+    // intersection). Use locator.scrollIntoViewIfNeeded on an
+    // anchor element inside each panel to force the browser to
+    // reposition the actual scroll pane.
+
+    // Pause 1: queue-wait panel. Both analytics charts use
+    // <canvas> so we target the SECOND canvas on the page
+    // (index 0 = throughput, 1 = queue-wait).
+    const queueCanvas = page.locator('canvas').nth(1);
+    await queueCanvas.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(PAUSE_LONG);
+
+    // Pause 2: node-reliability table. Its rows carry the node
+    // ids for the run we just completed, which is the narrative
+    // payoff for the scroll — proof the analytics layer saw
+    // both runtimes.
+    const nodeRow = page.locator('table[mat-table] tr.mat-mdc-row')
+      .filter({ hasText: /mnist-node-rust|iris-node-2|e2e-node-1/ })
+      .first();
+    await expect(nodeRow).toBeVisible({ timeout: 10_000 });
+    await nodeRow.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(PAUSE_LONG);
   });
 });

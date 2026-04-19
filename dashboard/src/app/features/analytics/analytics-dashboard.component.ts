@@ -103,7 +103,7 @@ Chart.register(
     <div class="chart-panel" *ngIf="throughputLabels.length > 0">
       <div class="chart-panel__header">
         <span class="material-icons" style="font-size:16px;color:var(--color-accent-dim)">bar_chart</span>
-        JOB THROUGHPUT · PER {{ activeBucket | uppercase }}
+        JOB THROUGHPUT
       </div>
       <div class="chart-wrap">
         <canvas baseChart [data]="throughputChartData" [options]="lineChartOptions" type="line"></canvas>
@@ -487,7 +487,7 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
     };
 
     this.api.getAnalyticsThroughput(from, to, bucket).subscribe({
-      next: resp => { this.processThroughput(resp.data ?? []); done(); },
+      next: resp => { this.processThroughput(resp.data ?? [], from, to, bucket); done(); },
       error: fail('throughput'),
     });
 
@@ -502,7 +502,7 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
     });
 
     this.api.getAnalyticsQueueWait(from, to, bucket).subscribe({
-      next: resp => { this.processQueueWait(resp.data ?? []); done(); },
+      next: resp => { this.processQueueWait(resp.data ?? [], from, to, bucket); done(); },
       error: fail('queue wait'),
     });
 
@@ -514,34 +514,47 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
 
   // ── Data processors ────────────────────────────────────────────────────
 
-  private processThroughput(rows: AnalyticsThroughputRow[]): void {
-    // Index by the raw ISO bucket start (the `hour` field carries
-    // whatever bucket width the server returned — hour, minute,
-    // or second — see parseBucketParam on the backend). We aggregate
-    // on that key, then project it into a display label *after*
-    // sorting so the x-axis is chronologically ordered (sorting
-    // the localised label is wrong: it puts "Apr 4" after "Apr 30").
-    const buckets      = new Set<string>();
-    const completed    = new Map<string, number>();
-    const failed       = new Map<string, number>();
+  private processThroughput(
+    rows: AnalyticsThroughputRow[], from: string, to: string, bucket: 'hour' | 'minute' | 'second',
+  ): void {
+    // Build lookup maps from the raw response. The backend ONLY
+    // sends rows for buckets with at least one matching event —
+    // an empty bucket has no row. If we stopped here the x-axis
+    // would silently skip quiet minutes, so the "LAST 10 MIN"
+    // view would render 1-2 bars floating against no timeline.
+    // Zero-fill below paints every bucket in [from, to) whether
+    // or not the backend had data for it.
+    const completed = new Map<string, number>();
+    const failed    = new Map<string, number>();
     for (const r of rows) {
-      buckets.add(r.hour);
-      if (r.status === 'completed') completed.set(r.hour, r.job_count);
-      if (r.status === 'failed')    failed.set(r.hour, r.job_count);
+      const key = bucketKey(r.hour, bucket);
+      if (r.status === 'completed') completed.set(key, r.job_count);
+      if (r.status === 'failed')    failed.set(key, r.job_count);
     }
-    const sortedBuckets   = [...buckets].sort();
-    this.throughputLabels = sortedBuckets.map(b => formatBucketLabel(b, this.activeBucket));
-    this.completedData    = sortedBuckets.map(h => completed.get(h) ?? 0);
-    this.failedData       = sortedBuckets.map(h => failed.get(h) ?? 0);
+    const allBuckets = enumerateBuckets(from, to, bucket);
+    this.throughputLabels = allBuckets.map(k => formatBucketLabel(k, bucket));
+    this.completedData    = allBuckets.map(k => completed.get(k) ?? 0);
+    this.failedData       = allBuckets.map(k => failed.get(k) ?? 0);
   }
 
-  private processQueueWait(rows: AnalyticsQueueWaitRow[]): void {
-    // The backend already returns rows ordered by bucket start;
-    // we project each into the same display label as the throughput
-    // chart so both panels share an x-axis format.
-    this.queueWaitLabels = rows.map(r => formatBucketLabel(r.hour, this.activeBucket));
-    this.avgWaitData = rows.map(r => r.avg_wait_ms);
-    this.p95WaitData = rows.map(r => r.p95_wait_ms);
+  private processQueueWait(
+    rows: AnalyticsQueueWaitRow[], from: string, to: string, bucket: 'hour' | 'minute' | 'second',
+  ): void {
+    // Same zero-fill treatment as throughput so both panels
+    // share the exact same x-axis labels — the viewer sees
+    // aligned charts instead of one with 10 ticks and one
+    // with 2.
+    const avg = new Map<string, number>();
+    const p95 = new Map<string, number>();
+    for (const r of rows) {
+      const key = bucketKey(r.hour, bucket);
+      avg.set(key, r.avg_wait_ms);
+      p95.set(key, r.p95_wait_ms);
+    }
+    const allBuckets = enumerateBuckets(from, to, bucket);
+    this.queueWaitLabels = allBuckets.map(k => formatBucketLabel(k, bucket));
+    this.avgWaitData     = allBuckets.map(k => avg.get(k) ?? 0);
+    this.p95WaitData     = allBuckets.map(k => p95.get(k) ?? 0);
   }
 
   private processWorkflowOutcomes(rows: AnalyticsWorkflowOutcomeRow[]): void {
@@ -712,4 +725,71 @@ export function formatBucketLabel(iso: string, bucket: 'hour' | 'minute' | 'seco
  */
 export function formatHourLabel(iso: string): string {
   return formatBucketLabel(iso, 'hour');
+}
+
+// ── Bucket enumeration (zero-fill support) ────────────────────────────
+
+/**
+ * Step size in milliseconds for each allowed bucket width. Table
+ * shape keeps the branching minimal in callers and is trivial
+ * to extend if a 'day' bucket is added later.
+ */
+const bucketStepMs: Record<'hour' | 'minute' | 'second', number> = {
+  hour:   3_600_000,
+  minute:     60_000,
+  second:      1_000,
+};
+
+/**
+ * Normalise an ISO instant to the bucket start that contains it,
+ * returned as an ISO-8601 UTC string. Used as a Map key so the
+ * data-from-the-backend and the enumerated-locally bucket starts
+ * collide under the same string — otherwise a row carrying a
+ * Postgres `date_trunc` return shape (possibly with or without
+ * fractional seconds, with or without timezone) would miss the
+ * lookup despite pointing at the same instant.
+ */
+export function bucketKey(iso: string, bucket: 'hour' | 'minute' | 'second'): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return iso;
+  const step = bucketStepMs[bucket];
+  return new Date(Math.floor(ms / step) * step).toISOString();
+}
+
+/**
+ * Enumerate every bucket start between `from` (inclusive) and
+ * `to` (exclusive) at the given width. The return is a list of
+ * ISO-8601 UTC strings so callers can use them as Map keys AND
+ * pass them through `formatBucketLabel`.
+ *
+ * Why this exists: the analytics endpoints only return rows for
+ * buckets with at least one matching event. "LAST 10 MIN" with
+ * sparse activity produces 1-2 rows, which used to render as a
+ * stripped-down chart with a handful of ticks and no time
+ * dimension. Zero-filling every bucket in the window makes the
+ * timeline explicit — empty minutes show 0 bars, busy minutes
+ * show the actual count.
+ *
+ * Guard: worst-case output sizes (hour=8760, minute=1440, second
+ * =86400 for a 1-day span; minute=60 for an hour span; second=60
+ * for a minute span) are all bounded by the quick-range picker
+ * so Chart.js never has to render tens of thousands of points.
+ * A future "LAST 7 DAY" quick-range at second resolution would
+ * be ~600k points — if added, the picker MUST downgrade the
+ * bucket or this helper needs a cap.
+ */
+export function enumerateBuckets(
+  from: string, to: string, bucket: 'hour' | 'minute' | 'second',
+): string[] {
+  const fromMs = Date.parse(from);
+  const toMs   = Date.parse(to);
+  if (Number.isNaN(fromMs) || Number.isNaN(toMs) || toMs <= fromMs) return [];
+  const step  = bucketStepMs[bucket];
+  const start = Math.floor(fromMs / step) * step;
+  const end   = toMs;
+  const out: string[] = [];
+  for (let t = start; t < end; t += step) {
+    out.push(new Date(t).toISOString());
+  }
+  return out;
 }
