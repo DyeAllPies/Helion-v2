@@ -184,9 +184,49 @@ describe('AnalyticsDashboardComponent', () => {
   });
 
   it('defines correct node table columns', () => {
+    // `address` is deliberately absent — the registry never
+    // publishes node.registered events onto the analytics bus,
+    // so address has always come back blank. Readding it here
+    // without fixing the publish pipeline would reintroduce an
+    // empty column that looked like a broken analytics store.
     expect(component.nodeColumns).toEqual(
-      ['node_id', 'address', 'jobs_completed', 'jobs_failed', 'failure_rate_pct', 'times_stale'],
+      ['node_id', 'jobs_completed', 'jobs_failed', 'failure_rate_pct', 'times_stale'],
     );
+    expect(component.nodeColumns).not.toContain('address');
+  });
+
+  it('renders numeric column headers with the num class (right-aligned with cells)', () => {
+    // Regression guard for the original misalignment: the <td>s
+    // carried `class="num"` (text-align: right) but the <th>s
+    // did not, so headers rendered left-aligned while values
+    // right-aligned. Both sides must share the class for the
+    // column to read as vertically flush.
+    apiSpy.getAnalyticsNodeReliability.and.returnValue(of({
+      data: [{
+        node_id: 'test-node', address: '',
+        jobs_completed: 2, jobs_failed: 0,
+        failure_rate_pct: 0, times_stale: 0, times_revoked: 0,
+      }],
+    }));
+    component.reload();
+    fixture.detectChanges();
+
+    const headers = fixture.nativeElement.querySelectorAll(
+      'th[mat-header-cell]',
+    ) as NodeListOf<HTMLElement>;
+    const numericHeaderTexts = ['COMPLETED', 'FAILED', 'FAILURE %', 'STALE'];
+    for (const header of Array.from(headers)) {
+      const txt = header.textContent?.trim() ?? '';
+      if (numericHeaderTexts.includes(txt)) {
+        expect(header.classList.contains('num'))
+          .withContext(`"${txt}" header missing num class`)
+          .toBeTrue();
+      }
+    }
+    // Sanity: the non-numeric NODE header does NOT get the num
+    // class (left-aligned text column).
+    const nodeHeader = Array.from(headers).find(h => h.textContent?.trim() === 'NODE');
+    expect(nodeHeader?.classList.contains('num')).toBeFalse();
   });
 
   // ── Retry effectiveness ───────────────────────────────────────────────

@@ -136,30 +136,42 @@ Chart.register(
         <span class="material-icons" style="font-size:16px;color:var(--color-accent-dim)">dns</span>
         NODE RELIABILITY
       </div>
+      <!--
+        Address column was intentionally removed. It was always
+        blank: the registry writes a node.registered audit row
+        but does NOT publish the event onto the analytics bus,
+        and the backfill path parses a flat audit detail string
+        (not a Details map) so address cannot be extracted.
+        node_id already uniquely identifies a node and the full
+        address is visible on the /nodes page. Keeping an
+        unpopulated column confused viewers into thinking the
+        analytics store was broken.
+
+        Every numeric column header carries the num class so the
+        text right-aligns with the cell value — the old template
+        had num only on the td, making headers left-aligned
+        while cells right-aligned.
+      -->
       <table mat-table [dataSource]="nodeRows" class="analytics-table">
         <ng-container matColumnDef="node_id">
           <th mat-header-cell *matHeaderCellDef>NODE</th>
           <td mat-cell *matCellDef="let r">{{ r.node_id }}</td>
         </ng-container>
-        <ng-container matColumnDef="address">
-          <th mat-header-cell *matHeaderCellDef>ADDRESS</th>
-          <td mat-cell *matCellDef="let r">{{ r.address }}</td>
-        </ng-container>
         <ng-container matColumnDef="jobs_completed">
-          <th mat-header-cell *matHeaderCellDef>COMPLETED</th>
+          <th mat-header-cell *matHeaderCellDef class="num">COMPLETED</th>
           <td mat-cell *matCellDef="let r" class="num">{{ r.jobs_completed }}</td>
         </ng-container>
         <ng-container matColumnDef="jobs_failed">
-          <th mat-header-cell *matHeaderCellDef>FAILED</th>
+          <th mat-header-cell *matHeaderCellDef class="num">FAILED</th>
           <td mat-cell *matCellDef="let r" class="num text-error">{{ r.jobs_failed }}</td>
         </ng-container>
         <ng-container matColumnDef="failure_rate_pct">
-          <th mat-header-cell *matHeaderCellDef>FAILURE %</th>
+          <th mat-header-cell *matHeaderCellDef class="num">FAILURE %</th>
           <td mat-cell *matCellDef="let r" class="num"
               [class.text-error]="r.failure_rate_pct > 10">{{ r.failure_rate_pct }}%</td>
         </ng-container>
         <ng-container matColumnDef="times_stale">
-          <th mat-header-cell *matHeaderCellDef>STALE</th>
+          <th mat-header-cell *matHeaderCellDef class="num">STALE</th>
           <td mat-cell *matCellDef="let r" class="num">{{ r.times_stale }}</td>
         </ng-container>
         <tr mat-header-row *matHeaderRowDef="nodeColumns"></tr>
@@ -379,7 +391,9 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
 
   // Node reliability
   nodeRows: AnalyticsNodeReliabilityRow[] = [];
-  nodeColumns = ['node_id', 'address', 'jobs_completed', 'jobs_failed', 'failure_rate_pct', 'times_stale'];
+  // `address` is deliberately absent — see the template comment
+  // above the node-reliability table for why.
+  nodeColumns = ['node_id', 'jobs_completed', 'jobs_failed', 'failure_rate_pct', 'times_stale'];
 
   // Retry effectiveness
   retryRows: AnalyticsRetryRow[] = [];

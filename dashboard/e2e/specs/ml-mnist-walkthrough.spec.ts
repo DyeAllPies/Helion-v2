@@ -402,12 +402,14 @@ test.describe('Feature 21 — MNIST walkthrough (video recording)', () => {
     // Pause 2: node-reliability table. Its rows carry the node
     // ids for the run we just completed, which is the narrative
     // payoff for the scroll — proof the analytics layer saw
-    // both runtimes.
+    // both runtimes. Linger ~2 s extra after the scroll so the
+    // viewer can read each row (the table header + three node
+    // rows + per-column counts).
     const nodeRow = page.locator('table[mat-table] tr.mat-mdc-row')
       .filter({ hasText: /mnist-node-rust|iris-node-2|e2e-node-1/ })
       .first();
     await expect(nodeRow).toBeVisible({ timeout: 10_000 });
     await nodeRow.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(PAUSE_LONG);
+    await page.waitForTimeout(PAUSE_LONG + 2_000);
   });
 });
