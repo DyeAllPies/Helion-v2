@@ -55,7 +55,18 @@ import { AuditEvent, AuditEventType } from '../../shared/models';
 
       <ng-container matColumnDef="actor">
         <th mat-header-cell *matHeaderCellDef>ACTOR</th>
-        <td mat-cell *matCellDef="let e">{{ e.actor || '—' }}</td>
+        <td mat-cell *matCellDef="let e">
+          <!-- Feature 35 — if the event carries a typed Principal,
+               render the Kind as a small pill before the display
+               name. Falls back to the legacy bare-string actor for
+               pre-feature-35 events. -->
+          <span *ngIf="e.principal_kind" class="principal-pill"
+                [ngClass]="'principal-pill--' + e.principal_kind"
+                [title]="e.principal || ''">
+            {{ e.principal_kind }}
+          </span>
+          <span class="actor-text">{{ e.actor || '—' }}</span>
+        </td>
       </ng-container>
 
       <ng-container matColumnDef="target_id">
@@ -146,6 +157,27 @@ import { AuditEvent, AuditEventType } from '../../shared/models';
         font-weight: 600;
       }
     }
+
+    /* Feature 35 — principal-kind pill shown before the actor
+       display name on each audit row. Lets a reviewer filter
+       visually on Kind without parsing the ID prefix. */
+    .principal-pill {
+      display: inline-block;
+      margin-right: 6px;
+      padding: 1px 6px;
+      font-size: 9px;
+      letter-spacing: 0.08em;
+      font-weight: 600;
+      border-radius: 10px;
+      text-transform: uppercase;
+    }
+    .principal-pill--user      { color: var(--color-info);    background: rgba(64,196,255,0.12); }
+    .principal-pill--operator  { color: #7eb6f0;              background: rgba(100,170,240,0.15); }
+    .principal-pill--node      { color: var(--color-accent);  background: rgba(192,132,252,0.12); }
+    .principal-pill--service   { color: var(--color-muted);   background: rgba(136,150,170,0.12); }
+    .principal-pill--job       { color: #d9a649;              background: rgba(217,166,73,0.15); }
+    .principal-pill--anonymous { color: var(--color-error);   background: rgba(255,82,82,0.12); }
+    .actor-text                { font-family: var(--font-mono, monospace); font-size: 12px; }
 
     .msg-cell {
       display: block; max-width: 400px;

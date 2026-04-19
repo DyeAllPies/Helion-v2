@@ -19,6 +19,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 )
 
 // ── Token admin rate-limit constants ─────────────────────────────────────────
@@ -161,7 +162,54 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		// Store claims in request context
 		ctx := context.WithValue(r.Context(), claimsContextKey, claims)
+
+		// Feature 35 — resolve a typed Principal from the auth
+		// material just validated. Stamped into the same context
+		// alongside the legacy claims so handlers can start reading
+		// Principal while downstream code (feature 36 + 37) still
+		// reads claims until the migration is complete.
+		//
+		// If clientCertMiddleware already ran and stamped a cert
+		// principal in `ctx`, that principal is preserved when the
+		// ClientCertTier is active: the cert CN is strictly
+		// stronger identity than the JWT alone, so we do NOT
+		// overwrite it with a JWT-derived principal.
+		existing := principal.FromContext(ctx)
+		if existing.Kind != principal.KindOperator {
+			ctx = principal.NewContext(ctx, resolvePrincipalFromClaims(claims))
+		}
+
 		next.ServeHTTP(w, r.WithContext(ctx))
+	}
+}
+
+// resolvePrincipalFromClaims maps a validated *auth.Claims into a
+// typed Principal. Factored out so the resolution table lives in
+// one place — a future change to JWT role names or a new role lands
+// here, not in the authMiddleware body.
+//
+// Role → Kind mapping:
+//
+//   role == "node"         → KindNode     (legacy node JWTs)
+//   role == "job"          → KindJob      (workflow-scoped tokens)
+//   anything else (admin,
+//     user, empty, new)    → KindUser     (human operator via JWT)
+//
+// The node-role JWT path is preserved for back-compat; production
+// clusters should prefer mTLS node auth (feature 23). A node JWT
+// that somehow claims role=admin is still KindNode and feature 37
+// will refuse admin actions on it.
+func resolvePrincipalFromClaims(claims *auth.Claims) *principal.Principal {
+	if claims == nil {
+		return principal.Anonymous()
+	}
+	switch claims.Role {
+	case "node":
+		return principal.Node(claims.Subject)
+	case "job":
+		return principal.Job(claims.Subject)
+	default:
+		return principal.User(claims.Subject, claims.Role)
 	}
 }
 

@@ -195,11 +195,37 @@ export type AuditEventType =
   // Catch-all so future event types don't crash the UI
   | (string & Record<never, never>);
 
+/**
+ * Feature 35 — principal-kind badges on the audit log.
+ *
+ * Matches internal/principal/principal.go Kind constants. A
+ * catch-all string component keeps the UI resilient to future
+ * kinds added server-side.
+ */
+export type AuditPrincipalKind =
+  | 'user'
+  | 'operator'
+  | 'node'
+  | 'service'
+  | 'job'
+  | 'anonymous'
+  | (string & Record<never, never>);
+
 export interface AuditEvent {
   id:         string;
   type:       AuditEventType;
   timestamp:  string;
+  /** Legacy bare-string actor (kept for back-compat with pre-feature-35 consumers). */
   actor?:     string;
+  /**
+   * Feature 35 — fully-qualified Principal ID ("user:alice",
+   * "operator:alice@ops", "service:dispatcher", …). Empty/absent
+   * on events emitted before feature 35 shipped or by callers
+   * that didn't stamp a Principal into context.
+   */
+  principal?:      string;
+  /** Feature 35 — derived Kind for UI badge rendering. */
+  principal_kind?: AuditPrincipalKind;
   target_id?: string;
   message:    string;
   metadata?:  Record<string, string>;

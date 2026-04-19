@@ -341,6 +341,74 @@ the lookup is a memory read on the coordinator side.
 
 ---
 
+## 5a. Principal model (feature 35)
+
+Every authenticated request, every gRPC call from a registered
+node, and every coordinator-internal loop carries a typed
+`*principal.Principal` in its Go context. The Principal is the
+single identity primitive later authorization slices (features
+36–38) evaluate against.
+
+### Kinds
+
+| Kind | ID format | How it gets stamped |
+|---|---|---|
+| `user` | `user:<jwt_subject>` | `authMiddleware` after JWT validation succeeds for a non-node, non-job role. |
+| `operator` | `operator:<cert_cn>` | `clientCertMiddleware` after verifying a client certificate (feature 27). Wins over JWT resolution — the cert is the strictly stronger identity. |
+| `node` | `node:<node_id>` | gRPC handlers after the node ID is known (`Register`, `Heartbeat` on first message with a NodeId, `ReportResult`, `ReportServiceEvent`). The mTLS handshake already verified the node's bootstrap certificate to the coordinator's CA. |
+| `service` | `service:<name>` | Coordinator-internal loops (`dispatcher`, `workflow_runner`, `retry_loop`, `log_ingester`, `retention`, `log_reconciler`, `coordinator`). Package-level vars in `internal/principal/`; audit helpers (`LogJobStateTransition`, `LogCoordinatorStart/Stop`) default-stamp `service:coordinator` when no more specific principal is in context. |
+| `job` | `job:<jwt_subject>` | JWT with `role=job` — workflow-scoped tokens minted by `submit.py` (feature 19 + related). |
+| `anonymous` | `anonymous` | Dev-mode when `Server.DisableAuth` is set. Feature 37 will deny non-trivial actions against anonymous principals. |
+
+### Safety properties
+
+- **IDs are prefix-qualified.** A node registered as `alice`
+  produces `node:alice`; a user with the same JWT subject
+  produces `user:alice`. Collisions across kinds are
+  impossible.
+- **Cert wins over JWT.** When `HELION_REST_CLIENT_CERT_REQUIRED`
+  is active and a verified client cert is present,
+  `authMiddleware` does NOT overwrite the operator principal
+  with a user principal derived from the accompanying JWT. The
+  cert CN stays the primary ID; the JWT role + subject flow
+  through audit metadata but not identity.
+- **Node never admin.** `Principal.IsAdmin()` returns `false`
+  for `KindNode` regardless of the `Role` field's value — a
+  guard against a compromised node forging a node-JWT with
+  `role=admin`. Same for `KindService` and `KindAnonymous`.
+- **`FromContext` never returns nil.** A context without a
+  Principal reads back as `Anonymous()`; handlers never need a
+  nil check.
+- **Audit events carry both forms.** `Event.Actor` stays the
+  legacy bare string (user ID, "system", "unknown") for
+  back-compat with existing consumers; `Event.Principal` +
+  `Event.PrincipalKind` carry the new typed identity.
+  Dashboards filter on the typed fields; pre-feature-35 tooling
+  keeps reading Actor.
+
+### What feature 35 does NOT do
+
+- **It is not authorization.** The Principal names *who* is
+  acting; feature 37's policy engine decides *what* they may
+  do. Feature 35 stamps the identity; every existing RBAC check
+  (admin-only middleware, `claims.Subject == job.SubmittedBy`)
+  stays in place unchanged.
+- **It does not re-verify auth material.** Feature 35 reads
+  what the auth surface already trusts (JWT claims, cert CN,
+  node ID). A compromised JWT still produces a well-formed
+  Principal — the blast radius is identical to "the attacker
+  has the JWT".
+- **It does not add persistence.** Principals are derived from
+  request-scoped auth material; they are not stored. Groups
+  (feature 38) will add a lookup to enrich `Principal.Groups`.
+
+See [`internal/principal/principal.go`](../internal/principal/principal.go)
+for the type definitions and
+[`docs/planned-features/implemented/35-principal-model.md`](planned-features/implemented/35-principal-model.md)
+for the slice reconciliation.
+
+---
+
 ## 6. Audit logging
 
 Every security and operational event is written to an append-only log in BadgerDB.

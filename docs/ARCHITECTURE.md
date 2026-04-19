@@ -409,6 +409,49 @@ the sink was deployed. Idempotent — safe to run multiple times.
 
 ---
 
+## 12a. Principal model (feature 35)
+
+Every request + every coordinator-internal loop carries a typed
+`*principal.Principal` in its Go context. Six kinds: `user`,
+`operator` (cert-CN authenticated via feature 27), `node`,
+`service`, `job`, `anonymous`. IDs are prefix-qualified
+(`user:alice`, `operator:alice@ops`, `node:gpu-01`,
+`service:dispatcher`, `job:wf-42`, `anonymous`).
+
+Resolution sites:
+
+- **REST auth path** — `authMiddleware` stamps from JWT claims.
+  `clientCertMiddleware` stamps an operator principal from the
+  verified cert CN; that principal is NOT overwritten by the
+  later JWT resolution because the cert is the strictly stronger
+  identity.
+- **gRPC path** — `Register`, `Heartbeat`, `ReportResult`,
+  `ReportServiceEvent` each stamp `Node(nodeID)` once the node
+  ID is known from the message (the mTLS handshake already
+  verified the node's bootstrap cert).
+- **Coordinator-internal** — package-level vars in
+  `internal/principal/` for each long-lived loop; audit helpers
+  default-stamp `service:coordinator` when no specific one is
+  in context.
+
+Audit events carry both the legacy `Actor` bare string (for
+back-compat with pre-feature-35 consumers) and two new
+`Principal` + `PrincipalKind` fields. The dashboard's audit-log
+view renders a kind badge next to the actor.
+
+Feature 35 is the identity primitive for features 36–38:
+
+- **36** stamps the Principal onto every created resource
+  (`Job.OwnerPrincipal`, `Workflow.OwnerPrincipal`, etc.).
+- **37** uses the Principal + OwnerPrincipal in a single
+  `authz.Allow(p, action, resource)` evaluator, replacing the
+  ad-hoc `claims.Subject == job.SubmittedBy` checks scattered
+  across today's handlers.
+- **38** adds a Groups field populated from the group store at
+  resolve time so policy rules can match group shares.
+
+---
+
 ## 13. ML pipeline
 
 Helion's ML slice (features 11–19) turns the base orchestrator

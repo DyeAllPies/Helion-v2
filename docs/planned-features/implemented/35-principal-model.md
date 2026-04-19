@@ -1,25 +1,70 @@
 # Feature: Principal model & auth-to-principal resolution
 
 **Priority:** P1
-**Status:** Pending
+**Status:** Implemented (2026-04-19).
 **Affected files:**
-new `internal/principal/` package (type + helpers),
-`internal/api/middleware.go` (auth middleware resolves a
-`*Principal` and stores it in context, supplementing the current
-`*auth.Claims`),
-`internal/api/types.go` (context key rename),
-`internal/api/operator_cert.go` (feature 27's OperatorCNFromContext
-becomes a Principal resolver),
-every handler that currently reads `claims.Subject` (replace with
-`principal.FromContext(ctx).ID`),
-`internal/audit/logger.go` (events carry a principal ID, not a
-bare subject string),
-`internal/cluster/` (grpc-side handlers that identify nodes
-resolve a node-kind principal),
-`dashboard/src/app/shared/models/index.ts` (audit event type
-gains a principal-kind field for display),
-`docs/SECURITY.md` (new §6 subsection on the principal model),
-`docs/ARCHITECTURE.md` (new diagram + paragraph).
+`internal/principal/principal.go` (new — Principal type + Kind
+enum + constructors + context helpers + IsAdmin + ParseID),
+`internal/principal/principal_test.go` (new — 16 cases),
+`internal/api/middleware.go` (authMiddleware resolves + stamps
+a Principal; `resolvePrincipalFromClaims` maps role → Kind),
+`internal/api/operator_cert.go` (clientCertMiddleware stamps a
+KindOperator principal; authMiddleware preserves it),
+`internal/api/handlers_analytics.go` (`actorFromContext` prefers
+`principal.FromContext(ctx).DisplayName`; falls back to claims),
+`internal/audit/logger.go` (new `Principal` + `PrincipalKind`
+fields on Event; `Log` populates from ctx; new
+`stampServiceIfMissing` helper for the lifecycle audit calls),
+`internal/grpcserver/handlers.go` (Register / Heartbeat /
+ReportResult / ReportServiceEvent stamp Node principals into
+their ctx),
+`dashboard/src/app/shared/models/index.ts` (AuditEvent gains
+`principal` + `principal_kind` + AuditPrincipalKind type alias),
+`dashboard/src/app/features/audit/audit-log.component.ts`
+(principal-kind pill rendered before actor),
+`internal/api/principal_integration_test.go` (new — 6
+integration cases),
+`docs/SECURITY.md` (new §5a),
+`docs/ARCHITECTURE.md` (new §12a).
+
+## Reconciliation (spec vs shipped)
+
+- **Scope matches the spec.** Every implementation-order step
+  (1–8) landed as described. Resolver precedence, service-
+  principal vars, audit schema change, dashboard badge,
+  documentation — all in place.
+- **`actor` field shape preserved.** The spec hinted at a
+  rename; shipped form keeps `Event.Actor` as the bare-string
+  legacy shape so existing tests (`logger_test.go:245` on
+  "system", `handlers_jobs_test.go:747` on "alice") pass
+  unchanged. The new typed identity rides alongside in
+  `Event.Principal` + `Event.PrincipalKind`. Post-feature-36 a
+  follow-up can demote `Actor` to a computed alias.
+- **`stampServiceIfMissing` helper added** (not in the spec)
+  so coordinator-internal audit helpers
+  (LogJobStateTransition / LogCoordinatorStart /
+  LogCoordinatorStop) default-stamp the right service
+  Principal when called with a plain `context.Background()`.
+  Cleaner than mandating every call site plumb a principal
+  through, and preserves the old literal `actor="system"`
+  field on the event. Caller-stamped Principals (e.g.
+  `ServiceDispatcher`) are respected — the helper only fires
+  when ctx carries no Principal or Anonymous.
+- **`ServiceCoordinator` principal added** (not enumerated in
+  the spec's exact list but needed for coordinator lifecycle
+  events that don't fit the per-loop names). Sits alongside
+  `ServiceDispatcher`, `ServiceWorkflowRunner`,
+  `ServiceRetryLoop`, `ServiceLogIngester`, `ServiceRetention`,
+  `ServiceLogReconciler`.
+- **No breaking changes to node-JWT path.** Role="node" on a
+  JWT (legacy bootstrap path) resolves to `KindNode`, and
+  `IsAdmin()` hard-refuses admin on Node kind even if Role is
+  somehow "admin". This is the load-bearing defence behind
+  feature 37's "nodes denied on REST actions" rule.
+- **Claims context key kept.** Handlers still read
+  `*auth.Claims` where they need role + JTI etc.; Principal
+  lives alongside. Removing the Claims read is a feature
+  37/38 concern.
 
 ## Problem
 

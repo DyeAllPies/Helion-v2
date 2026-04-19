@@ -15,6 +15,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
 	"google.golang.org/grpc"
@@ -28,6 +29,17 @@ func (s *Server) Register(
 	ctx context.Context,
 	req *pb.RegisterRequest,
 ) (*pb.RegisterResponse, error) {
+	// Feature 35 — stamp a node principal into the context from
+	// the self-asserted node ID in the registration request. The
+	// mTLS handshake has already verified the node's bootstrap
+	// certificate to the coordinator's CA; the node ID the node
+	// claims here is pinned by the registry to that certificate
+	// on success, so later calls can trust it. For the Register
+	// call itself, the principal is provisional — if registration
+	// is rejected, no durable trust was granted.
+	if req.NodeId != "" {
+		ctx = principal.NewContext(ctx, principal.Node(req.NodeId))
+	}
 	if s.registry != nil {
 		return s.registry.Register(ctx, req)
 	}
@@ -74,6 +86,11 @@ func (s *Server) Heartbeat(
 			doneCh = make(chan struct{})
 			s.registerStream(streamNodeID, doneCh)
 			defer s.unregisterStream(streamNodeID, doneCh)
+			// Feature 35 — stamp the node principal once the
+			// stream's identity is known. Downstream registry /
+			// audit calls read the principal out of `ctx` rather
+			// than reparsing msg.NodeId per iteration.
+			ctx = principal.NewContext(ctx, principal.Node(streamNodeID))
 		}
 
 		// Check whether this stream has been revoked via CancelStream.
@@ -134,6 +151,12 @@ func (s *Server) ReportResult(
 		// No JobStore injected — return success but don't process.
 		// This allows tests without full coordinator setup.
 		return &pb.Ack{Ok: true}, nil
+	}
+	// Feature 35 — stamp the reporting node as the principal so
+	// downstream audit events (security-violation + reject paths)
+	// carry a typed Kind=node identity.
+	if result.NodeId != "" {
+		ctx = principal.NewContext(ctx, principal.Node(result.NodeId))
 	}
 
 	s.log.Info("job result reported",
@@ -498,6 +521,13 @@ func (s *Server) ReportServiceEvent(
 ) (*pb.Ack, error) {
 	if evt.JobId == "" {
 		return nil, status.Error(codes.InvalidArgument, "job_id required")
+	}
+	// Feature 35 — stamp node principal from the reporting node
+	// ID. The node-id-mismatch guard below still rejects
+	// cross-node poisoning; the principal just adds typed context
+	// to the audit records the reject path emits.
+	if evt.NodeId != "" {
+		ctx = principal.NewContext(ctx, principal.Node(evt.NodeId))
 	}
 	if s.services == nil {
 		// Feature 17 not wired on this coordinator — accept the RPC

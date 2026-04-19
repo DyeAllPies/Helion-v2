@@ -33,6 +33,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 )
 
 // Event types (matches design document Phase 4 requirements)
@@ -124,12 +126,38 @@ const (
 )
 
 // Event represents a single audit log entry.
+//
+// Feature 35: Actor stays as the legacy bare-string shape (user ID,
+// node ID, "system", "unknown") for back-compat with existing
+// tests + external consumers. Two new fields carry the typed
+// identity:
+//
+//   - Principal is the full prefix-qualified Principal ID when
+//     the Log call was made from a context with a Principal
+//     available (REST handlers after authMiddleware ran, gRPC
+//     handlers after the node principal was stamped,
+//     coordinator-internal loops that explicitly stamp a service
+//     principal). Empty string when no Principal was in context —
+//     callers that pass a bare actor string through Log() without
+//     populating the context still produce a valid Event; the new
+//     fields are just missing.
+//
+//   - PrincipalKind is the derived Kind string (one of the
+//     principal.Kind values: "user", "operator", "node",
+//     "service", "job", "anonymous"). Lets the dashboard filter /
+//     badge-render by kind without parsing the ID prefix.
+//
+// Post-migration (feature 36+), Actor becomes a computed alias
+// for Principal's suffix; we keep both for one release so external
+// consumers can migrate.
 type Event struct {
-	ID        string                 `json:"id"`
-	Timestamp time.Time              `json:"timestamp"`
-	Type      string                 `json:"type"`
-	Actor     string                 `json:"actor"` // Node ID, user ID, or "system"
-	Details   map[string]interface{} `json:"details"`
+	ID            string                 `json:"id"`
+	Timestamp     time.Time              `json:"timestamp"`
+	Type          string                 `json:"type"`
+	Actor         string                 `json:"actor"` // Node ID, user ID, or "system"
+	Principal     string                 `json:"principal,omitempty"`      // feature 35 — "user:alice" etc.
+	PrincipalKind string                 `json:"principal_kind,omitempty"` // feature 35 — "user"/"operator"/...
+	Details       map[string]interface{} `json:"details"`
 }
 
 // Store is the interface for persisting audit events.
@@ -157,6 +185,16 @@ func NewLogger(store Store, ttl time.Duration) *Logger {
 
 // Log records an audit event.
 // Returns error if the event could not be persisted.
+//
+// Feature 35: if ctx carries a Principal (stamped by
+// authMiddleware, clientCertMiddleware, grpcserver node handlers,
+// or a coordinator-internal loop using a service principal), the
+// resulting Event carries its full ID + Kind. The legacy `actor`
+// parameter is NOT overridden — some callers legitimately pass a
+// bare string derived from other logic (e.g. LogNodeRegister
+// passes the node ID it just registered, which may differ from a
+// Principal in context). Principal + Actor coexist; downstream
+// consumers can filter on whichever fits.
 func (l *Logger) Log(ctx context.Context, eventType, actor string, details map[string]interface{}) error {
 	event := Event{
 		ID:        uuid.New().String(),
@@ -164,6 +202,10 @@ func (l *Logger) Log(ctx context.Context, eventType, actor string, details map[s
 		Type:      eventType,
 		Actor:     actor,
 		Details:   details,
+	}
+	if p := principal.FromContext(ctx); p != nil && p.Kind != principal.KindAnonymous {
+		event.Principal = p.ID
+		event.PrincipalKind = string(p.Kind)
 	}
 
 	data, err := json.Marshal(event)
@@ -208,12 +250,34 @@ func (l *Logger) LogJobSubmit(ctx context.Context, actor, jobID, command string)
 }
 
 // LogJobStateTransition logs a job state change.
+//
+// Feature 35: if ctx does not already carry a Principal, stamp
+// ServiceCoordinator — state transitions are triggered from many
+// internal paths (dispatch loop, workflow runner, retry loop,
+// ReportResult RPC) and the "coordinator itself" principal is the
+// right default attribution. A caller who wants a more specific
+// service principal (e.g. `ServiceRetryLoop`) stamps it into ctx
+// before calling; this function preserves that stamp.
 func (l *Logger) LogJobStateTransition(ctx context.Context, jobID, fromState, toState string) error {
+	ctx = stampServiceIfMissing(ctx, principal.ServiceCoordinator)
 	return l.Log(ctx, EventJobStateTransition, "system", map[string]interface{}{
 		"job_id":     jobID,
 		"from_state": fromState,
 		"to_state":   toState,
 	})
+}
+
+// stampServiceIfMissing returns ctx unchanged if it already
+// carries a non-anonymous Principal, else returns a child context
+// carrying `fallback`. Used by the LogXxx helpers to ensure
+// coordinator-internal audit events always have a typed Principal
+// attribution without disrupting callers that explicitly stamp
+// their own.
+func stampServiceIfMissing(ctx context.Context, fallback *principal.Principal) context.Context {
+	if p := principal.FromContext(ctx); p != nil && p.Kind != principal.KindAnonymous {
+		return ctx
+	}
+	return principal.NewContext(ctx, fallback)
 }
 
 // LogAuthFailure logs an authentication failure.
@@ -233,6 +297,7 @@ func (l *Logger) LogRateLimitHit(ctx context.Context, nodeID string, limit float
 
 // LogCoordinatorStart logs coordinator startup.
 func (l *Logger) LogCoordinatorStart(ctx context.Context, version string) error {
+	ctx = stampServiceIfMissing(ctx, principal.ServiceCoordinator)
 	return l.Log(ctx, EventCoordinatorStart, "system", map[string]interface{}{
 		"version": version,
 	})
@@ -240,6 +305,7 @@ func (l *Logger) LogCoordinatorStart(ctx context.Context, version string) error 
 
 // LogCoordinatorStop logs coordinator shutdown.
 func (l *Logger) LogCoordinatorStop(ctx context.Context, reason string) error {
+	ctx = stampServiceIfMissing(ctx, principal.ServiceCoordinator)
 	return l.Log(ctx, EventCoordinatorStop, "system", map[string]interface{}{
 		"reason": reason,
 	})

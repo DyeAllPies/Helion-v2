@@ -50,7 +50,7 @@ relates to `audits/` and `deferred/`.
 | 32 | Web-based operator-cert issuance UI (admin dashboard action) | Pending | P3 | [32-web-cert-issuance-ui.md](32-web-cert-issuance-ui.md) |
 | 33 | Per-operator accountability — JWT `required_cn` bound to cert CN | Pending | P2 | [33-per-operator-accountability.md](33-per-operator-accountability.md) |
 | 34 | WebAuthn / FIDO2 — hardware-bound keys mitigate compromised-browser risk | Pending | P2 | [34-webauthn-fido2.md](34-webauthn-fido2.md) |
-| 35 | IAM foundation — Principal model & auth-to-principal resolution | Pending | P1 | [35-principal-model.md](35-principal-model.md) |
+| ~~35~~ | ~~IAM foundation — Principal model & auth-to-principal resolution~~ | **Implemented** (principal package + middleware + audit schema + dashboard badge); moved to [`implemented/35-principal-model.md`](implemented/35-principal-model.md) | P1 | — |
 | 36 | IAM — Resource ownership on every stateful type (jobs, workflows, datasets, models, services) | Pending | P1 | [36-resource-ownership.md](36-resource-ownership.md) |
 | 37 | IAM — Authorization policy engine + middleware (replaces ad-hoc RBAC) | Pending | P1 | [37-authorization-policy.md](37-authorization-policy.md) |
 | 38 | IAM — Groups and resource shares (delegation beyond owner-or-admin) | Pending | P2 | [38-groups-and-shares.md](38-groups-and-shares.md) |

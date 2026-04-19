@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -129,7 +130,25 @@ func (s *Server) analyticsPreflight(w http.ResponseWriter, r *http.Request, endp
 
 // actorFromContext returns the authenticated subject, or "anonymous" if
 // authentication was disabled (test mode) or claims are missing.
+//
+// Feature 35: prefers `principal.FromContext(ctx).DisplayName` when a
+// typed Principal is in context (cert-CN path → operator DisplayName;
+// JWT path → subject DisplayName). Falls back to the legacy
+// claims-based read for contexts that somehow carry claims without a
+// Principal (should not happen after authMiddleware wires Principal
+// alongside Claims, but the fallback keeps back-compat watertight).
+//
+// Why DisplayName + not .ID: the handlers calling actorFromContext
+// today pass the return value directly into audit.Event.Actor, which
+// is documented as the bare-string shape for back-compat. The Event
+// will independently carry Principal + PrincipalKind (populated by
+// audit.Log from the ctx), so dashboard consumers get both the
+// bare string (for legacy display) and the typed fields (for filter /
+// badge) without either requiring the other.
 func actorFromContext(ctx context.Context) string {
+	if p := principal.FromContext(ctx); p.Kind != principal.KindAnonymous {
+		return p.DisplayName
+	}
 	if claims, ok := ctx.Value(claimsContextKey).(*auth.Claims); ok && claims != nil {
 		return claims.Subject
 	}

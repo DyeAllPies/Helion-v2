@@ -47,6 +47,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 
 	pkcs12 "software.sslmate.com/src/go-pkcs12"
 )
@@ -239,6 +240,19 @@ func (s *Server) clientCertMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		cn, verified := s.extractVerifiedCN(r)
 		if verified {
 			ctx := context.WithValue(r.Context(), operatorCNKey, cn)
+			// Feature 35 — stamp a typed Operator principal into
+			// the context. authMiddleware runs AFTER this and
+			// preserves the Operator principal instead of
+			// overwriting it with a User principal. Role is
+			// filled in later (when authMiddleware validates the
+			// accompanying JWT) — the Operator kind already
+			// tells the authz layer how to treat the request.
+			//
+			// An operator who presents a cert WITHOUT a JWT is
+			// still unauthenticated from the REST handler's
+			// perspective (authMiddleware demands the bearer
+			// token). This only helps after BOTH layers pass.
+			ctx = principal.NewContext(ctx, principal.Operator(cn, ""))
 			next(w, r.WithContext(ctx))
 			return
 		}
