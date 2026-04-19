@@ -117,6 +117,11 @@ export const routes: Routes = [
             loadComponent: () =>
               import('./features/submit/submit-ml-workflow.component').then(m => m.SubmitMlWorkflowComponent),
           },
+          {
+            path: 'dag-builder',
+            loadComponent: () =>
+              import('./features/submit/submit-dag-builder.component').then(m => m.SubmitDagBuilderComponent),
+          },
         ],
       },
     ],

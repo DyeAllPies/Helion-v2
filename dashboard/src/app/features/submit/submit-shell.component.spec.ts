@@ -26,13 +26,15 @@ describe('SubmitShellComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('defines exactly three tabs in the spec-mandated order', () => {
-    // The feature 22 spec pins three tabs (Job / Workflow / ML
-    // Workflow) in that order. Guards against a tab accidentally
-    // being removed or reordered — the sidebar + URL deep-links
-    // rely on these paths being stable.
-    expect(component.tabs.length).toBe(3);
-    expect(component.tabs.map(t => t.path)).toEqual(['job', 'workflow', 'ml-workflow']);
+  it('defines four tabs in the expected order', () => {
+    // Job / Workflow / ML Workflow were the original three tabs;
+    // DAG Builder was promoted out of the spec's "Deferred" list
+    // at user request. Order is load-bearing — the sidebar hover
+    // order + URL deep-links rely on these paths being stable.
+    expect(component.tabs.length).toBe(4);
+    expect(component.tabs.map(t => t.path)).toEqual([
+      'job', 'workflow', 'ml-workflow', 'dag-builder',
+    ]);
   });
 
   it('each tab carries a non-empty label, icon and hint', () => {
@@ -47,8 +49,11 @@ describe('SubmitShellComponent', () => {
   });
 
   it('renders one anchor per tab', () => {
+    // Expected count mirrors the tabs array above. If a tab is
+    // added or removed, update BOTH the tabs.length assertion and
+    // this DOM count so the two stay in lockstep.
     const anchors = fixture.nativeElement.querySelectorAll('a.submit-tab');
-    expect(anchors.length).toBe(3);
+    expect(anchors.length).toBe(component.tabs.length);
   });
 
   it('renders the router outlet for the active child route', () => {

@@ -141,5 +141,15 @@ export class SubmitShellComponent {
       icon:  'hub',
       hint:  'Templated shortcut over the iris / MNIST pipelines',
     },
+    // Promoted from the feature 22 "Deferred" list into v1 on
+    // user request. Builds a SubmitWorkflowRequest via form
+    // controls + a live JSON preview; posts through the same
+    // /workflows endpoint as the other two workflow tabs.
+    {
+      path:  'dag-builder',
+      label: 'DAG BUILDER',
+      icon:  'schema',
+      hint:  'Compose a workflow visually; depends_on edges picked from a list of jobs',
+    },
   ];
 }
