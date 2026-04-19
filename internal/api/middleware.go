@@ -29,6 +29,16 @@ const (
 	tokenIssueBurst = 5   // allow short bursts up to 5
 )
 
+// Feature 27 — per-admin rate limit on POST /admin/operator-certs.
+// Conservative: cert issuance is expensive (keygen + sign + PKCS#12
+// encode), and the resulting artefact is a long-lived credential.
+// A single admin shouldn't need more than a handful of issuances
+// per hour during normal onboarding.
+const (
+	issueOpCertRate  = 0.1 // 1 every 10s per subject
+	issueOpCertBurst = 3
+)
+
 // Feature 26 — per-admin rate limit on POST /admin/jobs/{id}/reveal-secret.
 // Kept deliberately tight. Every reveal writes an audit event and gives the
 // operator a plaintext value; a compromised admin token should not be able
@@ -177,6 +187,24 @@ func (s *Server) tokenIssueAllow(subject string) bool {
 		s.tokenIssueLimiters[subject] = lim
 	}
 	s.tokenIssueMu.Unlock()
+	return lim.Allow()
+}
+
+// ── issueOpCertAllow ────────────────────────────────────────────────────────
+
+// issueOpCertAllow returns true if the caller identified by subject
+// is within the feature-27 operator-cert issuance rate limit.
+// Creates a per-subject limiter on first use. Same shape as
+// tokenIssueAllow / revealSecretAllow, tighter rate because each
+// issuance mints a long-lived credential.
+func (s *Server) issueOpCertAllow(subject string) bool {
+	s.issueOpCertMu.Lock()
+	lim, ok := s.issueOpCertLimiters[subject]
+	if !ok {
+		lim = rate.NewLimiter(issueOpCertRate, issueOpCertBurst)
+		s.issueOpCertLimiters[subject] = lim
+	}
+	s.issueOpCertMu.Unlock()
 	return lim.Allow()
 }
 

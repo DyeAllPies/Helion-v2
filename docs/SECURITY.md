@@ -57,6 +57,10 @@ operational procedures.
 | Attacker probes "does job X have a secret named Y?" via reveal-secret 404s | Every reject is itself audited as `secret_reveal_reject` with the target job_id + key + reason-for-reject. Enumeration shows up loud in the audit stream. |
 | Attacker with filesystem access reads secret plaintext from BadgerDB | **Acknowledged gap.** Feature 26 redacts in-transit and at-the-API; the underlying Badger record still holds plaintext because the runtime needs it to dispatch. Tracked as [feature 30 — encrypted env storage](planned-features/30-encrypted-env-storage.md). |
 | Job prints its own `$HELION_TOKEN` to stdout → captured by logstore → visible via `GET /jobs/{id}/logs` | **Acknowledged gap.** Tracked as [feature 29 — stdout secret scrubbing](planned-features/29-stdout-secret-scrubbing.md). Write-path scrubber that replaces declared secret VALUES with `[REDACTED]` as chunks land. |
+| Admin JWT leaks via clipboard / screenshare / browser extension → remote attacker submits jobs from the internet | **Feature 27 optional.** `HELION_REST_CLIENT_CERT_REQUIRED=on` requires the caller to also present a client certificate verified against the coordinator's CA. Cert-less requests are refused at 401 before auth middleware even runs. Staged rollout via `warn` tier. See §9.6. |
+| Attacker forges `X-SSL-Client-Verify: SUCCESS` to bypass mTLS | Coordinator honours those headers ONLY from loopback (127.0.0.1 / ::1). Any non-loopback peer carrying those headers is treated as if no cert was presented. |
+| Operator laptop stolen with P12 imported in browser | P12 password at import time + OS keychain user-auth gating. Not iron-clad; mitigation is short TTL (90 days default) and revocation follow-up [feature 31](planned-features/31-cert-revocation-crl-ocsp.md). |
+| Compromised browser process uses the installed operator cert | Out of scope for mTLS (a network-boundary control). Tracked as [feature 34 — WebAuthn/FIDO2](planned-features/34-webauthn-fido2.md), which moves the signing key to a hardware device requiring physical touch per auth event. |
 
 ---
 
@@ -668,6 +672,81 @@ filter probes from real submissions. Key security properties:
 - An invalid `dry_run` value (`?dry_run=maybe`) returns `400`; silent
   fallback to the real path would turn a typo into an unintended
   submission.
+
+### 9.6 Optional browser mTLS for dashboard operators (feature 27)
+
+After feature 23 shipped TLS 1.3 with hybrid-PQC on the REST
+listener, the dashboard → coordinator path is protected against
+lateral traffic interception. What remains: a leaked JWT is still
+the full access story. Feature 27 adds an optional client-certificate
+check so an attacker who steals a JWT (clipboard, screenshare,
+compromised extension, lab log line) also needs the operator's
+client-cert private key to submit requests.
+
+Three enforcement tiers, selected at coordinator boot via
+`HELION_REST_CLIENT_CERT_REQUIRED`:
+
+| Tier    | Value | Behaviour |
+|---------|-------|-----------|
+| off     | `off` / unset / `0` / `no` | Default. No client-cert check. Existing behaviour. |
+| warn    | `warn`                     | Every cert-less request is served, AND emits an `operator_cert_missing` audit event. Used for staged rollouts: flip to `warn`, watch the audit log, ask operators on bearer-only to install certs, then flip to `on`. |
+| on      | `on` / `1` / `yes` / `required` | Cert-less requests are refused at 401. `/healthz` and `/readyz` remain exempt so k8s-style probes keep working. |
+
+Malformed values are fatal at coordinator startup — a typo must not
+silently weaken security below the default.
+
+Safety properties:
+
+- **CA is shared with node mTLS.** The coordinator's existing CA
+  signs both node and operator certs. Operator certs carry
+  `ExtKeyUsage = ClientAuth` ONLY — a leaked operator cert cannot
+  be re-used to stand up a fake server. Node certs keep both
+  `ClientAuth` and `ServerAuth` because nodes act as both.
+- **Admin role is subject to the same check.** There is no escape
+  hatch for the admin role; admin tokens + cert-less = 401 in `on`
+  mode.
+- **Issuance is admin-mediated.** `POST /admin/operator-certs`
+  (admin-only, rate-limited 1 / 10 s, audit-before-response
+  fail-closed on audit-sink failure) mints a fresh ECDSA P-256
+  client cert + PKCS#12 bundle encrypted with an operator-supplied
+  password. Every issuance writes `operator_cert_issued` to the
+  audit log with CN + serial + fingerprint.
+- **The CLI `helion-issue-op-cert`** wraps that HTTP path for
+  operator convenience.
+- **`operator_cn` stamped on audit events.** When a verified client
+  cert is present, every subsequent audit event (job submits,
+  reveal-secret, cert issuance itself) carries an `operator_cn`
+  detail alongside the JWT subject. Enables attribution beyond "an
+  admin token did something".
+- **Nginx-proxy mode.** If Nginx terminates TLS in front of the
+  coordinator, set `ssl_verify_client on` on Nginx and forward
+  `X-SSL-Client-Verify`, `X-SSL-Client-S-DN`,
+  `X-SSL-Client-Fingerprint`. The coordinator accepts those headers
+  **only from loopback** (`127.0.0.1`, `::1`) — any non-loopback
+  peer carrying those headers is treated as cert-less to prevent
+  header smuggling.
+- **Read-once response.** `POST /admin/operator-certs` returns the
+  private key + P12 once. The server does not retain either; a
+  lost response means the operator requests a fresh issuance
+  (which mints a new serial).
+
+What mTLS does NOT solve:
+
+- **In-browser compromise.** An attacker running code inside the
+  operator's browser can use the installed cert directly — it's
+  a network-boundary control, not an in-browser one. Tracked as
+  [feature 34 — WebAuthn/FIDO2](planned-features/34-webauthn-fido2.md),
+  which moves the key to a hardware device requiring physical touch.
+- **Revocation.** Cert rotation is TTL-based today (90 days by
+  default). Explicit revocation (CRL or OCSP) is tracked as
+  [feature 31](planned-features/31-cert-revocation-crl-ocsp.md).
+- **Cert issuance UX.** CLI is the shipping interface; a dashboard-
+  based admin issuance action is tracked as
+  [feature 32](planned-features/32-web-cert-issuance-ui.md).
+- **Per-operator accountability.** Every operator cert today
+  carries the same flat JWT role; `operator_cn` is the only
+  per-operator distinguisher. Richer identity → token binding is
+  [feature 33](planned-features/33-per-operator-accountability.md).
 
 ---
 

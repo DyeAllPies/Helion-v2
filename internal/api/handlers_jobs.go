@@ -664,10 +664,10 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	// real response without any state change.
 	if dryRun {
 		if s.audit != nil {
-			if err := s.audit.Log(r.Context(), audit.EventJobDryRun, actor, map[string]interface{}{
+			if err := s.audit.Log(r.Context(), audit.EventJobDryRun, actor, stampOperatorCN(r.Context(), map[string]interface{}{
 				"job_id":  job.ID,
 				"command": job.Command,
-			}); err != nil {
+			})); err != nil {
 				logAuditErr(false, "job.dry_run", err)
 			}
 		}
@@ -692,9 +692,12 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	// Phase 4: Log job submission to audit log. Feature 26 — include
 	// the declared secret-key NAMES so a reviewer can see which env
 	// vars the submitter marked secret. Values are never included.
+	// Feature 27 — stampOperatorCN adds `operator_cn` when the
+	// request arrived with a verified client cert (via TLS or
+	// loopback-only Nginx headers).
 	// Called via Log (not LogJobSubmit) so we can attach secret_keys
-	// without changing the shared LogJobSubmit interface that
-	// grpcserver / nodeserver / tests also implement.
+	// and operator_cn without changing the shared LogJobSubmit
+	// interface that grpcserver / nodeserver / tests also implement.
 	if s.audit != nil {
 		details := map[string]interface{}{
 			"job_id":  job.ID,
@@ -703,7 +706,7 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		if sk := auditSafeSecretKeys(job.SecretKeys); len(sk) > 0 {
 			details["secret_keys"] = sk
 		}
-		if err := s.audit.Log(r.Context(), audit.EventJobSubmit, actor, details); err != nil {
+		if err := s.audit.Log(r.Context(), audit.EventJobSubmit, actor, stampOperatorCN(r.Context(), details)); err != nil {
 			logAuditErr(false, "job.submit", err)
 		}
 	}

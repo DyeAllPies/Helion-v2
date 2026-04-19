@@ -220,6 +220,56 @@ type RevokeNodeResponse struct {
 	Message string `json:"message"`
 }
 
+// ── Feature 27 — browser mTLS operator certs ───────────────────────────────
+
+// IssueOperatorCertRequest is the body for POST /admin/operator-certs.
+//
+// Admin-only. Generates a new ECDSA P-256 client certificate (EKU =
+// ClientAuth only) signed by the coordinator's CA, plus a matching
+// PKCS#12 bundle the operator imports into their browser. Every
+// issuance emits an `operator_cert_issued` audit event carrying the
+// CN + fingerprint + requesting admin's subject; read-back is
+// one-shot (no GET endpoint). Rate-limited per admin subject.
+type IssueOperatorCertRequest struct {
+	// CommonName is the operator's human identifier. Used verbatim as
+	// the cert Subject CN and — if feature 27's clientCertMiddleware
+	// is enabled — as the `operator_cn` field on future audit entries
+	// for requests arriving with this cert. Required; non-empty; ≤256 bytes;
+	// no NUL / '='.
+	CommonName string `json:"common_name"`
+	// TTLDays sets the certificate lifetime in days. Defaults to 90
+	// when 0. Capped server-side at the CA's remaining lifetime.
+	TTLDays int `json:"ttl_days,omitempty"`
+	// P12Password is the password that protects the returned PKCS#12
+	// bundle. Required, non-empty, ≥8 chars. The operator needs this
+	// password at browser import time. Server does not store it.
+	P12Password string `json:"p12_password"`
+}
+
+// IssueOperatorCertResponse is the response body for POST
+// /admin/operator-certs. Carries BOTH the raw PEM forms (for ops
+// who pipe the cert into curl / command-line tools) AND a
+// base64-encoded PKCS#12 bundle for browser import.
+//
+// Returned ONCE. The server does not retain the private key
+// anywhere — if the operator loses the response, they must
+// request a fresh issuance, which will mint a NEW cert with a
+// NEW serial.
+type IssueOperatorCertResponse struct {
+	CommonName   string    `json:"common_name"`
+	SerialHex    string    `json:"serial_hex"`    // operator-facing serial; can paste into revocation request
+	FingerprintHex string  `json:"fingerprint_hex"` // SHA-256 of the cert DER; matches what browsers display
+	NotBefore    time.Time `json:"not_before"`
+	NotAfter     time.Time `json:"not_after"`
+	CertPEM      string    `json:"cert_pem"`
+	KeyPEM       string    `json:"key_pem"`
+	// P12Base64 is base64(PKCS#12-DER). Password from the request
+	// is required to decrypt; server does not include it in the
+	// response.
+	P12Base64   string `json:"p12_base64"`
+	AuditNotice string `json:"audit_notice"`
+}
+
 // ── Store / provider interfaces ───────────────────────────────────────────────
 
 // JobStoreIface is the narrow interface the HTTP server needs from the JobStore.

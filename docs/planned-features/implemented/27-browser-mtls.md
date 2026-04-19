@@ -1,25 +1,86 @@
 # Feature: Browser mTLS for dashboard operators
 
 **Priority:** P2
-**Status:** Pending
+**Status:** Implemented (2026-04-19). Four "deferred/out-of-scope"
+items promoted to new planned features per user request:
+[feature 31 — CRL/OCSP revocation](../31-cert-revocation-crl-ocsp.md),
+[feature 32 — web cert-issuance UI](../32-web-cert-issuance-ui.md),
+[feature 33 — per-operator accountability](../33-per-operator-accountability.md),
+and [feature 34 — WebAuthn/FIDO2](../34-webauthn-fido2.md) (for the
+"compromised browser process" concern the original spec flagged as
+unsolvable — it can be addressed with hardware-bound keys).
+
 **Affected files:**
-`internal/api/server.go` (require + verify client cert on
-`ServeTLS`),
-`cmd/helion-coordinator/main.go` (`HELION_REST_CLIENT_CERT_REQUIRED`
-flag + CA loading),
-`internal/pqcrypto/ca.go` (new operator-cert issuance helper —
-the CA already does node certs; this adds a parallel path),
-`dashboard/nginx.conf` (optional: pass client-cert header
-through to coord),
-a new `cmd/helion-issue-op-cert/` CLI for bootstrapping
-operator P12 bundles,
-`docs/SECURITY.md` (new §9 subsection),
-`docs/ops/operator-cert-guide.md` (new — install walkthrough).
+`internal/pqcrypto/ca.go` (new `IssueOperatorCert` + `ClientCertPool`),
+`internal/pqcrypto/ca_test.go` (9 new cases),
+`internal/api/operator_cert.go` (new — middleware + admin handler
++ tier enum + exported `ParseClientCertTierFromEnv`),
+`internal/api/operator_cert_test.go` (new — 15 cases),
+`internal/api/server.go` (`SetOperatorCA`, `SetClientCertTier`,
+`Handler()` wraps mux with middleware when tier != off),
+`internal/api/handlers_jobs.go` (`stampOperatorCN` on
+`job_submit` + `job_dry_run` audit events),
+`internal/api/handlers_admin.go` (`stampOperatorCN` on
+`secret_revealed`),
+`internal/api/middleware.go` (new `issueOpCertAllow` per-admin
+rate limiter),
+`internal/api/types.go` (`IssueOperatorCertRequest` /
+`IssueOperatorCertResponse` wire types),
+`internal/audit/logger.go` (new `operator_cert_issued` +
+`operator_cert_reject` + `operator_cert_missing` event constants),
+`cmd/helion-coordinator/main.go` (parses
+`HELION_REST_CLIENT_CERT_REQUIRED`; sets ClientAuth to
+`VerifyClientCertIfGiven` in warn/on tiers + installs CA pool as
+ClientCAs; always wires `SetOperatorCA` so admins can pre-issue
+certs before flipping tiers),
+`cmd/helion-issue-op-cert/main.go` (new — HTTP client wrapping
+`POST /admin/operator-certs`; `--p12-password-file` keeps the
+password out of `ps` / shell history),
+`docs/SECURITY.md` (new §9.6 + new threat rows in §1),
+`docs/ARCHITECTURE.md` (REST table row),
+`docs/ops/operator-cert-guide.md` (new — step-by-step Chrome /
+Firefox / Safari / curl walkthrough + rollout guide).
 
 **Depends on** [feature 23](23-rest-hybrid-pqc.md) — the REST
 listener must already be TLS before it can require client
 certificates. 27 plugs into 23's `ServeTLS` config; it does not
 re-do the listener work.
+
+## Reconciliation (spec vs shipped)
+
+- **Issuance via admin HTTP endpoint, not file-based CLI.** The
+  coordinator's CA is in-memory only (`auth.NewCoordinatorBundle`
+  generates it on every boot). A file-reading CLI would need a new
+  CA-persistence slice (related to feature 30's envelope-encryption
+  plan). Shipped form: `POST /admin/operator-certs` (admin-only,
+  rate-limited 1 / 10 s, audit-before-response fail-closed). The
+  `helion-issue-op-cert` CLI is a thin HTTP wrapper.
+- **`ClientAuth = VerifyClientCertIfGiven` in both `warn` and
+  `on`** — not `RequireAndVerifyClientCert`. This lets `/healthz`
+  and `/readyz` serve cert-less traffic even in `on` mode (k8s
+  probe ergonomics). The 401 in `on` mode is applied at the HTTP
+  middleware, not layer 4. A cert-less TLS connection being
+  accepted is a meaningless info leak — port scanners already learn
+  "something is listening here".
+- **Nginx.conf shipped unchanged.** The current dashboard container
+  listens on port 80 plain HTTP; upgrading to 443 + ssl_verify_client
+  is an orthogonal change. Coordinator-side middleware already
+  handles the `X-SSL-Client-*` loopback-trust path so a future
+  Nginx-terminates-TLS deployment drops in cleanly.
+- **P12 password mandatory (≥8 bytes).** Spec didn't specify;
+  passwordless P12 would defeat filesystem permissions, short
+  passwords are trivially brute-forceable. The CLI's
+  `--p12-password-file` flag encourages keeping it out of shell
+  history.
+- **Audit fail-closed on issuance.** If the audit sink is down
+  when the handler tries to log `operator_cert_issued`, it returns
+  500 and no cert leaves the coordinator. An issuance without an
+  audit record is an access grant with no accountability.
+- **Four "out of scope" items promoted.** The original spec's
+  Deferred section had three items; they are now active planned
+  features 31, 32, 33 — plus the "compromised browser process"
+  concern the spec flagged as unsolvable is now feature 34
+  (WebAuthn / FIDO2 with hardware-bound keys).
 
 ## Problem
 
@@ -293,15 +354,27 @@ not buy.
 6. `HELION_REST_CLIENT_CERT_REQUIRED=off` (default): no behaviour
    change from today.
 
-## Deferred (out of scope)
+## Promoted from "Deferred / Out of scope"
 
-- **Cert revocation via CRL or OCSP.** TTL-based rotation
-  (90 days default) covers the common case. Full revocation
-  infrastructure is a bigger slice.
-- **Per-operator role tokens** (pairs with this feature) —
-  already listed as deferred on feature 22.
-- **Web-based cert issuance UI.** An admin dashboard action
-  that issues an op cert + emails the P12. Nice ergonomics;
-  not required for v1.
-- **Pure-client-cert auth (no JWT).** Ambitious; would replace
-  the whole auth model.
+All three deferred items from the original spec, plus the
+"compromised browser process" concern flagged under "what mTLS
+does NOT solve", are now active planned features:
+
+- ~~**Cert revocation via CRL or OCSP.**~~ Now tracked as
+  [feature 31 — CRL/OCSP cert revocation](../31-cert-revocation-crl-ocsp.md).
+- ~~**Web-based cert issuance UI.**~~ Now tracked as
+  [feature 32 — dashboard-based cert issuance UI](../32-web-cert-issuance-ui.md).
+- ~~**Per-operator role tokens.**~~ Now tracked as
+  [feature 33 — per-operator accountability](../33-per-operator-accountability.md)
+  (richer than the original note: binds JWT issuance to a verified
+  operator cert CN so each operator gets a distinct token identity).
+- ~~**Compromised browser process.**~~ Promoted from
+  "unsolvable" to active: hardware-bound keys (WebAuthn / YubiKey)
+  mitigate this — tracked as
+  [feature 34 — WebAuthn / FIDO2](../34-webauthn-fido2.md).
+
+## Still out of scope
+
+- **Pure-client-cert auth (no JWT).** Would replace the whole
+  auth model. Not promoted — the JWT layer continues to carry
+  role + TTL + revocation semantics that the cert layer doesn't.

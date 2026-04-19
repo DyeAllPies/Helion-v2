@@ -187,6 +187,7 @@ a real submission.
 | `POST` | `/admin/tokens` | Bearer (admin) | Issue scoped JWT `{subject, role, ttl_hours}` |
 | `DELETE` | `/admin/tokens/{jti}` | Bearer (admin) | Immediately revoke a token by JTI |
 | `POST` | `/admin/jobs/{id}/reveal-secret` | Bearer (admin) | Feature 26 — read back a declared secret env value `{key, reason}`. Reason is mandatory and audited; every reject is audited too. Rate-limited 1/5s per subject. |
+| `POST` | `/admin/operator-certs` | Bearer (admin) | Feature 27 — mint a browser-import PKCS#12 bundle for a dashboard operator `{common_name, ttl_days, p12_password}`. Returns cert + key + P12 in one shot (not retained server-side). Rate-limited 1/10s per subject; audit-before-response fail-closed. |
 | `GET` | `/ws/jobs/{id}/logs` | First-message | WebSocket live log stream |
 | `GET` | `/ws/metrics` | First-message | WebSocket live cluster metrics |
 | `GET` | `/ws/events` | First-message | WebSocket event stream (subscribe with topic patterns) |

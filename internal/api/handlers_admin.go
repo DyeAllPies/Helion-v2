@@ -284,12 +284,12 @@ func (s *Server) handleRevealSecret(w http.ResponseWriter, r *http.Request) {
 	// fail the reveal closed so no plaintext leaves the coordinator
 	// without a durable record of who asked and why.
 	if s.audit != nil {
-		if err := s.audit.Log(r.Context(), audit.EventSecretRevealed, actor, map[string]interface{}{
+		if err := s.audit.Log(r.Context(), audit.EventSecretRevealed, actor, stampOperatorCN(r.Context(), map[string]interface{}{
 			"job_id":      jobID,
 			"key":         req.Key,
 			"reason":      strings.TrimSpace(req.Reason),
 			"revealed_at": now.Format(time.RFC3339Nano),
-		}); err != nil {
+		})); err != nil {
 			// Critical: the whole point of this endpoint is its audit trail.
 			logAuditErr(true, "secret.revealed", err)
 			writeError(w, http.StatusInternalServerError, "audit log unavailable; reveal refused")

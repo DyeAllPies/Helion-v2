@@ -42,10 +42,14 @@ relates to `audits/` and `deferred/`.
 | ~~24~~ | ~~Dry-run preflight (`?dry_run=true` on submit endpoints)~~ | **Implemented** (jobs + workflows + datasets + models — deferred item rolled in); moved to [`implemented/24-dry-run-preflight.md`](implemented/24-dry-run-preflight.md) | P1 | — |
 | ~~25~~ | ~~Dangerous-env denylist (`LD_*`, `DYLD_*`, `GCONV_PATH`, …)~~ | **Implemented** (jobs + workflows + artifact staging guards + per-node overrides — both deferred items rolled in); moved to [`implemented/25-env-var-denylist.md`](implemented/25-env-var-denylist.md) | P1 | — |
 | ~~26~~ | ~~Secret env-var support (redact on GET + scrub audit)~~ | **Implemented** (redaction + admin reveal-secret endpoint; two Not-attempting items promoted to features 29 + 30); moved to [`implemented/26-secret-env-vars.md`](implemented/26-secret-env-vars.md) | P1 | — |
-| 27 | Browser mTLS for dashboard operators (opt-in; depends on 23) | Pending | P2 | [27-browser-mtls.md](27-browser-mtls.md) |
+| ~~27~~ | ~~Browser mTLS for dashboard operators (opt-in; depends on 23)~~ | **Implemented** (3-tier gating + admin `POST /admin/operator-certs` + CLI; four deferred/out-of-scope items promoted to features 31–34); moved to [`implemented/27-browser-mtls.md`](implemented/27-browser-mtls.md) | P2 | — |
 | 28 | Unified analytics sink — capture every interesting event | Pending | P2 | [28-analytics-unified-sink.md](28-analytics-unified-sink.md) |
 | 29 | Job stdout/stderr secret scrubbing (closes feature 26's "echo $HELION_TOKEN" gap) | Pending | P2 | [29-stdout-secret-scrubbing.md](29-stdout-secret-scrubbing.md) |
 | 30 | Encrypted env-value storage (envelope encryption + KEK rotation) | Pending | P2 | [30-encrypted-env-storage.md](30-encrypted-env-storage.md) |
+| 31 | Operator-cert revocation via CRL / OCSP | Pending | P2 | [31-cert-revocation-crl-ocsp.md](31-cert-revocation-crl-ocsp.md) |
+| 32 | Web-based operator-cert issuance UI (admin dashboard action) | Pending | P3 | [32-web-cert-issuance-ui.md](32-web-cert-issuance-ui.md) |
+| 33 | Per-operator accountability — JWT `required_cn` bound to cert CN | Pending | P2 | [33-per-operator-accountability.md](33-per-operator-accountability.md) |
+| 34 | WebAuthn / FIDO2 — hardware-bound keys mitigate compromised-browser risk | Pending | P2 | [34-webauthn-fido2.md](34-webauthn-fido2.md) |
 
 ### Priority definitions
 

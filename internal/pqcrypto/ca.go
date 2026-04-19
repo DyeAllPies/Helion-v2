@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -180,6 +181,104 @@ func (ca *CA) TLSConfig(certPEM, keyPEM []byte) (*tls.Config, error) {
 		ClientAuth:   tls.RequireAnyClientCert,
 		MinVersion:   tls.VersionTLS13,
 	}, nil
+}
+
+// IssueOperatorCert signs a new ECDSA P-256 client certificate for a
+// dashboard operator (feature 27 — browser mTLS).
+//
+// Separate from IssueNodeCert because:
+//
+//   - ExtKeyUsage is ClientAuth ONLY (no ServerAuth). An operator
+//     cert must never accidentally be usable to stand up a fake
+//     server. IssueNodeCert carries both because node gRPC is mTLS
+//     and nodes can act as clients OR servers; operators can only
+//     ever be clients of the coordinator.
+//   - No DNS/IP SANs. An operator cert is not bound to a host; the
+//     Subject CN is the only operator identity the coordinator
+//     reads. Adding DNS SANs would suggest a host binding that
+//     doesn't exist.
+//   - TTL is longer (default 90 days) because operators can't
+//     trivially re-issue the way a node can on every restart.
+//     Configurable via HELION_OPERATOR_CERT_TTL_DAYS.
+//
+// cn is the operator's identity string — used verbatim as the cert
+// Subject CN and later as the `operator_cn` audit detail. Must be
+// non-empty and NUL-free; caller is expected to pass a stable
+// operator identifier (e.g. "alice@ops").
+//
+// Returns PEM-encoded cert + PEM-encoded EC private key. The CLI
+// at cmd/helion-issue-op-cert/ bundles these into a PKCS#12 file
+// for browser import.
+func (ca *CA) IssueOperatorCert(cn string, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
+	if ca.key == nil {
+		return nil, nil, errors.New("IssueOperatorCert: CA is read-only (no private key)")
+	}
+	if cn == "" {
+		return nil, nil, errors.New("IssueOperatorCert: CommonName is required")
+	}
+	if strings.ContainsRune(cn, '\x00') {
+		return nil, nil, errors.New("IssueOperatorCert: CommonName must not contain NUL")
+	}
+	if ttl <= 0 {
+		ttl = envDuration("HELION_OPERATOR_CERT_TTL_DAYS", 90, 24*time.Hour)
+	}
+	// Sanity cap on TTL: refuse certs that outlive the CA itself.
+	// Operators rotate; forever-valid certs are an unreviewable
+	// access grant.
+	if caRemaining := time.Until(ca.Cert.NotAfter); ttl > caRemaining {
+		ttl = caRemaining
+	}
+	if ttl <= 0 {
+		return nil, nil, errors.New("IssueOperatorCert: CA cert is expired; re-issue CA before minting operator certs")
+	}
+
+	opKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			Organization: []string{"Helion Cluster"},
+			OrganizationalUnit: []string{"Operators"},
+			CommonName:   cn,
+		},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().Add(ttl),
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, ca.Cert, &opKey.PublicKey, ca.key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create operator cert: %w", err)
+	}
+
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+
+	keyDER, err := x509.MarshalECPrivateKey(opKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return certPEM, keyPEM, nil
+}
+
+// ClientCertPool returns an x509.CertPool containing the CA cert,
+// suitable for use as tls.Config.ClientCAs when the coordinator
+// wants to verify operator client certificates on the REST listener
+// (feature 27). Node certs and operator certs share the same CA;
+// the distinction is made by ExtKeyUsage and the `operator_cn`
+// extraction in clientCertMiddleware.
+//
+// Returns a fresh pool on every call so a caller mutating the pool
+// (e.g. adding additional operator CAs for federation) cannot
+// poison the CA instance.
+func (ca *CA) ClientCertPool() *x509.CertPool {
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(ca.CertPEM)
+	return pool
 }
 
 // NodeTLSConfig returns a tls.Config for a node agent (client side).

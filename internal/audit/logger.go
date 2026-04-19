@@ -99,6 +99,28 @@ const (
 	//                             secret on which jobs?" show up.
 	EventSecretRevealed     = "secret_revealed"
 	EventSecretRevealReject = "secret_reveal_reject"
+
+	// Feature 27 — browser mTLS for dashboard operators.
+	//
+	//   EventOperatorCertIssued — admin used
+	//     POST /admin/operator-certs to mint a new client cert.
+	//     Detail: common_name, serial_hex, fingerprint_hex,
+	//     not_before, not_after. Never carries the private key or
+	//     PKCS#12 password — those are one-shot response-only.
+	//
+	//   EventOperatorCertReject — same endpoint but the request was
+	//     rejected (bad body, validation failed, issuance failed).
+	//     Detail carries the reject reason + common_name if parsed.
+	//
+	//   EventOperatorCertMissing — fires under
+	//     HELION_REST_CLIENT_CERT_REQUIRED=warn when a cert-less
+	//     request arrives, AND under =on when such a request is
+	//     refused at 401. Used by the staged-rollout workflow:
+	//     `warn` the log, identify operators still on bearer-only,
+	//     then flip to `on`.
+	EventOperatorCertIssued  = "operator_cert_issued"
+	EventOperatorCertReject  = "operator_cert_reject"
+	EventOperatorCertMissing = "operator_cert_missing"
 )
 
 // Event represents a single audit log entry.

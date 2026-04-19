@@ -112,6 +112,23 @@ type Server struct {
 	revealSecretMu       sync.Mutex
 	revealSecretLimiters map[string]*rate.Limiter // keyed by admin subject
 
+	// Feature 27 — per-admin rate limiter on POST /admin/operator-certs.
+	// Issuance is far more expensive than a token issuance (ECDSA
+	// keygen + cert signing + PKCS#12 encode) and the resulting
+	// artefact is a long-lived credential; the limiter is on the
+	// conservative side.
+	issueOpCertMu       sync.Mutex
+	issueOpCertLimiters map[string]*rate.Limiter // keyed by admin subject
+
+	// Feature 27 — CA handle used by the operator-cert issuance
+	// handler. nil on deployments that don't enable it (the legacy
+	// node-only trust path); handler returns 501 in that case.
+	operatorCA clientCertIssuer
+
+	// Feature 27 — client-cert enforcement tier. One of off/warn/on.
+	// See clientCertMiddleware for semantics.
+	clientCertTier clientCertTier
+
 	// analyticsMu protects analyticsLimiters. Per-subject rate limiter on
 	// the /api/analytics/* endpoints to prevent DoS via expensive queries
 	// (PERCENTILE_CONT, date-range scans on job_summary).
@@ -241,6 +258,7 @@ func NewServer(
 		mux:                http.NewServeMux(),
 		tokenIssueLimiters:   make(map[string]*rate.Limiter),
 		revealSecretLimiters: make(map[string]*rate.Limiter),
+		issueOpCertLimiters:  make(map[string]*rate.Limiter),
 		analyticsLimiters:  make(map[string]*rate.Limiter),
 		registryLimiters:   make(map[string]*rate.Limiter),
 		upgrader: websocket.Upgrader{
@@ -309,8 +327,14 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /ws/metrics", s.handleMetricsStream)
 }
 
-// Handler returns the underlying http.Handler for testing.
+// Handler returns the underlying http.Handler for testing. Feature
+// 27: when the client-cert tier is warn or on, the returned handler
+// wraps the mux with clientCertMiddleware so tests see the same
+// enforcement the real Serve/ServeTLS path applies.
 func (s *Server) Handler() http.Handler {
+	if s.clientCertTier != clientCertOff {
+		return http.HandlerFunc(s.clientCertMiddleware(s.mux.ServeHTTP))
+	}
 	return s.mux
 }
 
@@ -377,8 +401,14 @@ func (s *Server) ServeTLS(addr string, cfg *tls.Config) error {
 // server waits for request headers, countering Slowloris-style attacks
 // that trickle headers one byte at a time to hold connection slots open.
 func (s *Server) buildHTTPServer(cfg *tls.Config) *http.Server {
+	// Feature 27 — Handler() applies clientCertMiddleware when the
+	// operator-cert tier is enabled. Applied at the server level
+	// rather than per-route because cert enforcement is a server-
+	// level decision, not a per-endpoint opt-in. Health endpoints
+	// are exempted inside the middleware so load balancers without
+	// client certs can still probe readiness.
 	return &http.Server{
-		Handler:           s.mux,
+		Handler:           s.Handler(),
 		TLSConfig:         cfg,
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,

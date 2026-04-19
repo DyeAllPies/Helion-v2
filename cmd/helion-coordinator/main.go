@@ -449,6 +449,40 @@ func main() {
 			}
 			log.Info("REST listener PQC-compliant", slog.String("kem", "X25519+ML-KEM-768"))
 		}
+		// Feature 27 — browser mTLS for dashboard operators.
+		//
+		//   HELION_REST_CLIENT_CERT_REQUIRED = off  (default; current behaviour)
+		//   HELION_REST_CLIENT_CERT_REQUIRED = warn (audit cert-less requests, still serve)
+		//   HELION_REST_CLIENT_CERT_REQUIRED = on   (reject cert-less requests at 401)
+		//
+		// Malformed values are fatal — defaulting a typo to `off`
+		// silently would be a security regression.
+		//
+		// TLS layer: in warn + on, set ClientAuth to
+		// VerifyClientCertIfGiven so the TLS handshake verifies any
+		// cert the client presents against our CA but does NOT
+		// reject cert-less handshakes at layer 4. The HTTP middleware
+		// then decides whether to serve, warn-audit, or 401 the
+		// request. This keeps /healthz + /readyz reachable without
+		// a cert even in `on` mode (k8s probe ergonomics).
+		clientCertTier, err := api.ParseClientCertTierFromEnv(os.Getenv("HELION_REST_CLIENT_CERT_REQUIRED"))
+		if err != nil {
+			log.Error("HELION_REST_CLIENT_CERT_REQUIRED invalid", slog.Any("err", err))
+			os.Exit(1)
+		}
+		if clientCertTier != api.ClientCertOff {
+			restTLSCfg.ClientAuth = tls.VerifyClientCertIfGiven
+			restTLSCfg.ClientCAs = bundle.CA.ClientCertPool()
+			apiSrv.SetClientCertTier(clientCertTier)
+			apiSrv.SetOperatorCA(bundle.CA)
+			log.Warn("HELION_REST_CLIENT_CERT_REQUIRED active",
+				slog.String("tier", clientCertTier.String()),
+				slog.String("hint", "operators must import a P12 issued via POST /admin/operator-certs"))
+		} else {
+			// Issuance endpoint is still useful without enforcement
+			// (admin can pre-issue certs before flipping to warn/on).
+			apiSrv.SetOperatorCA(bundle.CA)
+		}
 		go func() {
 			log.Info("HTTP API listening (TLS + hybrid KEM)",
 				slog.String("addr", httpAddr),
