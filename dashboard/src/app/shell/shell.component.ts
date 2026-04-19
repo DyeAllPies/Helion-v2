@@ -186,6 +186,10 @@ export class ShellComponent {
   readonly navItems: NavItem[] = [
     { path: '/nodes',   label: 'Nodes',   icon: 'dns'           },
     { path: '/jobs',      label: 'Jobs',      icon: 'work_outline'  },
+    // Feature 22 — submission tab. Placed between Jobs and
+    // Workflows so "here's where runs start" reads naturally
+    // alongside the two resource-list views it produces.
+    { path: '/submit',    label: 'Submit',    icon: 'add_circle_outline' },
     { path: '/workflows', label: 'Workflows', icon: 'account_tree'  },
     { path: '/events',  label: 'Events',  icon: 'bolt'          },
     { path: '/metrics', label: 'Metrics', icon: 'show_chart'    },

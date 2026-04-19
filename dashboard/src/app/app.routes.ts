@@ -92,6 +92,36 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/ml/ml-pipeline-detail.component').then(m => m.MlPipelineDetailComponent),
       },
+      // Feature 22 — submission tab. Parent loads the shell (tab
+      // bar + outlet), children render the per-tab form. Step 1
+      // ships placeholders under each tab; later steps replace
+      // them with the real forms without touching routing.
+      {
+        path: 'submit',
+        loadComponent: () =>
+          import('./features/submit/submit-shell.component').then(m => m.SubmitShellComponent),
+        children: [
+          { path: '', redirectTo: 'job', pathMatch: 'full' },
+          {
+            path: 'job',
+            data: { tab: 'job' },
+            loadComponent: () =>
+              import('./features/submit/submit-placeholder.component').then(m => m.SubmitPlaceholderComponent),
+          },
+          {
+            path: 'workflow',
+            data: { tab: 'workflow' },
+            loadComponent: () =>
+              import('./features/submit/submit-placeholder.component').then(m => m.SubmitPlaceholderComponent),
+          },
+          {
+            path: 'ml-workflow',
+            data: { tab: 'ml-workflow' },
+            loadComponent: () =>
+              import('./features/submit/submit-placeholder.component').then(m => m.SubmitPlaceholderComponent),
+          },
+        ],
+      },
     ],
   },
   { path: '**', redirectTo: '' },

@@ -37,6 +37,13 @@ relates to `audits/` and `deferred/`.
 | ~~19~~ | ~~ML — End-to-end iris demo~~ | **Implemented + acceptance-green (2026-04-18)**; moved to [`implemented/19-ml-end-to-end-demo.md`](implemented/19-ml-end-to-end-demo.md) | P1 | — |
 | ~~20~~ | ~~ML — Documentation~~ | **Implemented**; moved to [`implemented/20-ml-documentation.md`](implemented/20-ml-documentation.md) | P2 | — |
 | ~~21~~ | ~~ML — MNIST local E2E (progression-observing)~~ | **Implemented** (six tests green locally; also fixed a hidden 10 s dispatch RPC ceiling); moved to [`implemented/21-ml-mnist-e2e-local.md`](implemented/21-ml-mnist-e2e-local.md) | P2 | — |
+| 22 | Dashboard submission tab (jobs / workflows / ML workflows) | Pending (depends on 23-26) | P1 | [22-ui-submission-tab.md](22-ui-submission-tab.md) |
+| 23 | Hybrid-PQC on coordinator REST + WebSocket listener | Pending | P1 | [23-rest-hybrid-pqc.md](23-rest-hybrid-pqc.md) |
+| 24 | Dry-run preflight (`?dry_run=true` on submit endpoints) | Pending | P1 | [24-dry-run-preflight.md](24-dry-run-preflight.md) |
+| 25 | Dangerous-env denylist (`LD_*`, `DYLD_*`, `GCONV_PATH`, …) | Pending | P1 | [25-env-var-denylist.md](25-env-var-denylist.md) |
+| 26 | Secret env-var support (redact on GET + scrub audit) | Pending | P1 | [26-secret-env-vars.md](26-secret-env-vars.md) |
+| 27 | Browser mTLS for dashboard operators (opt-in; depends on 23) | Pending | P2 | [27-browser-mtls.md](27-browser-mtls.md) |
+| 28 | Unified analytics sink — capture every interesting event | Pending | P2 | [28-analytics-unified-sink.md](28-analytics-unified-sink.md) |
 
 ### Priority definitions
 
