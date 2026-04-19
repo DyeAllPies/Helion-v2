@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -100,6 +101,22 @@ func (s *WorkflowStore) Start(ctx context.Context, workflowID string, jobs *JobS
 			// materialised Job so GET /jobs/{wf-id}/{name} redacts the
 			// same values the workflow submit declared.
 			SecretKeys: wj.SecretKeys,
+			// Feature 36 — inherit the workflow's owner onto every
+			// child job. Feature 37's authz engine reads
+			// Job.OwnerPrincipal, so per-child ownership must match
+			// the parent workflow's owner or a legitimate submitter
+			// would lose access to their own workflow's children.
+			// Note: this runs in the JobStore.Submit path called
+			// from WorkflowStore.Start — the acting principal for
+			// audit purposes is service:workflow_runner, but the
+			// resource owner stays the workflow's submitter.
+			OwnerPrincipal: w.OwnerPrincipal,
+			// SubmittedBy also inherits for back-compat with the
+			// AUDIT L1 pre-feature-37 RBAC check. Legacy workflows
+			// (before feature 36) have empty OwnerPrincipal and
+			// empty SubmittedBy; the backfill on load synthesises a
+			// sensible value for both.
+			SubmittedBy: principal.SubjectFromID(w.OwnerPrincipal),
 		}
 
 		if err := jobs.Submit(ctx, job); err != nil {

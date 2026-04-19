@@ -346,6 +346,84 @@ func ParseID(id string) (Kind, string, error) {
 	return k, id[colon+1:], nil
 }
 
+// SubjectFromID extracts the bare-string "subject" that the
+// pre-feature-36 SubmittedBy / CreatedBy fields used to carry.
+// Feature 36 stamps OwnerPrincipal as the authoritative value;
+// the legacy bare fields stay populated for one release as
+// back-compat aliases. This helper centralises the
+// "strip the kind prefix" step both directions of that
+// aliasing need.
+//
+// Input is a Principal ID (e.g. "user:alice",
+// "operator:alice@ops", "anonymous"). Output is the suffix
+// ("alice", "alice@ops"). The anonymous sentinel returns "".
+// An unparseable / prefixless ID returns the input verbatim —
+// keeps back-compat with test fixtures that construct Principal
+// IDs by hand.
+//
+// For a Workflow-owned child Job: `SubjectFromID(wf.OwnerPrincipal)`
+// yields the same string the pre-feature-36 workflow runner
+// stamped into `Job.SubmittedBy`, so the AUDIT L1 RBAC check
+// keeps working during the migration window.
+func SubjectFromID(id string) string {
+	if id == "" || id == "anonymous" {
+		return ""
+	}
+	if colon := stringsIndexByte(id, ':'); colon > 0 {
+		return id[colon+1:]
+	}
+	return id
+}
+
+// LegacyOwnerID is the sentinel OwnerPrincipal value stamped onto
+// records that predate feature 36 and have no recoverable original
+// owner (no SubmittedBy / CreatedBy to synthesise a "user:<sub>"
+// ID from). Feature 37's policy evaluator treats records owned by
+// the legacy sentinel as admin-only — the same fail-closed
+// behaviour pre-feature-36 AUDIT L1 gave for empty SubmittedBy.
+//
+// The ID format deliberately ends in ":" (no suffix) so
+// ParseID classifies it as malformed — nothing in the regular
+// Principal hierarchy can collide with it, and no real user or
+// service can spoof the sentinel because every legitimate
+// constructor produces a non-empty suffix.
+const LegacyOwnerID = "legacy:"
+
+// OwnerFromLegacy synthesises an OwnerPrincipal ID for a record
+// loaded from storage that has no OwnerPrincipal yet (persisted
+// before feature 36 shipped).
+//
+// Precedence:
+//  1. If `legacySubject` is non-empty → "user:<legacySubject>".
+//     Pre-feature-36 SubmittedBy / CreatedBy only ever held a
+//     bare JWT subject (there was no Kind plumbing in those
+//     fields), so "user:" is the only safe Kind to synthesise.
+//  2. Empty legacy subject → LegacyOwnerID.
+//
+// Not used for live creation paths — handleSubmitJob and
+// friends stamp OwnerPrincipal directly from
+// `principal.FromContext(ctx).ID`. This helper exists purely
+// for the load-time backfill.
+func OwnerFromLegacy(legacySubject string) string {
+	if legacySubject == "" {
+		return LegacyOwnerID
+	}
+	return prefix[KindUser] + legacySubject
+}
+
+// stringsIndexByte is a tiny local duplicate of strings.IndexByte
+// so this package has no string-lib import. Parseability + the
+// hot-path matter here since authMiddleware calls these helpers on
+// every authenticated request.
+func stringsIndexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
 // IsAdmin returns true iff the Principal is authorised for
 // admin actions. Kept here (rather than inlined at every call
 // site) so the admin rule has exactly one definition and a

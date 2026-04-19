@@ -23,6 +23,8 @@ import (
 	"sort"
 
 	badger "github.com/dgraph-io/badger/v4"
+
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 )
 
 // BadgerStore satisfies Store against a shared *badger.DB.
@@ -91,6 +93,7 @@ func (s *BadgerStore) GetDataset(name, version string) (*Dataset, error) {
 			if err := json.Unmarshal(v, &d); err != nil {
 				return fmt.Errorf("GetDataset: unmarshal: %w", err)
 			}
+			backfillDatasetOwner(&d)
 			out = &d
 			return nil
 		})
@@ -197,6 +200,7 @@ func (s *BadgerStore) loadAllDatasets() ([]*Dataset, error) {
 			}); err != nil {
 				return fmt.Errorf("loadAllDatasets: unmarshal %q: %w", it.Item().Key(), err)
 			}
+			backfillDatasetOwner(&d)
 			out = append(out, &d)
 		}
 		return nil
@@ -240,6 +244,7 @@ func (s *BadgerStore) GetModel(name, version string) (*Model, error) {
 			if err := json.Unmarshal(v, &m); err != nil {
 				return fmt.Errorf("GetModel: unmarshal: %w", err)
 			}
+			backfillModelOwner(&m)
 			out = &m
 			return nil
 		})
@@ -317,11 +322,35 @@ func (s *BadgerStore) loadModelsPrefixed(prefix []byte) ([]*Model, error) {
 			}); err != nil {
 				return fmt.Errorf("loadModelsPrefixed: unmarshal %q: %w", it.Item().Key(), err)
 			}
+			backfillModelOwner(&m)
 			out = append(out, &m)
 		}
 		return nil
 	})
 	return out, err
+}
+
+// backfillDatasetOwner synthesises an OwnerPrincipal for a Dataset
+// loaded from storage that predates feature 36. CreatedBy is the
+// pre-feature-36 owner proxy; when empty we fall through to the
+// LegacyOwnerID sentinel so feature 37's policy evaluator gates
+// access admin-only. Transient — we do not rewrite the Badger
+// entry here; the next mutation naturally persists the synthesised
+// value if the record is ever re-saved.
+func backfillDatasetOwner(d *Dataset) {
+	if d == nil || d.OwnerPrincipal != "" {
+		return
+	}
+	d.OwnerPrincipal = principal.OwnerFromLegacy(d.CreatedBy)
+}
+
+// backfillModelOwner is the Model-side counterpart to
+// backfillDatasetOwner. See that helper for backfill semantics.
+func backfillModelOwner(m *Model) {
+	if m == nil || m.OwnerPrincipal != "" {
+		return
+	}
+	m.OwnerPrincipal = principal.OwnerFromLegacy(m.CreatedBy)
 }
 
 // pageBounds converts (page, size, total) into a safe slice range

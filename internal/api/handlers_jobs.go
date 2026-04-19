@@ -19,6 +19,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -622,6 +623,18 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 			job.SubmittedBy = claims.Subject
 		}
 	}
+	// Feature 36 — stamp the fully-qualified Principal ID as the
+	// resource's owner. SubmittedBy above keeps its legacy shape
+	// (bare JWT subject) for back-compat with the AUDIT L1 RBAC
+	// check in handleGetJob; OwnerPrincipal is the new authoritative
+	// field feature 37's authz engine will consult.
+	//
+	// We stamp EVEN when auth is disabled (dev mode) — the resulting
+	// ID is "anonymous", which feature 37 refuses for non-trivial
+	// actions. Stamping late, after every validator has run, means
+	// a rejected request never writes an owner we then have to
+	// clean up.
+	job.OwnerPrincipal = principal.FromContext(r.Context()).ID
 
 	// Feature 25 — dynamic-loader env-var denylist. Must run AFTER the
 	// pure shape checks (validateSubmitRequest already handled count +
@@ -665,10 +678,14 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	// real response without any state change.
 	if dryRun {
 		if s.audit != nil {
-			if err := s.audit.Log(r.Context(), audit.EventJobDryRun, actor, stampOperatorCN(r.Context(), map[string]interface{}{
+			dryDetails := map[string]interface{}{
 				"job_id":  job.ID,
 				"command": job.Command,
-			})); err != nil {
+			}
+			if job.OwnerPrincipal != "" {
+				dryDetails["resource_owner"] = job.OwnerPrincipal // Feature 36
+			}
+			if err := s.audit.Log(r.Context(), audit.EventJobDryRun, actor, stampOperatorCN(r.Context(), dryDetails)); err != nil {
 				logAuditErr(false, "job.dry_run", err)
 			}
 		}
@@ -707,6 +724,13 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		}
 		if sk := auditSafeSecretKeys(job.SecretKeys); len(sk) > 0 {
 			details["secret_keys"] = sk
+		}
+		// Feature 36 — `resource_owner` is the principal ID the
+		// action is acting ON (the job's owner). Distinct from
+		// `actor` (who did it) because service-principals will
+		// later perform state transitions on user-owned jobs.
+		if job.OwnerPrincipal != "" {
+			details["resource_owner"] = job.OwnerPrincipal
 		}
 		if err := s.audit.Log(r.Context(), audit.EventJobSubmit, actor, stampOperatorCN(r.Context(), details)); err != nil {
 			logAuditErr(false, "job.submit", err)

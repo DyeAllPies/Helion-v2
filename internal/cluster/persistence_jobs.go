@@ -11,6 +11,7 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -45,6 +46,20 @@ func (p *BadgerJSONPersister) LoadAllJobs(_ context.Context) ([]*cpb.Job, error)
 				return json.Unmarshal(v, &j)
 			}); err != nil {
 				return fmt.Errorf("LoadAllJobs unmarshal %q: %w", it.Item().Key(), err)
+			}
+			// Feature 36 — backfill OwnerPrincipal for records
+			// that predate the field. SubmittedBy is the
+			// authoritative pre-feature-36 owner proxy (set by
+			// the API layer on submit). If that's also empty,
+			// fall through to the legacy sentinel so feature
+			// 37's policy evaluator fails closed. The backfill
+			// runs in-memory only — we do NOT rewrite the
+			// Badger entry here; the next state transition
+			// (dispatch, finish, retry, cancel) will persist
+			// the synthesised value as a side effect of the
+			// existing SaveJob call path.
+			if j.OwnerPrincipal == "" {
+				j.OwnerPrincipal = principal.OwnerFromLegacy(j.SubmittedBy)
 			}
 			jobs = append(jobs, &j)
 		}

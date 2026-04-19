@@ -25,6 +25,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	"github.com/DyeAllPies/Helion-v2/internal/registry"
 )
 
@@ -106,6 +107,8 @@ func (s *Server) handleRegisterDataset(w http.ResponseWriter, r *http.Request) {
 		Tags:      req.Tags,
 		CreatedAt: time.Now().UTC(),
 		CreatedBy: actor,
+		// Feature 36 — typed Principal for feature 37's authz.
+		OwnerPrincipal: principal.FromContext(r.Context()).ID,
 	}
 	if err := registry.ValidateDataset(d); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -122,12 +125,16 @@ func (s *Server) handleRegisterDataset(w http.ResponseWriter, r *http.Request) {
 	// a version exists without adding real value.
 	if dryRun {
 		if s.audit != nil {
-			if aerr := s.audit.Log(r.Context(), audit.EventDatasetDryRun, actor, map[string]any{
+			dryDetails := map[string]any{
 				"name":       d.Name,
 				"version":    d.Version,
 				"uri":        d.URI,
 				"size_bytes": d.SizeBytes,
-			}); aerr != nil {
+			}
+			if d.OwnerPrincipal != "" {
+				dryDetails["resource_owner"] = d.OwnerPrincipal // Feature 36
+			}
+			if aerr := s.audit.Log(r.Context(), audit.EventDatasetDryRun, actor, dryDetails); aerr != nil {
 				logAuditErr(false, "dataset.dry_run", aerr)
 			}
 		}
@@ -154,12 +161,16 @@ func (s *Server) handleRegisterDataset(w http.ResponseWriter, r *http.Request) {
 	// Audit + event — side-effects after the durable write so a
 	// persist failure doesn't emit a misleading "registered" signal.
 	if s.audit != nil {
-		if aerr := s.audit.Log(r.Context(), "dataset.registered", actor, map[string]any{
+		details := map[string]any{
 			"name":       d.Name,
 			"version":    d.Version,
 			"uri":        d.URI,
 			"size_bytes": d.SizeBytes,
-		}); aerr != nil {
+		}
+		if d.OwnerPrincipal != "" {
+			details["resource_owner"] = d.OwnerPrincipal // Feature 36
+		}
+		if aerr := s.audit.Log(r.Context(), "dataset.registered", actor, details); aerr != nil {
 			logAuditErr(false, "dataset.registered", aerr)
 		}
 	}
@@ -293,6 +304,8 @@ func (s *Server) handleRegisterModel(w http.ResponseWriter, r *http.Request) {
 		Tags:        req.Tags,
 		CreatedAt:   time.Now().UTC(),
 		CreatedBy:   actor,
+		// Feature 36 — typed Principal for feature 37's authz.
+		OwnerPrincipal: principal.FromContext(r.Context()).ID,
 	}
 	if req.SourceDataset != nil {
 		m.SourceDataset = registry.DatasetRef{
@@ -310,12 +323,16 @@ func (s *Server) handleRegisterModel(w http.ResponseWriter, r *http.Request) {
 	// without persisting or publishing the model.registered event.
 	if dryRun {
 		if s.audit != nil {
-			if aerr := s.audit.Log(r.Context(), audit.EventModelDryRun, actor, map[string]any{
+			dryDetails := map[string]any{
 				"name":          m.Name,
 				"version":       m.Version,
 				"uri":           m.URI,
 				"source_job_id": m.SourceJobID,
-			}); aerr != nil {
+			}
+			if m.OwnerPrincipal != "" {
+				dryDetails["resource_owner"] = m.OwnerPrincipal // Feature 36
+			}
+			if aerr := s.audit.Log(r.Context(), audit.EventModelDryRun, actor, dryDetails); aerr != nil {
 				logAuditErr(false, "model.dry_run", aerr)
 			}
 		}
@@ -340,12 +357,16 @@ func (s *Server) handleRegisterModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.audit != nil {
-		if aerr := s.audit.Log(r.Context(), "model.registered", actor, map[string]any{
+		details := map[string]any{
 			"name":          m.Name,
 			"version":       m.Version,
 			"uri":           m.URI,
 			"source_job_id": m.SourceJobID,
-		}); aerr != nil {
+		}
+		if m.OwnerPrincipal != "" {
+			details["resource_owner"] = m.OwnerPrincipal // Feature 36
+		}
+		if aerr := s.audit.Log(r.Context(), "model.registered", actor, details); aerr != nil {
 			logAuditErr(false, "model.registered", aerr)
 		}
 	}
@@ -468,30 +489,32 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 
 func datasetToResponse(d *registry.Dataset) DatasetResponse {
 	return DatasetResponse{
-		Name:      d.Name,
-		Version:   d.Version,
-		URI:       d.URI,
-		SizeBytes: d.SizeBytes,
-		SHA256:    d.SHA256,
-		Tags:      d.Tags,
-		CreatedAt: d.CreatedAt,
-		CreatedBy: d.CreatedBy,
+		Name:           d.Name,
+		Version:        d.Version,
+		URI:            d.URI,
+		SizeBytes:      d.SizeBytes,
+		SHA256:         d.SHA256,
+		Tags:           d.Tags,
+		CreatedAt:      d.CreatedAt,
+		CreatedBy:      d.CreatedBy,
+		OwnerPrincipal: d.OwnerPrincipal, // Feature 36
 	}
 }
 
 func modelToResponse(m *registry.Model) ModelResponse {
 	resp := ModelResponse{
-		Name:        m.Name,
-		Version:     m.Version,
-		URI:         m.URI,
-		Framework:   m.Framework,
-		SourceJobID: m.SourceJobID,
-		Metrics:     m.Metrics,
-		SizeBytes:   m.SizeBytes,
-		SHA256:      m.SHA256,
-		Tags:        m.Tags,
-		CreatedAt:   m.CreatedAt,
-		CreatedBy:   m.CreatedBy,
+		Name:           m.Name,
+		Version:        m.Version,
+		URI:            m.URI,
+		Framework:      m.Framework,
+		SourceJobID:    m.SourceJobID,
+		Metrics:        m.Metrics,
+		SizeBytes:      m.SizeBytes,
+		SHA256:         m.SHA256,
+		Tags:           m.Tags,
+		CreatedAt:      m.CreatedAt,
+		CreatedBy:      m.CreatedBy,
+		OwnerPrincipal: m.OwnerPrincipal, // Feature 36
 	}
 	if m.SourceDataset.Name != "" || m.SourceDataset.Version != "" {
 		resp.SourceDataset = &DatasetRefRequest{

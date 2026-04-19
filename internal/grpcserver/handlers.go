@@ -540,21 +540,29 @@ func (s *Server) ReportServiceEvent(
 		return &pb.Ack{Ok: true}, nil
 	}
 
-	// Reject cross-node poisoning attempts.
+	// Reject cross-node poisoning attempts. Also captures the
+	// job's OwnerPrincipal (feature 36) so the service-registry
+	// record inherits it — feature 37's authz on
+	// GET /api/services/{job_id} reads the endpoint's owner, which
+	// must match the job's owner for the ACL to be coherent.
+	var ownerPrincipal string
 	if s.jobs != nil {
 		job, err := s.jobs.Get(evt.JobId)
-		if err == nil && job.NodeID != "" && evt.NodeId != "" && job.NodeID != evt.NodeId {
-			s.log.Warn("ReportServiceEvent node_id mismatch — rejecting",
-				slog.String("job_id", evt.JobId),
-				slog.String("dispatched_to", job.NodeID),
-				slog.String("reported_by", evt.NodeId))
-			if s.audit != nil {
-				if aerr := s.audit.LogSecurityViolation(ctx, evt.NodeId, evt.JobId, "service_event_node_id_mismatch"); aerr != nil {
-					s.log.Warn("audit node mismatch failed", slog.Any("err", aerr))
+		if err == nil {
+			if job.NodeID != "" && evt.NodeId != "" && job.NodeID != evt.NodeId {
+				s.log.Warn("ReportServiceEvent node_id mismatch — rejecting",
+					slog.String("job_id", evt.JobId),
+					slog.String("dispatched_to", job.NodeID),
+					slog.String("reported_by", evt.NodeId))
+				if s.audit != nil {
+					if aerr := s.audit.LogSecurityViolation(ctx, evt.NodeId, evt.JobId, "service_event_node_id_mismatch"); aerr != nil {
+						s.log.Warn("audit node mismatch failed", slog.Any("err", aerr))
+					}
 				}
+				return nil, status.Errorf(codes.PermissionDenied,
+					"service event for job %s was reported by the wrong node", evt.JobId)
 			}
-			return nil, status.Errorf(codes.PermissionDenied,
-				"service event for job %s was reported by the wrong node", evt.JobId)
+			ownerPrincipal = job.OwnerPrincipal
 		}
 	}
 
@@ -563,13 +571,14 @@ func (s *Server) ReportServiceEvent(
 		occurred = evt.OccurredAt.AsTime()
 	}
 	s.services.Upsert(cpb.ServiceEndpoint{
-		JobID:       evt.JobId,
-		NodeID:      evt.NodeId,
-		NodeAddress: evt.NodeAddress,
-		Port:        evt.Port,
-		HealthPath:  evt.HealthPath,
-		Ready:       evt.Ready,
-		UpdatedAt:   occurred,
+		JobID:          evt.JobId,
+		NodeID:         evt.NodeId,
+		NodeAddress:    evt.NodeAddress,
+		Port:           evt.Port,
+		HealthPath:     evt.HealthPath,
+		Ready:          evt.Ready,
+		UpdatedAt:      occurred,
+		OwnerPrincipal: ownerPrincipal,
 	})
 
 	eventName := "service.ready"

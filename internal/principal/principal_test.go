@@ -286,3 +286,32 @@ func TestPrincipal_SubjectWithColon(t *testing.T) {
 		t.Errorf("suffix = %q, want 'evil:alice'", suffix)
 	}
 }
+
+// ── Feature 36 legacy backfill helper ───────────────────────────────────────
+
+func TestPrincipal_OwnerFromLegacy(t *testing.T) {
+	cases := []struct {
+		name          string
+		legacySubject string
+		want          string
+	}{
+		{"empty -> legacy sentinel", "", principal.LegacyOwnerID},
+		{"bare subject -> user:alice", "alice", "user:alice"},
+		{"email-shaped subject", "alice@ops", "user:alice@ops"},
+		// Subject that already contains a colon: we do NOT re-parse
+		// it to avoid silent round-trip ambiguity — we always prefix
+		// with "user:". The resulting ID still parses under ParseID
+		// (first-colon split) but the suffix carries the original
+		// payload verbatim, which is correct for a bare pre-35
+		// subject that happened to contain a colon.
+		{"colon-containing subject", "evil:alice", "user:evil:alice"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := principal.OwnerFromLegacy(c.legacySubject); got != c.want {
+				t.Errorf("OwnerFromLegacy(%q) = %q; want %q",
+					c.legacySubject, got, c.want)
+			}
+		})
+	}
+}

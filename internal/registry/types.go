@@ -29,7 +29,16 @@ type Dataset struct {
 	SHA256    string            `json:"sha256,omitempty"`
 	Tags      map[string]string `json:"tags,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
-	CreatedBy string            `json:"created_by"` // JWT subject of the caller
+	CreatedBy string            `json:"created_by"` // JWT subject of the caller (pre-feature-36 legacy field)
+
+	// Feature 36 — fully-qualified feature-35 principal ID of the
+	// registering actor ("user:alice", "operator:alice@ops", ...).
+	// Immutable after creation. Feature 37's authz engine will
+	// gate dataset read/delete on OwnerPrincipal vs the calling
+	// principal. Legacy records (pre-feature-36) backfill from
+	// CreatedBy → "user:<CreatedBy>" or "legacy:" if CreatedBy is
+	// empty, applied on load in the registry store.
+	OwnerPrincipal string `json:"owner_principal,omitempty"`
 }
 
 // Model is a registered metadata record pointing at artifact bytes
@@ -50,7 +59,12 @@ type Model struct {
 	SHA256        string            `json:"sha256,omitempty"`
 	Tags          map[string]string `json:"tags,omitempty"`
 	CreatedAt     time.Time         `json:"created_at"`
-	CreatedBy     string            `json:"created_by"`
+	CreatedBy     string            `json:"created_by"` // pre-feature-36 legacy field
+
+	// Feature 36 — fully-qualified feature-35 principal ID of the
+	// registering actor. See Dataset.OwnerPrincipal for the full
+	// contract.
+	OwnerPrincipal string `json:"owner_principal,omitempty"`
 }
 
 // DatasetRef is a lineage pointer a Model carries back to the

@@ -35,6 +35,10 @@ type DatasetResponse struct {
 	Tags      map[string]string `json:"tags,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
 	CreatedBy string            `json:"created_by"`
+	// Feature 36 — authoritative owner principal ID. Same format as
+	// JobResponse.OwnerPrincipal. "legacy:" for pre-feature-36
+	// records.
+	OwnerPrincipal string `json:"owner_principal,omitempty"`
 }
 
 // DatasetListResponse paginates GET /api/datasets.
@@ -81,6 +85,9 @@ type ModelResponse struct {
 	Tags          map[string]string  `json:"tags,omitempty"`
 	CreatedAt     time.Time          `json:"created_at"`
 	CreatedBy     string             `json:"created_by"`
+	// Feature 36 — authoritative owner principal ID. See
+	// DatasetResponse.OwnerPrincipal.
+	OwnerPrincipal string `json:"owner_principal,omitempty"`
 }
 
 // ModelListResponse paginates GET /api/models.

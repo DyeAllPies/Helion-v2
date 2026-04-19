@@ -409,6 +409,71 @@ for the slice reconciliation.
 
 ---
 
+## 5b. Resource ownership (feature 36)
+
+Every persisted stateful type carries a single authoritative
+owner field — `OwnerPrincipal`, formatted as the
+feature-35 principal ID that created it (`user:alice`,
+`operator:alice@ops`, `service:workflow_runner`, or the
+`legacy:` sentinel for pre-feature-36 records). Feature 37's
+policy engine will compare this field against the caller's
+Principal; feature 38 layers sharing on top.
+
+### Types with an owner
+
+| Type | Where it's stamped |
+|---|---|
+| `cpb.Job` | `handleSubmitJob` stamps `principal.FromContext(ctx).ID` at create time. Workflow-materialised jobs inherit `Workflow.OwnerPrincipal` via `WorkflowStore.Start`. |
+| `cpb.Workflow` | `handleSubmitWorkflow` stamps `principal.FromContext(ctx).ID`. |
+| `registry.Dataset` / `registry.Model` | `handleRegisterDataset` / `handleRegisterModel` stamp `principal.FromContext(ctx).ID`. |
+| `cpb.ServiceEndpoint` | `gRPC ReportServiceEvent` reads the owning `cpb.Job`'s `OwnerPrincipal` and passes it to `services.Upsert` on first `ready` event, so the in-memory endpoint map carries an owner. |
+
+### Safety properties
+
+- **Immutable after creation.** Every state transition, retry,
+  and cancel path preserves `OwnerPrincipal`. `service:retry_loop`
+  re-driving a failed user job does NOT transfer ownership to
+  the retry loop — the loop is the actor in audit, but the
+  resource owner stays the original submitter. Guarded by
+  `TestOwnerPrincipal_JobSubmitPersistsAndSurvivesTransitions`
+  + the workflow / cancel counterparts.
+- **Legacy fail-closed.** Records persisted before feature 36
+  shipped backfill on load: `SubmittedBy=<sub>` → `user:<sub>`;
+  missing both legacy proxies → `principal.LegacyOwnerID`
+  (`legacy:`). Feature 37 will treat `legacy:`-owned resources
+  as admin-only — the same fail-closed behaviour the
+  pre-feature-36 AUDIT L1 check produced for empty SubmittedBy.
+- **Audit distinguishes actor from resource owner.** Create-path
+  audit events (`job_submit`, `workflow_dry_run`,
+  `dataset.registered`, `model.registered`, etc.) now include
+  a `resource_owner` detail alongside `actor`. Reviewers can
+  tell "who did it" (actor) from "who owns the target"
+  (resource_owner); identical for user-driven creates,
+  divergent when a service principal acts on a user-owned
+  resource.
+- **Back-compat aliases.** `SubmittedBy` on `cpb.Job` and
+  `CreatedBy` on registry types stay on the wire for one
+  release. External tooling that reads the legacy fields keeps
+  working; the typed `owner_principal` is the authoritative
+  value for authz.
+
+### What feature 36 does NOT do
+
+- **It is not authorization.** It provides the field feature 37's
+  policy engine will compare against the Principal. Until
+  feature 37 lands, existing RBAC checks (`claims.Subject ==
+  job.SubmittedBy`) stay unchanged.
+- **No ownership transfer.** A `/chown`-style endpoint is
+  deferred; feature 38's share mechanism covers real-world
+  delegation without breaking the immutability invariant.
+- **No multi-owner.** Revisited if a team-scoped use case
+  appears.
+
+See [`docs/planned-features/implemented/36-resource-ownership.md`](planned-features/implemented/36-resource-ownership.md)
+for the slice reconciliation and test inventory.
+
+---
+
 ## 6. Audit logging
 
 Every security and operational event is written to an append-only log in BadgerDB.

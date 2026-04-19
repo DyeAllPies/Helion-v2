@@ -175,7 +175,39 @@ type Job struct {
 	// Old BadgerDB entries without this field deserialize with an empty
 	// string, which yields a 403 for non-admin access (backward-compatible
 	// in the safe direction).
+	//
+	// Feature 36 + deprecation note: SubmittedBy stays on the wire and
+	// in storage for one release as a back-compat alias. The new
+	// authoritative ownership field is OwnerPrincipal (below), which is
+	// prefix-qualified with a Kind ("user:alice", "operator:alice@ops").
+	// feature 37's authz engine reads OwnerPrincipal; the legacy
+	// handleGetJob RBAC check continues to read SubmittedBy until that
+	// slice lands.
 	SubmittedBy string `json:"submitted_by,omitempty"`
+
+	// OwnerPrincipal is the fully-qualified feature-35 principal ID of
+	// whoever created this job. Format is "kind:suffix":
+	// "user:alice", "operator:alice@ops", "node:gpu-01",
+	// "service:dispatcher", "job:wf-42", "anonymous".
+	//
+	// Set by handleSubmitJob (from principal.FromContext) on new
+	// records, and by the workflow Start() path (inherited from
+	// the parent workflow's owner) for materialised workflow jobs.
+	//
+	// IMMUTABLE after creation. Job state transitions, retry
+	// attempts, and workflow cancellations preserve this field. An
+	// operator whose job is retried by service:retry_loop does NOT
+	// lose ownership — the loop acts as the principal performing
+	// the action in audit, but the job's owner stays the original
+	// submitter.
+	//
+	// Legacy records (persisted before feature 36 shipped) are
+	// backfilled on load: Jobs with a SubmittedBy value synthesise
+	// "user:<SubmittedBy>"; Jobs without SubmittedBy get "legacy:".
+	// Feature 37's policy engine refuses non-admin actions on
+	// "legacy:"-owned resources — the same fail-closed behaviour
+	// the pre-feature-36 AUDIT L1 check produced for SubmittedBy==".
+	OwnerPrincipal string `json:"owner_principal,omitempty"`
 
 	// Runtime records which backend executed the job ("go" or "rust").
 	// Set when the node reports the result.
@@ -282,6 +314,14 @@ type ServiceEndpoint struct {
 	HealthPath  string    `json:"health_path"`
 	Ready       bool      `json:"ready"`
 	UpdatedAt   time.Time `json:"updated_at"`
+
+	// Feature 36 — the principal ID of the job's submitter. The
+	// ServiceRegistry inherits this from the owning Job on first
+	// `ready` event so authz (feature 37) can gate
+	// GET /api/services/{job_id} on the caller's relationship to
+	// the underlying job owner. Empty on legacy endpoints from a
+	// coordinator restart where the Job has been removed.
+	OwnerPrincipal string `json:"owner_principal,omitempty"`
 }
 
 // ArtifactOutput is the coordinator-side mirror of pb.ArtifactOutput —
@@ -495,4 +535,12 @@ type Workflow struct {
 	StartedAt time.Time      `json:"started_at,omitempty"`
 	FinishedAt time.Time     `json:"finished_at,omitempty"`
 	Error     string         `json:"error,omitempty"`
+
+	// Feature 36 — fully-qualified feature-35 principal ID of the
+	// workflow's owner. Set by handleSubmitWorkflow on create.
+	// Propagated to every materialised child job at Start().
+	// Immutable after creation; Cancel / transition paths preserve.
+	// Legacy records (pre-feature-36) load as "legacy:" and are
+	// treated by feature 37's policy as admin-only-readable.
+	OwnerPrincipal string `json:"owner_principal,omitempty"`
 }

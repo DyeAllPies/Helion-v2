@@ -11,6 +11,7 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -42,6 +43,14 @@ func (p *BadgerJSONPersister) LoadAllWorkflows(_ context.Context) ([]*cpb.Workfl
 				return json.Unmarshal(v, &w)
 			}); err != nil {
 				return fmt.Errorf("LoadAllWorkflows unmarshal %q: %w", it.Item().Key(), err)
+			}
+			// Feature 36 — backfill OwnerPrincipal for workflows
+			// that predate the field. Workflows have no pre-36
+			// submitter proxy (SubmittedBy never existed on the
+			// Workflow struct), so every legacy record lands on
+			// the fail-closed LegacyOwnerID sentinel.
+			if w.OwnerPrincipal == "" {
+				w.OwnerPrincipal = principal.OwnerFromLegacy("")
 			}
 			workflows = append(workflows, &w)
 		}

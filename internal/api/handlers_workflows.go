@@ -20,6 +20,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/principal"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -91,6 +92,10 @@ type WorkflowResponse struct {
 	StartedAt  string                `json:"started_at,omitempty"`
 	FinishedAt string                `json:"finished_at,omitempty"`
 	Error      string                `json:"error,omitempty"`
+	// Feature 36 — owner principal ID. Same format as
+	// JobResponse.OwnerPrincipal; "legacy:" for pre-feature-36
+	// records.
+	OwnerPrincipal string `json:"owner_principal,omitempty"`
 }
 
 // WorkflowListResponse is the response for GET /workflows.
@@ -254,6 +259,10 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 		ID:   req.ID,
 		Name: req.Name,
 		Jobs: wfJobs,
+		// Feature 36 — stamp the authoritative feature-35 Principal
+		// as owner. Materialised child jobs inherit this at
+		// Start()-time (see cluster/workflow_submit.go).
+		OwnerPrincipal: principal.FromContext(r.Context()).ID,
 	}
 	if req.Priority != nil {
 		wf.Priority = *req.Priority
@@ -274,11 +283,15 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.audit != nil {
-			if err := s.audit.Log(r.Context(), audit.EventWorkflowDryRun, actorFromContext(r.Context()), map[string]interface{}{
+			dryDetails := map[string]interface{}{
 				"workflow_id": wf.ID,
 				"name":        wf.Name,
 				"job_count":   len(wf.Jobs),
-			}); err != nil {
+			}
+			if wf.OwnerPrincipal != "" {
+				dryDetails["resource_owner"] = wf.OwnerPrincipal // Feature 36
+			}
+			if err := s.audit.Log(r.Context(), audit.EventWorkflowDryRun, actorFromContext(r.Context()), dryDetails); err != nil {
 				logAuditErr(false, "workflow.dry_run", err)
 			}
 		}
@@ -445,11 +458,12 @@ type workflowJobStoreIface interface {
 
 func workflowToResponse(wf *cpb.Workflow, jobs workflowJobStoreIface) WorkflowResponse {
 	resp := WorkflowResponse{
-		ID:        wf.ID,
-		Name:      wf.Name,
-		Status:    wf.Status.String(),
-		CreatedAt: wf.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		Error:     wf.Error,
+		ID:             wf.ID,
+		Name:           wf.Name,
+		Status:         wf.Status.String(),
+		CreatedAt:      wf.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		Error:          wf.Error,
+		OwnerPrincipal: wf.OwnerPrincipal, // Feature 36
 	}
 	if !wf.StartedAt.IsZero() {
 		resp.StartedAt = wf.StartedAt.Format("2006-01-02T15:04:05Z07:00")

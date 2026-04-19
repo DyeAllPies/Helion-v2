@@ -116,7 +116,13 @@ type JobResponse struct {
 	CreatedAt      time.Time         `json:"created_at"`
 	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
 	Error          string            `json:"error,omitempty"`
-	SubmittedBy    string            `json:"submitted_by,omitempty"` // AUDIT L1
+	SubmittedBy    string            `json:"submitted_by,omitempty"` // AUDIT L1 — legacy; kept for one release (feature 36)
+	// Feature 36 — fully-qualified feature-35 principal ID of the
+	// job's owner ("user:alice", "operator:alice@ops",
+	// "service:workflow_runner", or the "legacy:" sentinel for
+	// pre-feature-36 records). Clients should prefer this over
+	// SubmittedBy for ownership checks.
+	OwnerPrincipal string            `json:"owner_principal,omitempty"`
 	Priority       uint32            `json:"priority,omitempty"`
 	Attempt        uint32            `json:"attempt,omitempty"`
 	RetryAfter     *time.Time        `json:"retry_after,omitempty"`

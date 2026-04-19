@@ -1,8 +1,8 @@
 # Feature: Resource ownership on every stateful type
 
 **Priority:** P1
-**Status:** Pending
-**Parent slice:** builds on [feature 35 — principal model](35-principal-model.md)
+**Status:** Implemented (2026-04-19)
+**Parent slice:** builds on [feature 35 — principal model](./35-principal-model.md)
 **Affected files:**
 `internal/proto/coordinatorpb/types.go`
 (`OwnerPrincipal` field on `Job`, `Workflow`, `WorkflowJob`,
@@ -33,7 +33,7 @@ on `cpb.Job`. Every other persisted resource (workflows,
 datasets, models, service endpoints) has NOTHING:
 
 - `cpb.Workflow` — no owner field; the
-  [AUDIT L1](../../internal/api/handlers_jobs.go) job-level RBAC
+  [AUDIT L1](../../../internal/api/handlers_jobs.go) job-level RBAC
   check has no workflow equivalent, so any authenticated user
   can read any workflow regardless of who submitted it.
 - `registry.Dataset` / `registry.Model` — `CreatedBy` is
@@ -274,5 +274,86 @@ Invariant guards (regression):
 
 ## Implementation status
 
-_Not started. Planned 2026-04-19 as part of the IAM foundation
-discussed in features 35–38._
+_Implemented 2026-04-19._
+
+### What shipped
+
+- `OwnerPrincipal` field added to `cpb.Job`, `cpb.Workflow`,
+  `cpb.ServiceEndpoint`, `registry.Dataset`, `registry.Model`.
+  Every persisted stateful type now carries an authoritative
+  owner.
+- `handleSubmitJob`, `handleSubmitWorkflow`,
+  `handleRegisterDataset`, `handleRegisterModel` stamp the
+  caller's principal via `principal.FromContext(ctx).ID` at
+  create time. `SubmittedBy` / `CreatedBy` remain populated for
+  one release as a back-compat alias.
+- `WorkflowStore.Start` propagates the workflow's
+  `OwnerPrincipal` to every materialised child `cpb.Job` and
+  synthesises a back-compat `SubmittedBy` from the owner via
+  `principal.SubjectFromID`.
+- `grpcserver.ReportServiceEvent` captures the owning job's
+  `OwnerPrincipal` during the existing node-mismatch fetch and
+  plumbs it onto `services.Upsert` so the in-memory
+  `ServiceEndpoint` inherits owner on first `ready` event.
+- Legacy records are backfilled on load:
+  - `persistence_jobs.LoadAllJobs` synthesises
+    `OwnerPrincipal = "user:<SubmittedBy>"` when the stamp is
+    missing; empty SubmittedBy falls through to the
+    `principal.LegacyOwnerID` sentinel (`"legacy:"`) so
+    feature 37's policy evaluator fails closed.
+  - `persistence_workflows.LoadAllWorkflows` and the registry
+    Dataset/Model loaders apply the same pattern against their
+    legacy proxy fields (`CreatedBy` for registry; no proxy
+    for Workflow → always `legacy:`).
+  - The backfill is in-memory only — we do not rewrite Badger
+    entries. The next state-transition SaveJob / SaveWorkflow
+    naturally persists the synthesised value.
+- Response shapes: `api.JobResponse`, `WorkflowResponse`,
+  `DatasetResponse`, `ModelResponse` expose `owner_principal` as
+  a top-level field. The `SubmittedBy` / `CreatedBy` aliases
+  stay on the wire.
+- Audit events for create paths (`job_submit`, `job_dry_run`,
+  `workflow_dry_run`, `dataset.registered`, `dataset.dry_run`,
+  `model.registered`, `model.dry_run`) include a
+  `resource_owner` detail alongside `actor`. Reviewers can
+  distinguish "who did it" (actor) from "who owns the target
+  resource" (resource_owner), which matters when service
+  principals later drive state transitions on user-owned
+  resources.
+
+### Deviations from plan
+
+- **WorkflowJob.OwnerPrincipal was deliberately skipped.** The
+  spec called for it on every stateful type, but
+  `WorkflowJob` is a DAG-declaration shape that materialises
+  into a `cpb.Job` at Start() time; the Job carries its own
+  `OwnerPrincipal`. Adding the field on the template would
+  introduce two sources of truth per child and no authz surface
+  consults the template version — feature 37 evaluates
+  ownership against the materialised Job.
+- **No `/chown` endpoint, no multi-owner support.** Deferred
+  per the Open questions section — feature 38's share mechanism
+  covers real-world delegation without breaking the
+  owner-immutability invariant.
+- **Dashboard field wiring is transport-ready but not rendered.**
+  The dashboard app today doesn't surface `submitted_by` in the
+  rendered job/workflow views; adding `owner_principal` to the
+  TS models without a matching UI would be dead weight. The
+  backend JSON already carries `owner_principal` so a future
+  dashboard slice can consume it on-demand.
+
+### Tests added
+
+- `internal/cluster/owner_principal_test.go`
+  - `TestOwnerPrincipal_JobSubmitPersistsAndSurvivesTransitions`
+    — happy path through dispatching/running/completed.
+  - `TestOwnerPrincipal_JobCancelPreservesOwner` — cancel path.
+  - `TestOwnerPrincipal_WorkflowStartInheritsOnChildJobs` —
+    workflow→child materialisation.
+  - `TestOwnerPrincipal_LegacyBackfill_SubmittedBySynthesisesUser`.
+  - `TestOwnerPrincipal_LegacyBackfill_MissingFieldsYieldsSentinel`.
+  - `TestOwnerPrincipal_WorkflowLegacyBackfill_MissingFieldsYieldsSentinel`.
+- `internal/principal/principal_test.go`
+  - `TestPrincipal_OwnerFromLegacy` — covers empty subject →
+    sentinel, bare subject → user:<sub>, email-shaped,
+    colon-containing subject edge case.
