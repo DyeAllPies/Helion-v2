@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -419,7 +420,7 @@ func TestRegistry_AuditLog_RegisterAndDelete_BothResources(t *testing.T) {
 	}
 
 	// Scan every audit entry; each is a JSON `audit.Event`.
-	raws, err := store.Scan(nil, "audit:", 0)
+	raws, err := store.Scan(context.Background(), "audit:", 0)
 	if err != nil {
 		t.Fatalf("audit scan: %v", err)
 	}
@@ -463,5 +464,181 @@ func TestRegistry_Gated_WhenStoreNotWired(t *testing.T) {
 	rr := do(srv, "POST", "/api/datasets", `{"name":"d","version":"v1","uri":"s3://b/k"}`)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ── Feature 24 — dry-run on registry endpoints ─────────────────────────────
+//
+// Invariants (same catalogue as the jobs/workflow dry-run suites):
+//
+//   1. Validators still run — an invalid dataset/model must still 400.
+//   2. RegisterDataset/RegisterModel is NEVER called — a follow-up GET
+//      returns 404, proving nothing was persisted.
+//   3. A DISTINCT audit event type is emitted (`dataset.dry_run`,
+//      `model.dry_run`) so reviewers can filter real registrations
+//      from probes without parsing details.
+//   4. No `dataset.registered` / `model.registered` bus event is
+//      published — firing those for a nonexistent object would
+//      mislead downstream subscribers.
+//   5. Response is 200 (not 201) with top-level `"dry_run": true`.
+//   6. `?dry_run=maybe` returns 400 (typo must not silently register).
+
+func TestRegistry_Dataset_DryRun_Returns200_NotPersisted(t *testing.T) {
+	srv := newRegistryServer(t)
+	body := `{
+		"name": "iris-dry",
+		"version": "v1.0.0",
+		"uri":  "s3://helion/datasets/iris-dry/v1.0.0.parquet",
+		"size_bytes": 1024,
+		"sha256": "deadbeef"
+	}`
+	rr := do(srv, "POST", "/api/datasets?dry_run=true", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dry-run: want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if dr, _ := resp["dry_run"].(bool); !dr {
+		t.Errorf("response missing `dry_run: true`: %#v", resp)
+	}
+	if name, _ := resp["name"].(string); name != "iris-dry" {
+		t.Errorf("response missing name=iris-dry: %#v", resp)
+	}
+
+	// Invariant: not persisted — follow-up GET returns 404.
+	rr = do(srv, "GET", "/api/datasets/iris-dry/v1.0.0", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("dry-run must NOT persist — GET returned %d (expected 404)", rr.Code)
+	}
+}
+
+func TestRegistry_Dataset_DryRun_ValidationStillRuns(t *testing.T) {
+	// Missing URI — ValidateDataset must still reject under dry_run.
+	srv := newRegistryServer(t)
+	body := `{"name":"d","version":"v1"}`
+	rr := do(srv, "POST", "/api/datasets?dry_run=true", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("dry-run with invalid body: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRegistry_Dataset_DryRun_EmitsDistinctAuditEvent(t *testing.T) {
+	srv, store := newRegistryServerWithAudit(t)
+	body := `{"name":"probe","version":"v1","uri":"s3://b/probe"}`
+	rr := do(srv, "POST", "/api/datasets?dry_run=1", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dry-run: want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	raws, err := store.Scan(context.Background(), "audit:", 0)
+	if err != nil {
+		t.Fatalf("audit scan: %v", err)
+	}
+	seen := make(map[string]int)
+	for _, raw := range raws {
+		var evt struct{ Type string }
+		_ = json.Unmarshal(raw, &evt)
+		seen[evt.Type]++
+	}
+	if seen["dataset.dry_run"] != 1 {
+		t.Errorf("expected 1 dataset.dry_run audit event, got %d (seen: %v)", seen["dataset.dry_run"], seen)
+	}
+	if seen["dataset.registered"] != 0 {
+		t.Errorf("dry-run must NOT emit dataset.registered — distinct type invariant broken: %v", seen)
+	}
+}
+
+func TestRegistry_Dataset_DryRun_NoBusEvent(t *testing.T) {
+	// Subscribing to the bus, submitting a dry-run, asserting no
+	// dataset.registered event arrives. Without this guarantee,
+	// downstream analytics would count probes as real registrations.
+	srv, bus := newRegistryServerWithBus(t)
+	sub := bus.Subscribe(events.TopicDatasetRegistered)
+	defer sub.Cancel()
+
+	body := `{"name":"bus-probe","version":"v1","uri":"s3://b/probe"}`
+	rr := do(srv, "POST", "/api/datasets?dry_run=true", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dry-run: %d %s", rr.Code, rr.Body.String())
+	}
+	// A small window to ensure the publish path, if incorrectly
+	// invoked, would have delivered.
+	select {
+	case e := <-sub.C:
+		t.Errorf("dry-run must NOT publish bus event, got: %#v", e)
+	case <-time.After(50 * time.Millisecond):
+		// good — no event
+	}
+}
+
+func TestRegistry_Dataset_DryRunInvalidValue_Returns400(t *testing.T) {
+	srv := newRegistryServer(t)
+	body := `{"name":"x","version":"v1","uri":"s3://b/x"}`
+	rr := do(srv, "POST", "/api/datasets?dry_run=maybe", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("want 400 on dry_run=maybe, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "dry_run") {
+		t.Errorf("error should mention dry_run: %s", rr.Body.String())
+	}
+}
+
+func TestRegistry_Model_DryRun_Returns200_NotPersisted(t *testing.T) {
+	srv := newRegistryServer(t)
+	body := `{
+		"name": "classifier-dry",
+		"version": "v1",
+		"uri":    "s3://helion/models/classifier-dry/v1.onnx",
+		"framework": "onnxruntime"
+	}`
+	rr := do(srv, "POST", "/api/models?dry_run=true", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dry-run: want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	if dr, _ := resp["dry_run"].(bool); !dr {
+		t.Errorf("response missing `dry_run: true`: %#v", resp)
+	}
+
+	rr = do(srv, "GET", "/api/models/classifier-dry/v1", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("dry-run must NOT persist — GET returned %d (expected 404)", rr.Code)
+	}
+}
+
+func TestRegistry_Model_DryRun_EmitsDistinctAuditEvent(t *testing.T) {
+	srv, store := newRegistryServerWithAudit(t)
+	body := `{"name":"m-probe","version":"v1","uri":"s3://b/m","framework":"onnxruntime"}`
+	rr := do(srv, "POST", "/api/models?dry_run=true", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dry-run: want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	raws, _ := store.Scan(context.Background(), "audit:", 0)
+	seen := make(map[string]int)
+	for _, raw := range raws {
+		var evt struct{ Type string }
+		_ = json.Unmarshal(raw, &evt)
+		seen[evt.Type]++
+	}
+	if seen["model.dry_run"] != 1 {
+		t.Errorf("expected 1 model.dry_run audit event, got %d", seen["model.dry_run"])
+	}
+	if seen["model.registered"] != 0 {
+		t.Errorf("dry-run must NOT emit model.registered: %v", seen)
+	}
+}
+
+func TestRegistry_Model_DryRun_ValidationStillRuns(t *testing.T) {
+	srv := newRegistryServer(t)
+	// Missing URI.
+	body := `{"name":"bad","version":"v1"}`
+	rr := do(srv, "POST", "/api/models?dry_run=true", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("dry-run with invalid body: want 400, got %d: %s", rr.Code, rr.Body.String())
 	}
 }

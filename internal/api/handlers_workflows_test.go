@@ -5,13 +5,16 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/DyeAllPies/Helion-v2/internal/api"
-	"github.com/DyeAllPies/Helion-v2/internal/events"
+	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 )
 
 func newWorkflowServer() *api.Server {
@@ -28,6 +31,27 @@ func newWorkflowServer() *api.Server {
 	srv.SetEventBus(bus)
 
 	return srv
+}
+
+// newWorkflowServerWithAudit is a variant for feature 24 dry-run tests:
+// returns both the server AND the underlying audit store so a test can
+// verify which event types were emitted.
+func newWorkflowServerWithAudit() (*api.Server, *cluster.WorkflowStore, *inMemoryAuditStore) {
+	jobs := newMockJobStore()
+	store := newAuditStore()
+	auditLog := audit.NewLogger(store, 0)
+	srv := api.NewServer(jobs, nil, nil, auditLog, nil, nil, nil, nil)
+	srv.DisableAuth()
+
+	p := cluster.NewMemWorkflowPersister()
+	js := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+	ws := cluster.NewWorkflowStore(p, nil)
+	srv.SetWorkflowStore(ws, js)
+
+	bus := events.NewBus(10, nil)
+	srv.SetEventBus(bus)
+
+	return srv, ws, store
 }
 
 // ── POST /workflows ─────────────────────────────────────────────────────────
@@ -412,4 +436,116 @@ func joinStrings(parts []string, sep string) string {
 		result += p
 	}
 	return result
+}
+
+// ── Feature 24 — POST /workflows?dry_run=true ────────────────────────────────
+//
+// See the jobs dry-run tests above for the invariant catalogue. Workflow
+// dry-run adds one: the DAG validator (cycles, unknown deps) must STILL
+// fire in dry-run mode — dry_run is not a "skip DAG check" probe oracle.
+
+func TestWorkflowAPI_DryRun_Returns200AndDoesNotPersist(t *testing.T) {
+	srv, ws, _ := newWorkflowServerWithAudit()
+	body := `{
+		"id": "wf-dry-happy",
+		"name": "dry happy",
+		"jobs": [
+			{"name": "build", "command": "echo"},
+			{"name": "test",  "command": "echo", "depends_on": ["build"]}
+		]
+	}`
+	rr := do(srv, "POST", "/workflows?dry_run=true", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dry-run: want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if dr, ok := resp["dry_run"].(bool); !ok || !dr {
+		t.Errorf("response missing `dry_run: true`: %#v", resp)
+	}
+	if id, _ := resp["id"].(string); id != "wf-dry-happy" {
+		t.Errorf("response id: want wf-dry-happy, got %v", resp["id"])
+	}
+
+	// Invariant: the workflow must NOT exist in the store.
+	if _, err := ws.Get("wf-dry-happy"); err == nil {
+		t.Error("dry-run must not persist the workflow")
+	}
+}
+
+func TestWorkflowAPI_DryRun_CycleStillRejected(t *testing.T) {
+	// Regression guard: dry_run must NOT skip DAG validation.
+	srv, _, _ := newWorkflowServerWithAudit()
+	body := `{
+		"id": "wf-dry-cycle",
+		"jobs": [
+			{"name": "a", "command": "echo", "depends_on": ["b"]},
+			{"name": "b", "command": "echo", "depends_on": ["a"]}
+		]
+	}`
+	rr := do(srv, "POST", "/workflows?dry_run=true", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("dry-run with cycle: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkflowAPI_DryRun_UnknownDepStillRejected(t *testing.T) {
+	srv, _, _ := newWorkflowServerWithAudit()
+	body := `{
+		"id": "wf-dry-unknowndep",
+		"jobs": [
+			{"name": "a", "command": "echo", "depends_on": ["does-not-exist"]}
+		]
+	}`
+	rr := do(srv, "POST", "/workflows?dry_run=true", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("dry-run unknown dep: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkflowAPI_DryRun_EmitsDistinctAuditEvent(t *testing.T) {
+	srv, _, store := newWorkflowServerWithAudit()
+	body := `{
+		"id": "wf-dry-audit",
+		"jobs": [
+			{"name": "a", "command": "echo"}
+		]
+	}`
+	rr := do(srv, "POST", "/workflows?dry_run=true", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dry-run: want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	entries, err := store.Scan(context.Background(), "audit:", 0)
+	if err != nil {
+		t.Fatalf("scan audit: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+	var ev audit.Event
+	if err := json.Unmarshal(entries[0], &ev); err != nil {
+		t.Fatalf("unmarshal audit event: %v", err)
+	}
+	if ev.Type != audit.EventWorkflowDryRun {
+		t.Errorf("audit type: want %q, got %q", audit.EventWorkflowDryRun, ev.Type)
+	}
+	if ev.Type == audit.EventWorkflowSubmit {
+		t.Errorf("dry-run must NOT emit %q — distinct type invariant broken", audit.EventWorkflowSubmit)
+	}
+}
+
+func TestWorkflowAPI_DryRunInvalidValue_Returns400(t *testing.T) {
+	srv, _, _ := newWorkflowServerWithAudit()
+	rr := do(srv, "POST", "/workflows?dry_run=maybe",
+		`{"id":"wf-typo","jobs":[{"name":"a","command":"echo"}]}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 on unrecognised dry_run value, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "dry_run") {
+		t.Errorf("error body should mention dry_run: %s", rr.Body.String())
+	}
 }

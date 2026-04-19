@@ -156,16 +156,27 @@ runtime. Resource limits are enforced only when `HELION_RUNTIME=rust`.
 
 ### REST API — coordinator HTTP endpoints
 
+Every submit/register endpoint below accepts the `?dry_run=true` query
+parameter (feature 24). A dry-run request runs through the full
+middleware chain (auth → rate limit → body cap → validators), then
+returns `200 OK` with `{"dry_run": true, ...}` instead of performing
+any durable write, bus publish, or dispatch. Dry-run emits a distinct
+audit event (`job_dry_run`, `workflow_dry_run`, `dataset.dry_run`,
+`model.dry_run`) so reviewers can filter probes from real submissions.
+Accepted values: `1`/`true`/`yes` (truthy), `0`/`false`/`no`/empty
+(falsy); any other value returns `400` so a typo never silently becomes
+a real submission.
+
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/healthz` | none | Liveness probe |
 | `GET` | `/readyz` | none | Readiness probe with subsystem checks |
-| `POST` | `/jobs` | Bearer | Submit job `{id, command, args, env, timeout_seconds, limits, priority, resources, retry_policy}` |
+| `POST` | `/jobs` | Bearer | Submit job `{id, command, args, env, timeout_seconds, limits, priority, resources, retry_policy}` (supports `?dry_run=true`) |
 | `GET` | `/jobs` | Bearer | List jobs (paginated, sorted newest-first, filterable by status) |
 | `GET` | `/jobs/{id}` | Bearer | Get single job |
 | `POST` | `/jobs/{id}/cancel` | Bearer | Cancel a non-terminal job |
 | `GET` | `/jobs/{id}/logs` | Bearer | Retrieve stored job stdout/stderr (`?tail=N`) |
-| `POST` | `/workflows` | Bearer | Submit workflow DAG `{id, name, priority, jobs}` |
+| `POST` | `/workflows` | Bearer | Submit workflow DAG `{id, name, priority, jobs}` (supports `?dry_run=true`) |
 | `GET` | `/workflows` | Bearer | List workflows (paginated, sorted newest-first) |
 | `GET` | `/workflows/{id}` | Bearer | Get workflow with job statuses |
 | `DELETE` | `/workflows/{id}` | Bearer | Cancel a running workflow |
@@ -178,11 +189,11 @@ runtime. Resource limits are enforced only when `HELION_RUNTIME=rust`.
 | `GET` | `/ws/jobs/{id}/logs` | First-message | WebSocket live log stream |
 | `GET` | `/ws/metrics` | First-message | WebSocket live cluster metrics |
 | `GET` | `/ws/events` | First-message | WebSocket event stream (subscribe with topic patterns) |
-| `POST` | `/api/datasets` | Bearer | Register a dataset `{name, version, uri, size_bytes, sha256, tags}` (feature 16) |
+| `POST` | `/api/datasets` | Bearer | Register a dataset `{name, version, uri, size_bytes, sha256, tags}` (feature 16; supports `?dry_run=true`) |
 | `GET` | `/api/datasets` | Bearer | List datasets (paginated) |
 | `GET` | `/api/datasets/{name}/{version}` | Bearer | Fetch single dataset |
 | `DELETE` | `/api/datasets/{name}/{version}` | Bearer | Delete dataset metadata (bytes remain) |
-| `POST` | `/api/models` | Bearer | Register a model with lineage `{name, version, uri, framework, source_job_id, source_dataset, metrics}` |
+| `POST` | `/api/models` | Bearer | Register a model with lineage `{name, version, uri, framework, source_job_id, source_dataset, metrics}` (supports `?dry_run=true`) |
 | `GET` | `/api/models` | Bearer | List models (paginated) |
 | `GET` | `/api/models/{name}/latest` | Bearer | Fetch most-recently-registered version by `CreatedAt` |
 | `GET` | `/api/models/{name}/{version}` | Bearer | Fetch single model |

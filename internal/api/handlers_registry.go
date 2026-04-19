@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/DyeAllPies/Helion-v2/internal/registry"
@@ -80,6 +81,15 @@ func (s *Server) handleRegisterDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Feature 24 — parse dry-run BEFORE body decode so ?dry_run=maybe
+	// rejects cheap. The rate-limit check above still ran, keeping
+	// dry-run bound to the same bucket as the real registration path.
+	dryRun, err := ParseDryRunParam(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitBodyBytes)
 	var req DatasetRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -99,6 +109,31 @@ func (s *Server) handleRegisterDataset(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := registry.ValidateDataset(d); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Feature 24 — dry-run short-circuit. Validators above already
+	// ran; skip the durable RegisterDataset call, skip the event
+	// publish (a dataset.registered bus event on a dry-run would
+	// fire downstream subscribers for an object that never existed),
+	// and emit a distinct dataset.dry_run audit event instead.
+	// Deliberately NOT checking ErrAlreadyExists: a dry-run doesn't
+	// reserve the slot, so surfacing 409 here would just leak whether
+	// a version exists without adding real value.
+	if dryRun {
+		if s.audit != nil {
+			if aerr := s.audit.Log(r.Context(), audit.EventDatasetDryRun, actor, map[string]any{
+				"name":       d.Name,
+				"version":    d.Version,
+				"uri":        d.URI,
+				"size_bytes": d.SizeBytes,
+			}); aerr != nil {
+				logAuditErr(false, "dataset.dry_run", aerr)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeJSON(w, "handleRegisterDataset.dry_run", dryRunResponse(datasetToResponse(d)))
 		return
 	}
 
@@ -231,6 +266,14 @@ func (s *Server) handleRegisterModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Feature 24 — parse dry-run BEFORE body decode so ?dry_run=maybe
+	// rejects cheap. See handleRegisterDataset for rationale.
+	dryRun, err := ParseDryRunParam(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitBodyBytes)
 	var req ModelRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -259,6 +302,26 @@ func (s *Server) handleRegisterModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := registry.ValidateModel(m); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Feature 24 — dry-run short-circuit. Same pattern as datasets:
+	// run all validators, then emit model.dry_run and return 200
+	// without persisting or publishing the model.registered event.
+	if dryRun {
+		if s.audit != nil {
+			if aerr := s.audit.Log(r.Context(), audit.EventModelDryRun, actor, map[string]any{
+				"name":          m.Name,
+				"version":       m.Version,
+				"uri":           m.URI,
+				"source_job_id": m.SourceJobID,
+			}); aerr != nil {
+				logAuditErr(false, "model.dry_run", aerr)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeJSON(w, "handleRegisterModel.dry_run", dryRunResponse(modelToResponse(m)))
 		return
 	}
 

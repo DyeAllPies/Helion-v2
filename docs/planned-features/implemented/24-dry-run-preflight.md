@@ -1,12 +1,43 @@
 # Feature: Dry-run preflight for `POST /jobs` and `POST /workflows`
 
 **Priority:** P1
-**Status:** Pending
+**Status:** Implemented (2026-04-19). Shipped on jobs, workflows, datasets,
+and models — the "deferred" section at the bottom was rolled in at
+implementation time per user request.
 **Affected files:**
+`internal/api/dry_run.go` (new), `internal/api/dry_run_test.go` (new),
 `internal/api/handlers_jobs.go`, `internal/api/handlers_workflows.go`,
+`internal/api/handlers_registry.go`,
+`internal/audit/logger.go` (new event constants),
 `internal/api/handlers_jobs_test.go`,
 `internal/api/handlers_workflows_test.go`,
-`docs/ARCHITECTURE.md` (REST table — new query param row).
+`internal/api/handlers_registry_test.go`,
+`docs/ARCHITECTURE.md` (REST table preamble + per-row `?dry_run=true` notes).
+
+## Reconciliation (spec vs shipped)
+
+- Audit event naming follows each domain's existing convention, not the
+  dotted form in the sketch below: jobs and workflows use underscores
+  (`job_dry_run`, `workflow_dry_run` — matching `job_submit`); datasets
+  and models use dots (`dataset.dry_run`, `model.dry_run` — matching
+  `dataset.registered`). Reviewers filtering the audit log benefit from
+  consistency with the real-path event in each domain.
+- `dryRunResponse` uses JSON marshal→unmarshal→merge to flatten the
+  response, not an `,inline` struct tag. Go's `encoding/json` does not
+  honour `inline` for non-embedded interface fields — an earlier draft
+  that used it produced a nested `"Body"` key; see `dry_run.go` for the
+  root cause.
+- Duplicate-ID conflicts are deliberately NOT surfaced on the dry-run
+  path. Dry-run does not reserve the ID, so returning 409 here would
+  leak whether an ID exists without adding real value.
+- Rate-limit behaviour: jobs/workflows ride the same auth+middleware
+  chain as the real path but do NOT have a dedicated limiter bucket in
+  the coordinator today — the existing `authMiddleware` is the ceiling.
+  Registry endpoints DO bind dry-run into the shared
+  `registryQueryAllow` bucket. The "11 dry-runs in one second" test
+  described in the spec is therefore applicable only to the registry
+  surface; omitted because that bucket's behaviour is already covered
+  by the registry suite's existing limiter tests.
 
 ## Problem
 
@@ -147,6 +178,9 @@ Same shape for `handleSubmitWorkflow`.
 
 ## Deferred
 
-- **Dry-run for `POST /api/datasets` and `POST /api/models`.**
-  Lower value — registry writes are emitted by in-workflow
-  scripts, not operators. Add when there's demand.
+- ~~**Dry-run for `POST /api/datasets` and `POST /api/models`.**~~
+  Rolled in at implementation time (2026-04-19). Both endpoints now
+  accept `?dry_run=true`, emit distinct `dataset.dry_run` /
+  `model.dry_run` audit events, and — uniquely to registry — also
+  suppress the `dataset.registered` / `model.registered` bus event
+  so downstream subscribers don't react to probes.

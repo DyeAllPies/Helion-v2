@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
@@ -449,6 +450,17 @@ func convertBindings(bs []ArtifactBindingRequest) []cpb.ArtifactBinding {
 func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	// AUDIT M4: cap request body before decoding to prevent memory exhaustion.
 	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitBodyBytes)
+
+	// Feature 24 — parse the dry-run flag BEFORE decoding the body
+	// so an obvious typo (?dry_run=maybe) rejects cheap. Decode +
+	// validators still run in dry-run mode; we only skip the final
+	// Submit() + audit-event emission.
+	dryRun, err := ParseDryRunParam(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	var req SubmitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		// AUDIT M4: generic message prevents leaking internal decode details.
@@ -559,6 +571,33 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
 			job.SubmittedBy = claims.Subject
 		}
+	}
+
+	// Feature 24 — dry-run short-circuit. Every validator above has
+	// already run; at this point we know the request would be
+	// accepted on the real path. Skip Submit() + job_submit audit;
+	// emit a distinct job_dry_run audit event + respond 200 with
+	// `"dry_run": true` so the client can diff against the would-be
+	// real response without any state change.
+	if dryRun {
+		if s.audit != nil {
+			actor := "anonymous"
+			if s.tokenManager != nil {
+				if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
+					actor = claims.Subject
+				}
+			}
+			if err := s.audit.Log(r.Context(), audit.EventJobDryRun, actor, map[string]interface{}{
+				"job_id":  job.ID,
+				"command": job.Command,
+			}); err != nil {
+				logAuditErr(false, "job.dry_run", err)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeJSON(w, "handleSubmitJob.dry_run", dryRunResponse(jobToResponse(job)))
+		return
 	}
 
 	if err := s.jobs.Submit(r.Context(), job); err != nil {

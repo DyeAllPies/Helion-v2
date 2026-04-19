@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
@@ -93,6 +94,17 @@ type WorkflowListResponse struct {
 
 func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitBodyBytes)
+
+	// Feature 24 — parse the dry-run flag BEFORE decoding the body
+	// so an obvious typo (?dry_run=maybe) rejects cheap. The real
+	// path and the dry-run path share every validator below; only
+	// the terminal Submit+Start calls + audit-event type differ.
+	dryRun, err := ParseDryRunParam(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	var req SubmitWorkflowRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request format")
@@ -191,6 +203,35 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Priority != nil {
 		wf.Priority = *req.Priority
+	}
+
+	// Feature 24 — dry-run short-circuit for workflows. We still need
+	// DAG validation to fire (cycles, unknown deps, unknown `from`
+	// references), but we must NOT persist, NOT materialise jobs, and
+	// NOT emit the workflow_submit audit event. Call cluster.ValidateDAG
+	// directly — same validator WorkflowStore.Submit uses internally.
+	// Duplicate-ID conflicts are deliberately NOT checked on the dry-run
+	// path: a dry-run doesn't reserve the ID, so the same ID could be
+	// submitted for real afterwards. Surfacing 409 here would just leak
+	// whether an ID exists, adding noise without value.
+	if dryRun {
+		if err := cluster.ValidateDAG(wf.Jobs); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if s.audit != nil {
+			if err := s.audit.Log(r.Context(), audit.EventWorkflowDryRun, actorFromContext(r.Context()), map[string]interface{}{
+				"workflow_id": wf.ID,
+				"name":        wf.Name,
+				"job_count":   len(wf.Jobs),
+			}); err != nil {
+				logAuditErr(false, "workflow.dry_run", err)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeJSON(w, "handleSubmitWorkflow.dry_run", dryRunResponse(workflowToResponse(wf, nil)))
+		return
 	}
 
 	// Submit validates DAG and persists.

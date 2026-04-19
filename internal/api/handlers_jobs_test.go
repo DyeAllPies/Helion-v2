@@ -824,3 +824,191 @@ func TestGetJob_LegacyJobWithoutSubmittedBy_Returns403ForNonAdmin(t *testing.T) 
 		t.Errorf("legacy job, admin: want 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
+
+// ── Feature 24 — POST /jobs?dry_run=true ──────────────────────────────────────
+//
+// Invariants under test (see docs/planned-features/24-dry-run-preflight.md):
+//
+//   1. Validators still run. A body that would be rejected on the real
+//      path is still rejected on the dry-run path — we do NOT let
+//      dry-run become a "skip validation" probe oracle.
+//   2. jobs.Submit() is never called. Mock store records zero writes.
+//   3. A DISTINCT audit event type (`job_dry_run`) is emitted so reviewers
+//      can tell probes apart from real submissions in the audit log.
+//   4. Response is 200 OK (not 201 Created — nothing was created) with
+//      a top-level `"dry_run": true` boolean and the same keys the real
+//      201 response would carry.
+//   5. An unparseable `?dry_run=maybe` returns 400 — silent fallback to
+//      the real path would turn a typo into an unintended submission.
+
+func TestSubmitJob_DryRun_Returns200WithFlag(t *testing.T) {
+	js := newMockJobStore()
+	srv := newServer(js, nil, nil)
+
+	body := `{"id":"dry-job-1","command":"echo","args":["hi"]}`
+	rr := do(srv, "POST", "/jobs?dry_run=true", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dry-run: want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Body carries `dry_run: true` plus the would-be 201 response shape.
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if dr, ok := resp["dry_run"].(bool); !ok || !dr {
+		t.Errorf("response missing `dry_run: true`: %#v", resp)
+	}
+	if id, ok := resp["id"].(string); !ok || id != "dry-job-1" {
+		t.Errorf("response missing id=dry-job-1: %#v", resp)
+	}
+	if _, ok := resp["command"]; !ok {
+		t.Errorf("response missing command key: %#v", resp)
+	}
+	if _, ok := resp["status"]; !ok {
+		t.Errorf("response missing status key: %#v", resp)
+	}
+}
+
+func TestSubmitJob_DryRun_DoesNotPersist(t *testing.T) {
+	js := newMockJobStore()
+	srv := newServer(js, nil, nil)
+
+	body := `{"id":"ghost-job","command":"echo"}`
+	rr := do(srv, "POST", "/jobs?dry_run=true", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Invariant: mock Submit never called — store must be empty.
+	if len(js.jobs) != 0 {
+		t.Errorf("dry-run must NOT persist, but %d jobs were stored", len(js.jobs))
+	}
+}
+
+func TestSubmitJob_DryRun_EmitsDryRunAuditEvent(t *testing.T) {
+	store := newAuditStore()
+	auditLog := audit.NewLogger(store, 0)
+	js := newMockJobStore()
+	srv := api.NewServer(js, nil, nil, auditLog, nil, nil, nil, nil)
+	srv.DisableAuth()
+
+	body := `{"id":"audit-dry","command":"echo"}`
+	rr := do(srv, "POST", "/jobs?dry_run=true", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	entries, err := store.Scan(context.Background(), "audit:", 0)
+	if err != nil {
+		t.Fatalf("scan audit: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 audit entry, got %d", len(entries))
+	}
+	var ev audit.Event
+	if err := json.Unmarshal(entries[0], &ev); err != nil {
+		t.Fatalf("unmarshal audit event: %v", err)
+	}
+	if ev.Type != audit.EventJobDryRun {
+		t.Errorf("audit type: want %q, got %q", audit.EventJobDryRun, ev.Type)
+	}
+	if ev.Type == audit.EventJobSubmit {
+		t.Errorf("dry-run must NOT emit %q — reviewers can't filter probes otherwise", audit.EventJobSubmit)
+	}
+	if jid, _ := ev.Details["job_id"].(string); jid != "audit-dry" {
+		t.Errorf("audit detail job_id: want audit-dry, got %v", ev.Details["job_id"])
+	}
+}
+
+func TestSubmitJob_DryRun_ValidatorsStillRun_MissingIDRejected(t *testing.T) {
+	// Regression guard: dry_run must NOT become a validation-skip probe.
+	// A body missing required fields must still 400 on the dry-run path.
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{"command":"echo"}` // missing id
+	rr := do(srv, "POST", "/jobs?dry_run=true", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("dry-run missing id: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSubmitJob_DryRun_ValidatorsStillRun_ShellMetaRejected(t *testing.T) {
+	// Regression guard: the command-shape validator (AUDIT C4/C5) must
+	// still fire under dry_run. Otherwise dry_run could be used to probe
+	// which shell-meta characters are treated as valid.
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{"id":"shell-dry","command":"echo; rm -rf /"}`
+	rr := do(srv, "POST", "/jobs?dry_run=true", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("dry-run shell meta: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSubmitJob_DryRunInvalidValue_Returns400(t *testing.T) {
+	// Typo guard: `?dry_run=yees` must 400, not silently submit.
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{"id":"typo-job","command":"echo"}`
+	rr := do(srv, "POST", "/jobs?dry_run=yees", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 on unrecognised dry_run value, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "dry_run") {
+		t.Errorf("error body should mention dry_run: %s", rr.Body.String())
+	}
+}
+
+func TestSubmitJob_DryRunFalsy_HitsRealPath(t *testing.T) {
+	// `?dry_run=false` and `?dry_run=0` must route through the real
+	// submit path (201 Created, persisted).
+	for _, val := range []string{"false", "0", "no", ""} {
+		t.Run("dry_run="+val, func(t *testing.T) {
+			js := newMockJobStore()
+			srv := newServer(js, nil, nil)
+			body := `{"id":"real-` + val + `","command":"echo"}`
+			path := "/jobs?dry_run=" + val
+			rr := do(srv, "POST", path, body)
+			if rr.Code != http.StatusCreated {
+				t.Fatalf("falsy dry_run=%q: want 201, got %d: %s", val, rr.Code, rr.Body.String())
+			}
+			if len(js.jobs) != 1 {
+				t.Errorf("falsy dry_run=%q: expected 1 persisted job, got %d", val, len(js.jobs))
+			}
+		})
+	}
+}
+
+func TestSubmitJob_DryRun_ResponseKeysSupersetOfReal(t *testing.T) {
+	// The dry-run response must carry the same keys as the real 201
+	// response, plus one extra `dry_run` boolean. A client should be
+	// able to point the same decoder at either shape.
+	srv := newServer(newMockJobStore(), nil, nil)
+	realBody := `{"id":"shape-real","command":"echo"}`
+	rrReal := do(srv, "POST", "/jobs", realBody)
+	if rrReal.Code != http.StatusCreated {
+		t.Fatalf("real submit: want 201, got %d", rrReal.Code)
+	}
+	var real map[string]interface{}
+	if err := json.Unmarshal(rrReal.Body.Bytes(), &real); err != nil {
+		t.Fatalf("decode real: %v", err)
+	}
+
+	srv2 := newServer(newMockJobStore(), nil, nil)
+	dryBody := `{"id":"shape-dry","command":"echo"}`
+	rrDry := do(srv2, "POST", "/jobs?dry_run=1", dryBody)
+	if rrDry.Code != http.StatusOK {
+		t.Fatalf("dry submit: want 200, got %d", rrDry.Code)
+	}
+	var dry map[string]interface{}
+	if err := json.Unmarshal(rrDry.Body.Bytes(), &dry); err != nil {
+		t.Fatalf("decode dry: %v", err)
+	}
+
+	for k := range real {
+		if _, ok := dry[k]; !ok {
+			t.Errorf("dry-run response missing key %q that real response has", k)
+		}
+	}
+	if _, ok := dry["dry_run"]; !ok {
+		t.Errorf("dry-run response missing `dry_run` flag: %#v", dry)
+	}
+}

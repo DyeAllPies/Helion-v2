@@ -46,6 +46,23 @@ const (
 	EventCoordinatorStart   = "coordinator_start"
 	EventCoordinatorStop    = "coordinator_stop"
 	EventSecurityViolation  = "security_violation"
+	// Feature 24 — dry-run preflight. Distinct event types so
+	// security reviewers can filter real submits from validation
+	// probes in the audit log. Same actor, same target id, same
+	// rate-limit bucket as the corresponding real-path event.
+	//
+	// Naming is per-domain to stay consistent with what each
+	// handler family already emits on the real path:
+	//   - jobs / workflows use snake_case ("job_submit")
+	//   - dataset / model registry uses dotted names
+	//     ("dataset.registered", see handlers_registry.go)
+	EventJobDryRun      = "job_dry_run"
+	EventWorkflowSubmit = "workflow_submit"
+	EventWorkflowDryRun = "workflow_dry_run"
+	EventDatasetRegister = "dataset.registered"
+	EventDatasetDryRun   = "dataset.dry_run"
+	EventModelRegister   = "model.registered"
+	EventModelDryRun     = "model.dry_run"
 )
 
 // Event represents a single audit log entry.

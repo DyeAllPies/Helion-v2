@@ -464,12 +464,33 @@ trusted client; every control has a server-side counterpart:
 | Two-click Validate → Preview → Submit | Per-subject rate limit (10 rps default) bounds accidental-click floods |
 | Client-side env-key denylist (`LD_*`, `DYLD_*`, `GCONV_PATH`, …) | **Deferred to feature 25.** UX-only today; a malicious client can POST raw JSON past the denylist. Load-bearing rejection lands server-side. |
 | Secret env toggle (`type="password"` on the value input) | **Deferred to feature 26.** Masks in the DOM today; server still echoes values on `GET /jobs/{id}`. |
-| Validate button runs shape validator in-browser | **Deferred to feature 24.** Client-side only today; feature 24 swaps in `POST /jobs?dry_run=true` / `POST /workflows?dry_run=true` so the server validator is the authority. |
+| Validate button runs shape validator in-browser | **Feature 24 shipped.** The dashboard Validate button can now call `POST /jobs?dry_run=true` / `POST /workflows?dry_run=true` / `POST /api/datasets?dry_run=true` / `POST /api/models?dry_run=true` — the server validator is the authority for accept/reject. Dry-run returns `200` with `"dry_run": true` in the body and never persists, dispatches, or publishes a bus event. Audit emits a distinct event type (`job_dry_run`, `workflow_dry_run`, `dataset.dry_run`, `model.dry_run`) so reviewers can filter probes from real submissions. A typo (`?dry_run=maybe`) returns `400` rather than silently falling through to the real path. |
 | YAML/JSON editor uses `JSON.parse` (no YAML) | `JSON.parse` has no code-execution path. YAML arrives with the feature 22 Monaco upgrade and MUST use `js-yaml` with `JSON_SCHEMA` (no custom tags, no aliases). |
 
 New rule for future submit paths: **"No submit path may bypass
 the seven-layer stack documented in §§4-8. The submit tab is a
 convenience UI; it does not relax any server-side check."**
+
+### 9.2 Dry-run preflight (feature 24)
+
+`?dry_run=true` is accepted on every submit/register endpoint
+(`POST /jobs`, `POST /workflows`, `POST /api/datasets`,
+`POST /api/models`). The request rides the **identical** middleware
+chain as a real submit — auth, rate limit, body cap, validators —
+but the terminal durable write, dispatch, and bus publish are all
+skipped. A distinct audit event type is emitted so a reviewer can
+filter probes from real submissions. Key security properties:
+
+- Dry-run is **not** a validation-skip probe oracle. Every validator
+  that rejects a real submit also rejects the dry-run equivalent.
+- Dry-run is **not** a rate-limit bypass. The shared per-subject
+  limiter treats dry-run and real submits identically.
+- Dry-run is **not** a duplicate-ID probe. Dry-run does not reserve
+  IDs, and dry-run does not surface `ErrAlreadyExists` — it would
+  leak membership without adding value.
+- An invalid `dry_run` value (`?dry_run=maybe`) returns `400`; silent
+  fallback to the real path would turn a typo into an unintended
+  submission.
 
 ---
 
