@@ -109,15 +109,13 @@ export const routes: Routes = [
           },
           {
             path: 'workflow',
-            data: { tab: 'workflow' },
             loadComponent: () =>
-              import('./features/submit/submit-placeholder.component').then(m => m.SubmitPlaceholderComponent),
+              import('./features/submit/submit-workflow.component').then(m => m.SubmitWorkflowComponent),
           },
           {
             path: 'ml-workflow',
-            data: { tab: 'ml-workflow' },
             loadComponent: () =>
-              import('./features/submit/submit-placeholder.component').then(m => m.SubmitPlaceholderComponent),
+              import('./features/submit/submit-ml-workflow.component').then(m => m.SubmitMlWorkflowComponent),
           },
         ],
       },

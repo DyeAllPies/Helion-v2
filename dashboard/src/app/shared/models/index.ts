@@ -230,6 +230,22 @@ export interface SubmitWorkflowJobRequest {
   timeout_seconds?: number;
   depends_on?:     string[];
   condition?:      string;
+  /**
+   * Label selector the scheduler matches against node-reported
+   * labels. Mirrors the server-side WorkflowJobRequest field.
+   * Feature 21 uses this to pin MNIST's `train` step to the
+   * Rust-runtime node.
+   */
+  node_selector?:  Record<string, string>;
+  /**
+   * Artifact inputs / outputs. Inputs may carry a `from:
+   * "<upstream>.<output>"` reference — the coordinator resolves
+   * those at dispatch time (feature 13). This client type keeps
+   * the binding shape compact; the server validator checks each
+   * field shape.
+   */
+  inputs?:         SubmitArtifactBinding[];
+  outputs?:        SubmitArtifactBinding[];
 }
 
 export interface SubmitWorkflowRequest {
