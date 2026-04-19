@@ -1,0 +1,95 @@
+# Dockerfile.node-python-rust
+#
+# Heterogeneous node image for the MNIST walkthrough (feature 21).
+# Combines three layers that, until now, lived in separate images:
+#
+#   1. Go node agent           (from cmd/helion-node, same as all nodes)
+#   2. Rust subprocess runtime (from runtime-rust/, like Dockerfile.node-rust)
+#   3. Python 3.11 + sklearn   (from requirements.txt, like Dockerfile.node-python)
+#
+# Why the combination: feature 21 demos heterogeneous scheduling by
+# pinning the MNIST `train` job (the longest step) to a node that
+# reports `runtime=rust`, while the lighter ingest/preprocess/register
+# steps run on plain Go nodes. Train is a Python workload (uses
+# sklearn's LogisticRegression), so the Rust-runtime node still needs
+# a Python interpreter + ML deps. The alpine base of Dockerfile.node-
+# rust can't carry sklearn wheels (musl), so we target debian-slim
+# instead — same base as Dockerfile.node-python.
+#
+# Only built when the iris/mnist overlay spins up `node-rust`.
+# Standard iris-only runs use Dockerfile.node-python for all nodes.
+
+# ── Stage 1: Build Go node agent ─────────────────────────────────────────────
+FROM golang:1.26-alpine AS go-builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /helion-node ./cmd/helion-node
+
+# ── Stage 2: Build Rust runtime (glibc target, not musl) ─────────────────────
+# Dockerfile.node-rust uses rust:1-alpine for the musl build that pairs
+# with the alpine final image. Here the final stage is debian-slim (for
+# glibc-built sklearn wheels), so the runtime is built on a glibc base
+# too — easiest is to use the standard bookworm rust image.
+FROM rust:1-slim-bookworm AS rust-builder
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends protobuf-compiler pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY proto/ ./proto/
+COPY runtime-rust/ ./runtime-rust/
+WORKDIR /build/runtime-rust
+RUN cargo build --release
+
+# ── Stage 3: Final image — debian-slim + Python + both binaries ─────────────
+FROM python:3.11-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates netcat-openbsd \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+
+# Python ML deps (iris + mnist share requirements.txt).
+COPY examples/ml-iris/requirements.txt /tmp/iris-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/iris-requirements.txt
+
+# Bake both demo pipelines. Jobs reference them by absolute path
+# from workflow.yaml; see Dockerfile.node-python for the same
+# pattern + rationale.
+COPY examples/ml-iris/ingest.py      /app/ml-iris/ingest.py
+COPY examples/ml-iris/preprocess.py  /app/ml-iris/preprocess.py
+COPY examples/ml-iris/train.py       /app/ml-iris/train.py
+COPY examples/ml-iris/register.py    /app/ml-iris/register.py
+COPY examples/ml-iris/serve.py       /app/ml-iris/serve.py
+COPY examples/ml-mnist/ingest.py     /app/ml-mnist/ingest.py
+COPY examples/ml-mnist/preprocess.py /app/ml-mnist/preprocess.py
+COPY examples/ml-mnist/train.py      /app/ml-mnist/train.py
+COPY examples/ml-mnist/register.py   /app/ml-mnist/register.py
+COPY examples/ml-mnist/serve.py      /app/ml-mnist/serve.py
+ENV PYTHONPATH=/app/ml-iris:/app/ml-mnist
+
+# UID/GID must match Dockerfile.coordinator (alpine adduser -S
+# allocates helion=100:101) so the shared /app/state named volume
+# is readable by both containers. See Dockerfile.node-python for
+# the same alignment note.
+RUN groupadd -g 101 helion && useradd -u 100 -g 101 -M helion
+
+# Both binaries + the existing entrypoint script that starts the
+# Rust runtime in background then execs the Go node agent.
+COPY --from=go-builder /helion-node /usr/local/bin/helion-node
+COPY --from=rust-builder /build/runtime-rust/target/release/helion-runtime /usr/local/bin/helion-runtime
+COPY scripts/entrypoint-node-rust.sh /usr/local/bin/entrypoint-node-rust.sh
+RUN chmod +x /usr/local/bin/entrypoint-node-rust.sh
+
+RUN mkdir -p /app/state /run/helion \
+ && chown helion:helion /app/state /run/helion
+USER helion
+
+ENV HELION_RUNTIME=rust
+ENV HELION_RUNTIME_SOCKET=/run/helion/runtime.sock
+ENV RUST_LOG=info
+
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+  CMD nc -z localhost 8080 || exit 1
+ENTRYPOINT ["/usr/local/bin/entrypoint-node-rust.sh"]

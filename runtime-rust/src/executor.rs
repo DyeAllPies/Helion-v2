@@ -82,12 +82,33 @@ impl Executor {
         });
 
         // ── Linux: compile seccomp filter ─────────────────────────────────────
+        //
+        // Operator escape hatch: `HELION_RUNTIME_SECCOMP=off` on the
+        // node-agent process env disables the seccomp-bpf allowlist
+        // for every job this runtime spawns. Shipped for the MNIST
+        // heterogeneous-scheduling demo (feature 21) so Python ML
+        // workloads whose CPython-level syscalls aren't in the
+        // allowlist can still run on a Rust-runtime node. Defaults
+        // to enforcing — operators opt in explicitly per-cluster.
         #[cfg(target_os = "linux")]
-        let seccomp_prog = match crate::seccomp_filter::build_allowlist() {
-            Ok(p) => Some(p),
-            Err(e) => {
-                tracing::warn!("seccomp compile failed: {}", e);
+        let seccomp_prog = {
+            let disabled = std::env::var("HELION_RUNTIME_SECCOMP")
+                .map(|v| v.eq_ignore_ascii_case("off") || v == "0" || v.eq_ignore_ascii_case("disabled"))
+                .unwrap_or(false);
+            if disabled {
+                tracing::warn!(
+                    "seccomp filter disabled via HELION_RUNTIME_SECCOMP={} (opt-in; reduces isolation)",
+                    std::env::var("HELION_RUNTIME_SECCOMP").unwrap_or_default()
+                );
                 None
+            } else {
+                match crate::seccomp_filter::build_allowlist() {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        tracing::warn!("seccomp compile failed: {}", e);
+                        None
+                    }
+                }
             }
         };
 

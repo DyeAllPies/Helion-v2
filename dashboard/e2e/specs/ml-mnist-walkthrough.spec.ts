@@ -67,20 +67,38 @@ interface LineageResp   { jobs: Array<{ name: string; outputs?: Array<{ name: st
  * exec). Idempotent — 409 is treated as success.
  */
 async function submitMnistWorkflow(token: string): Promise<void> {
-  const jobEnv = { HELION_API_URL: 'http://coordinator:8080', HELION_TOKEN: token };
+  const jobEnv = {
+    HELION_API_URL: 'http://coordinator:8080',
+    HELION_TOKEN: token,
+    // The Rust subprocess runtime calls `env_clear()` before spawn
+    // (see runtime-rust/src/executor.rs), so PATH is not inherited
+    // from the node agent's process env. Jobs invoking `python`
+    // rely on PATH to resolve the binary — declare it explicitly
+    // so the same workflow works whether the scheduler picks a
+    // Go-runtime or a Rust-runtime node. Both node images ship
+    // python at /usr/local/bin.
+    PATH: '/usr/local/bin:/usr/bin:/bin',
+  };
   const body = {
     id: WF_ID, name: 'mnist-end-to-end', priority: 50,
     jobs: [
+      // Feature 21 heterogeneous-scheduling demo: pin the lightweight
+      // orchestration steps to Go-runtime nodes and route the heavy
+      // sklearn training step to the Rust-runtime node via the
+      // `runtime` label. The dashboard's DAG job cards surface the
+      // node_id on each card so the viewer can see the split.
       {
         name: 'ingest',
         command: 'python', args: ['/app/ml-mnist/ingest.py'],
         env: jobEnv, timeout_seconds: 180,
+        node_selector: { runtime: 'go' },
         outputs: [{ name: 'RAW_CSV', local_path: 'raw.csv' }],
       },
       {
         name: 'preprocess',
         command: 'python', args: ['/app/ml-mnist/preprocess.py'],
         env: jobEnv, timeout_seconds: 60, depends_on: ['ingest'],
+        node_selector: { runtime: 'go' },
         inputs:  [{ name: 'RAW_CSV', from: 'ingest.RAW_CSV', local_path: 'raw.csv' }],
         outputs: [
           { name: 'TRAIN_PARQUET', local_path: 'train.parquet' },
@@ -91,6 +109,7 @@ async function submitMnistWorkflow(token: string): Promise<void> {
         name: 'train',
         command: 'python', args: ['/app/ml-mnist/train.py'],
         env: jobEnv, timeout_seconds: 180, depends_on: ['preprocess'],
+        node_selector: { runtime: 'rust' },
         inputs: [
           { name: 'TRAIN_PARQUET', from: 'preprocess.TRAIN_PARQUET', local_path: 'train.parquet' },
           { name: 'TEST_PARQUET',  from: 'preprocess.TEST_PARQUET',  local_path: 'test.parquet'  },
@@ -105,6 +124,7 @@ async function submitMnistWorkflow(token: string): Promise<void> {
         command: 'python', args: ['/app/ml-mnist/register.py'],
         env: { ...jobEnv, HELION_WORKFLOW_ID: WF_ID, HELION_TRAIN_JOB_NAME: 'train' },
         timeout_seconds: 60, depends_on: ['train'],
+        node_selector: { runtime: 'go' },
         inputs: [
           { name: 'RAW_CSV', from: 'ingest.RAW_CSV', local_path: 'raw.csv' },
           { name: 'MODEL',   from: 'train.MODEL',   local_path: 'model.joblib' },

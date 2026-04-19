@@ -43,6 +43,11 @@ services:
         # node binary. HELION_API_URL is the iris scripts' HTTP base.
         export HELION_API_URL="http://coordinator:8080"
         exec /usr/local/bin/helion-node
+    # Feature 21 — label this node `runtime=go` so the MNIST walkthrough
+    # can pin the train job to the Rust-runtime node via node_selector
+    # while ingest / preprocess / register flow onto the Go nodes.
+    environment:
+      - HELION_LABEL_runtime=go
     depends_on:
       coordinator:
         # service_started not service_healthy — the coordinator's
@@ -76,6 +81,7 @@ services:
       - HELION_ALLOW_ISOLATION=false
       - HELION_CA_CERT=/app/state/ca.pem
       - HELION_RUNTIME=go
+      - HELION_LABEL_runtime=go
       - HELION_ARTIFACTS_BACKEND=s3
       - HELION_ARTIFACTS_S3_ENDPOINT=minio:9000
       - HELION_ARTIFACTS_S3_BUCKET=helion
@@ -89,6 +95,61 @@ services:
         # marks it unhealthy even when the HTTP API is responsive.
         # The entrypoint above polls for /app/state/root-token to
         # gate readiness regardless.
+        condition: service_started
+      minio-bootstrap:
+        condition: service_completed_successfully
+
+  # Feature 21 — third node that carries the Rust subprocess runtime
+  # *plus* Python + sklearn, so heavy ML jobs pinned via
+  # `node_selector: { runtime: rust }` land here. See
+  # Dockerfile.node-python-rust for the combined build. Sits on the
+  # same helion-net + shared state/minio volumes as node1 / node2
+  # so artifact staging and root-token access Just Work.
+  node-rust:
+    build:
+      context: .
+      dockerfile: Dockerfile.node-python-rust
+    container_name: helion-node-rust
+    networks:
+      - helion-net
+    volumes:
+      - e2e-state:/app/state
+      - ./logs:/app/logs
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until [ -s /app/state/root-token ]; do sleep 0.2; done
+        export HELION_TOKEN="$$(cat /app/state/root-token)"
+        export HELION_API_URL="http://coordinator:8080"
+        exec /usr/local/bin/entrypoint-node-rust.sh
+    environment:
+      - PORT=8082
+      - HELION_NODE_ID=mnist-node-rust
+      - HELION_COORDINATOR=coordinator:9090
+      - HELION_ALLOW_ISOLATION=false
+      - HELION_CA_CERT=/app/state/ca.pem
+      - HELION_RUNTIME=rust
+      # This is the label the MNIST workflow's train step selects on.
+      # HELION_LABEL_<key>=<value> registers a node-side label; the
+      # scheduler matches node_selector entries against these.
+      - HELION_LABEL_runtime=rust
+      # Opt out of the Rust runtime's default seccomp-bpf allowlist.
+      # CPython + sklearn/numpy use several syscalls not on the
+      # conservative allowlist (e.g. sched_getaffinity paths from
+      # NumPy's threadpool probing), which otherwise kill the child
+      # with "Seccomp" the moment sklearn imports. Demo-only: in a
+      # production cluster you'd broaden the allowlist instead of
+      # disabling it — see SECURITY.md § Rust runtime isolation.
+      - HELION_RUNTIME_SECCOMP=off
+      - HELION_ARTIFACTS_BACKEND=s3
+      - HELION_ARTIFACTS_S3_ENDPOINT=minio:9000
+      - HELION_ARTIFACTS_S3_BUCKET=helion
+      - HELION_ARTIFACTS_S3_ACCESS_KEY=helion
+      - HELION_ARTIFACTS_S3_SECRET_KEY=helion-dev-secret
+      - HELION_ARTIFACTS_S3_USE_SSL=0
+    depends_on:
+      coordinator:
         condition: service_started
       minio-bootstrap:
         condition: service_completed_successfully

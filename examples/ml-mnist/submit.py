@@ -110,12 +110,21 @@ def _inject_api_env(spec: "dict[str, Any]", api_url: str, token: str) -> None:
     """Inject HELION_API_URL + HELION_TOKEN into every workflow
     job's env so in-workflow scripts can call back to the
     coordinator. Go runtime does not forward node-agent env to
-    subprocess jobs; the submitter owns credential plumbing."""
+    subprocess jobs; the submitter owns credential plumbing.
+
+    Also injects a minimal PATH so the Rust subprocess runtime —
+    which env_clear()s before spawn (see runtime-rust executor) —
+    can resolve `python` on nodes whose container images install
+    it at /usr/local/bin. Without this, jobs pinned via
+    node_selector to the Rust-runtime node fail with
+    `exec failed: No such file or directory`.
+    """
     jobs = spec.get("jobs", [])
     for job in jobs:
         env = job.setdefault("env", {})
         env.setdefault("HELION_API_URL", api_url)
         env.setdefault("HELION_TOKEN", token)
+        env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
 
 
 def _poll_until_terminal(base: str, token: str, wf_id: str, timeout_s: int = 600) -> str:

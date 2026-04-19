@@ -10,6 +10,15 @@
 # `serve.py` is submitted separately once the workflow completes
 # because a service job never reaches a terminal state and would
 # block the DAG.
+#
+# Heterogeneous scheduling (feature 21): each job declares a
+# `node_selector: { runtime: <go|rust> }` label. Lightweight
+# orchestration steps (ingest/preprocess/register) target the
+# Go-runtime nodes; the training step — the most CPU-heavy job
+# in the DAG — pins to the Rust-runtime node. The Rust subprocess
+# runtime is env_clear()-strict, so PATH must be set explicitly or
+# `python` won't resolve. submit.py injects PATH before sending the
+# request; the inline walkthrough body does the same.
 
 id: mnist-wf-1
 name: mnist-end-to-end
@@ -20,6 +29,12 @@ jobs:
     command: python
     args: [/app/ml-mnist/ingest.py]
     timeout_seconds: 180           # OpenML fetch ~11 MB; first run is slowest
+    # Heterogeneous-scheduling demo (feature 21): ingest + preprocess
+    # + register are lightweight orchestration steps — let them land
+    # on any Go-runtime node via an explicit selector so the demo
+    # output clearly shows the split.
+    node_selector:
+      runtime: go
     outputs:
       - name: RAW_CSV
         local_path: raw.csv
@@ -29,6 +44,8 @@ jobs:
     args: [/app/ml-mnist/preprocess.py]
     timeout_seconds: 60
     depends_on: [ingest]
+    node_selector:
+      runtime: go
     inputs:
       - name: RAW_CSV
         from: ingest.RAW_CSV
@@ -44,6 +61,13 @@ jobs:
     args: [/app/ml-mnist/train.py]
     timeout_seconds: 180
     depends_on: [preprocess]
+    # Pin the heaviest step (sklearn LogisticRegression fit on
+    # 5 000 × 784 rows) to the Rust-runtime node. The Rust runtime
+    # executes the same Python subprocess as the Go runtime, but
+    # with a different IPC path — the walkthrough video uses the
+    # node_id column on the DAG job cards to prove the split.
+    node_selector:
+      runtime: rust
     inputs:
       - name: TRAIN_PARQUET
         from: preprocess.TRAIN_PARQUET
@@ -62,6 +86,8 @@ jobs:
     args: [/app/ml-mnist/register.py]
     timeout_seconds: 60
     depends_on: [train]
+    node_selector:
+      runtime: go
     env:
       HELION_WORKFLOW_ID: mnist-wf-1
       HELION_TRAIN_JOB_NAME: train
