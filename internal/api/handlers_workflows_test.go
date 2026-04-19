@@ -549,3 +549,132 @@ func TestWorkflowAPI_DryRunInvalidValue_Returns400(t *testing.T) {
 		t.Errorf("error body should mention dry_run: %s", rr.Body.String())
 	}
 }
+
+// ── Feature 25 — denylist on workflow child jobs ─────────────────────────────
+//
+// Invariants:
+//
+//   1. A child job whose env contains a denylisted key fails the
+//      whole workflow submit at 400 (not just skipping that job).
+//   2. The error body names the offending child job so the operator
+//      can find it.
+//   3. The workflow is NOT persisted.
+//   4. audit emits env_denylist_reject with workflow_id + job_name.
+//   5. Per-node override works per-child: a child pinned to role=gpu
+//      can legitimately set LD_LIBRARY_PATH while a sibling cannot.
+
+func TestWorkflowAPI_DenylistedChild_Rejected(t *testing.T) {
+	srv, ws, _ := newWorkflowServerWithAudit()
+	body := `{
+		"id": "wf-evil",
+		"jobs": [
+			{"name": "a", "command": "echo"},
+			{"name": "b", "command": "echo", "env": {"LD_PRELOAD": "/tmp/evil.so"}, "depends_on": ["a"]}
+		]
+	}`
+	rr := do(srv, "POST", "/workflows", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("workflow denylist: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	// The JSON-encoded error body escapes quotes around the job name
+	// ("job \"b\":"), so match the escaped form.
+	if !strings.Contains(rr.Body.String(), `job \"b\"`) {
+		t.Errorf("error should name child job 'b': %s", rr.Body.String())
+	}
+	// Invariant: the workflow must not be persisted.
+	if _, err := ws.Get("wf-evil"); err == nil {
+		t.Error("denylisted workflow must not be persisted")
+	}
+}
+
+func TestWorkflowAPI_DenylistedChild_EmitsAuditEvent(t *testing.T) {
+	srv, _, store := newWorkflowServerWithAudit()
+	body := `{
+		"id": "wf-audit-evil",
+		"jobs": [
+			{"name": "main", "command": "echo", "env": {"LD_PRELOAD": "/tmp/x"}}
+		]
+	}`
+	rr := do(srv, "POST", "/workflows", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400: %d %s", rr.Code, rr.Body.String())
+	}
+	entries, _ := store.Scan(context.Background(), "audit:", 0)
+	var found bool
+	for _, raw := range entries {
+		var ev audit.Event
+		_ = json.Unmarshal(raw, &ev)
+		if ev.Type == audit.EventEnvDenylistReject {
+			found = true
+			if wid, _ := ev.Details["workflow_id"].(string); wid != "wf-audit-evil" {
+				t.Errorf("workflow_id: want wf-audit-evil, got %v", ev.Details["workflow_id"])
+			}
+			if jn, _ := ev.Details["job_name"].(string); jn != "main" {
+				t.Errorf("job_name: want main, got %v", ev.Details["job_name"])
+			}
+		}
+	}
+	if !found {
+		t.Error("expected env_denylist_reject audit event")
+	}
+}
+
+func TestWorkflowAPI_DenylistUnderDryRun_StillRejected(t *testing.T) {
+	srv, _, _ := newWorkflowServerWithAudit()
+	body := `{
+		"id": "wf-dry-evil",
+		"jobs": [{"name": "main", "command": "echo", "env": {"LD_PRELOAD": "/tmp/x"}}]
+	}`
+	rr := do(srv, "POST", "/workflows?dry_run=true", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("dry-run denylist: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkflowAPI_PerChildOverride(t *testing.T) {
+	// One child pinned to role=gpu gets LD_LIBRARY_PATH via the
+	// override; a sibling without that selector carrying the same
+	// env would be rejected. Here we only verify the positive case
+	// — the negative case is covered by TestSubmitJob_Override_*.
+	jobs := newMockJobStore()
+	store := newAuditStore()
+	auditLog := audit.NewLogger(store, 0)
+	srv := api.NewServer(jobs, nil, nil, auditLog, nil, nil, nil, nil)
+	srv.DisableAuth()
+
+	p := cluster.NewMemWorkflowPersister()
+	js := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+	ws := cluster.NewWorkflowStore(p, nil)
+	srv.SetWorkflowStore(ws, js)
+	srv.SetEventBus(events.NewBus(16, nil))
+
+	ex, err := api.ParseEnvDenylistExceptions("role=gpu:LD_LIBRARY_PATH")
+	if err != nil {
+		t.Fatalf("parse exceptions: %v", err)
+	}
+	srv.SetEnvDenylistExceptions(ex)
+
+	body := `{
+		"id": "wf-mix",
+		"jobs": [
+			{"name": "prep",  "command": "echo"},
+			{"name": "train", "command": "echo", "env": {"LD_LIBRARY_PATH": "/opt/cuda/lib64"}, "node_selector": {"role": "gpu"}, "depends_on": ["prep"]}
+		]
+	}`
+	rr := do(srv, "POST", "/workflows", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("override on pinned child: want 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+	entries, _ := store.Scan(context.Background(), "audit:", 0)
+	var overrideCount int
+	for _, raw := range entries {
+		var ev audit.Event
+		_ = json.Unmarshal(raw, &ev)
+		if ev.Type == audit.EventEnvDenylistOverride {
+			overrideCount++
+		}
+	}
+	if overrideCount != 1 {
+		t.Errorf("want 1 env_denylist_override audit event, got %d", overrideCount)
+	}
+}

@@ -183,6 +183,9 @@ func validateSubmitRequest(req *SubmitRequest) string {
 		return fmt.Sprintf("env must not exceed %d entries", maxEnvLen)
 	}
 	// Env key/value content — no `=` or NUL in keys, no NUL in values.
+	// The feature-25 denylist runs separately in the handler via
+	// s.validateEnvDenylist so it has access to the per-node exception
+	// rules stored on the Server; this function stays pure/testable.
 	for k, v := range req.Env {
 		if k == "" {
 			return "env keys must not be empty"
@@ -349,8 +352,45 @@ func validateArtifactBindingsCtx(kind string, bs []ArtifactBindingRequest, requi
 		if requireURI && !isAllowedArtifactScheme(b.URI) {
 			return fmt.Sprintf("%s[%d].uri scheme must be file:// or s3://", kind, i)
 		}
+		// Feature 25 — dangerous-path / loader-library guards.
+		//
+		// (a) file:// URIs rooted under system-library / kernel-export
+		//     / secret-material directories are refused at submit time.
+		//     A legitimate job has no reason to stage /lib/libc.so.6,
+		//     /proc/self/environ, or /var/run/secrets/... as an artifact
+		//     input. If artifactURIPath reports a non-file URI we skip
+		//     the check — s3:// object keys aren't filesystem paths.
+		if b.URI != "" {
+			if p, ok := artifactURIPath(b.URI); ok {
+				if bad, matched := isDangerousSystemPath(p); bad {
+					return fmt.Sprintf("%s[%d].uri refuses to reference system path %s* (feature 25)", kind, i, matched)
+				}
+			}
+		}
+		// (b) LocalPath basenames matching a loader-critical shared
+		//     library (libc.so*, ld-linux*.so*, libpthread.so*, …).
+		//     Staging an input with one of these filenames under the
+		//     job's working dir gives an attacker a ready target for
+		//     dlopen-by-relative-path and LD_LIBRARY_PATH tricks; a
+		//     legitimate ML job never ships its own libc.
+		if base := lastPathSegment(b.LocalPath); base != "" {
+			if bad, reason := isDangerousLibraryBasename(base); bad {
+				return fmt.Sprintf("%s[%d].local_path basename %q is a %s (feature 25)", kind, i, base, reason)
+			}
+		}
 	}
 	return ""
+}
+
+// lastPathSegment returns the filename portion of a forward-slash
+// path. Stays in this file because validateLocalPath has already
+// rejected absolute paths, backslashes, NUL, and .. / . segments, so
+// a simple LastIndex split is safe here.
+func lastPathSegment(p string) string {
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
 }
 
 // maxArtifactFromLen caps the "<job>.<output>" reference length. The
@@ -573,6 +613,40 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Feature 25 — dynamic-loader env-var denylist. Must run AFTER the
+	// pure shape checks (validateSubmitRequest already handled count +
+	// empty/NUL keys) and BEFORE the dry-run branch so a dry-run of a
+	// denylisted submit still returns 400 — dry-run is not a validation-
+	// skip probe. Per-node exceptions (HELION_ENV_DENYLIST_EXCEPTIONS)
+	// are consulted via s.envDenylistCheck; each override fires its own
+	// audit event so the escape hatch is visible.
+	envCheck := s.envDenylistCheck(job.Env, job.NodeSelector)
+	actor := actorFromContext(r.Context())
+	if envCheck.Err != "" {
+		if s.audit != nil {
+			if err := s.audit.Log(r.Context(), audit.EventEnvDenylistReject, actor, map[string]interface{}{
+				"job_id":      job.ID,
+				"blocked_key": envCheck.BlockedKey,
+				"dry_run":     dryRun,
+			}); err != nil {
+				logAuditErr(false, "env_denylist_reject", err)
+			}
+		}
+		writeError(w, http.StatusBadRequest, envCheck.Err)
+		return
+	}
+	for _, k := range envCheck.OverriddenKeys {
+		if s.audit != nil {
+			if err := s.audit.Log(r.Context(), audit.EventEnvDenylistOverride, actor, map[string]interface{}{
+				"job_id":  job.ID,
+				"env_key": k,
+				"dry_run": dryRun,
+			}); err != nil {
+				logAuditErr(false, "env_denylist_override", err)
+			}
+		}
+	}
+
 	// Feature 24 — dry-run short-circuit. Every validator above has
 	// already run; at this point we know the request would be
 	// accepted on the real path. Skip Submit() + job_submit audit;
@@ -581,12 +655,6 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	// real response without any state change.
 	if dryRun {
 		if s.audit != nil {
-			actor := "anonymous"
-			if s.tokenManager != nil {
-				if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
-					actor = claims.Subject
-				}
-			}
 			if err := s.audit.Log(r.Context(), audit.EventJobDryRun, actor, map[string]interface{}{
 				"job_id":  job.ID,
 				"command": job.Command,
@@ -614,12 +682,6 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 
 	// Phase 4: Log job submission to audit log
 	if s.audit != nil {
-		actor := "anonymous"
-		if s.tokenManager != nil {
-			if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
-				actor = claims.Subject
-			}
-		}
 		if err := s.audit.LogJobSubmit(r.Context(), actor, job.ID, job.Command); err != nil {
 			logAuditErr(false, "job.submit", err)
 		}

@@ -1,11 +1,56 @@
 # Feature: Dangerous-env denylist on job submission
 
 **Priority:** P1
-**Status:** Pending
+**Status:** Implemented (2026-04-19). Both deferred items rolled in at
+implementation time per user request: symlink/system-path artifact
+guards AND per-node policy overrides.
 **Affected files:**
-`internal/api/handlers_jobs.go` (validator),
+`internal/api/env_denylist.go` (new helpers),
+`internal/api/env_denylist_test.go` (new, 30+ table cases),
+`internal/api/handlers_jobs.go` (Server method + validator wiring +
+artifact system-path + loader-library-basename checks),
+`internal/api/handlers_workflows.go` (per-child env validation — was
+previously unvalidated),
+`internal/api/server.go` (new `envDenylistExceptions` field +
+`SetEnvDenylistExceptions`),
+`internal/audit/logger.go` (new `EventEnvDenylistReject` and
+`EventEnvDenylistOverride`),
+`cmd/helion-coordinator/main.go` (parses
+`HELION_ENV_DENYLIST_EXCEPTIONS`; malformed → `os.Exit(1)`),
 `internal/api/handlers_jobs_test.go`,
-`docs/SECURITY.md` (new threat row).
+`internal/api/handlers_workflows_test.go`,
+`docs/SECURITY.md` (new threat rows + §9.2 overrides section).
+
+## Reconciliation (spec vs shipped)
+
+- **Workflow child env was previously unvalidated.** The original spec
+  claimed `validateSubmitRequest` was shared; in practice
+  `handlers_workflows.go` only validated command/timeout/bindings/
+  selector per child and threaded env verbatim through to
+  `cpb.Job.Env` at workflow start. The feature-25 wiring fixes that
+  pre-existing gap — child-job env now gets count, shape, and
+  denylist checks.
+- **Pure helper kept Server-free.** The Server-scoped part (per-node
+  exceptions) lives in `envDenylistCheck` / `denylistOnly`; the pure
+  `envKeyBlocked` / `validateEnvMap` helpers stay testable without
+  any Server construction.
+- **Exception format differs from the spec's deferred note.** The
+  deferred paragraph said "a specific node"; shipped form matches on
+  any NodeSelector label/value pair (`role=gpu` works just as well
+  as a `node-id=...` pin, and `NodeSelector` is already the
+  load-bearing scheduler primitive). No new node-id convention was
+  introduced.
+- **Dangerous-basename list kept narrow.** The symlink deferred
+  concern is satisfied by rejecting LocalPath basenames matching the
+  dynamic linker or the handful of libraries the linker
+  unconditionally loads (libc, libpthread, libdl, libm, librt, ld-*)
+  — not every `.so` file. Legitimate CUDA/Torch artifacts
+  (`libcudart.so.11.0`, `libtorch.so`, `libcuda.so.1`) still pass.
+- **Audit event names.** Spec suggested `job.submit_reject`; shipped
+  as `env_denylist_reject` + `env_denylist_override` so reviewers can
+  distinguish "the denylist specifically fired" from "some validator
+  failed". The latter is still unaudited; generic submit-reject audit
+  is out of scope for feature 25.
 
 ## Problem
 
@@ -179,14 +224,20 @@ directly, not through the job submit path.
    blocked-key reason in its detail field (new event type or
    a reused existing reject type — TBD during implementation).
 
-## Deferred
+## Deferred (both rolled in at implementation time)
 
-- **Block-list symlinks pointing at dangerous libraries.** The
-  denylist stops key names; a sufficiently motivated attacker
-  could stage an exec that sets `LD_PRELOAD` inside the
-  subprocess once it starts. That's out of scope for submit-
-  time validation and in scope for seccomp / user-namespace
-  work (feature 15 and follow-ups).
-- **Per-node policy overrides.** An operator might want
-  `LD_LIBRARY_PATH` set for a specific job on a specific node.
-  Not supported; if you need it, run outside Helion.
+- ~~**Block-list symlinks pointing at dangerous libraries.**~~
+  Shipped as the artifact-binding extensions:
+  `validateArtifactBindingsCtx` now rejects `file://` URIs rooted in
+  system-library / kernel-export / secret-material directories AND
+  LocalPath basenames matching loader-critical shared libraries. Still
+  out of scope for submit-time: an exec that sets `LD_PRELOAD`
+  internally once it runs (that's the seccomp/user-namespace work
+  bucket).
+- ~~**Per-node policy overrides.**~~ Shipped as
+  `HELION_ENV_DENYLIST_EXCEPTIONS` (coordinator-level config, format
+  `<selector_key>=<selector_value>:<env_key>[,<env_key>]*[;<next>]`).
+  Malformed input fails to start; exception keys must themselves be on
+  the denylist; every override use is audited as
+  `env_denylist_override`. See SECURITY.md §9.2 for the full safety
+  properties.

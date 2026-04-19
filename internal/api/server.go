@@ -132,6 +132,13 @@ type Server struct {
 	// deployments that don't opt into services; the /api/services/{id}
 	// route is only registered by SetServiceRegistry.
 	services *cluster.ServiceRegistry
+
+	// Feature 25 — per-node overrides for the env denylist. nil / empty
+	// means the denylist is absolute (the safe default). Populated by
+	// the coordinator from HELION_ENV_DENYLIST_EXCEPTIONS at startup.
+	// Read-only after construction; handlers consult the slice on every
+	// submit with no locking because it's never mutated post-Serve.
+	envDenylistExceptions []EnvDenylistException
 }
 
 // DisableAuth turns off authentication for this Server. Intended ONLY for
@@ -146,6 +153,18 @@ func (s *Server) DisableAuth() {
 func (s *Server) SetLogStore(ls logstore.Store) {
 	s.logStore = ls
 	s.mux.HandleFunc("GET /jobs/{id}/logs", s.authMiddleware(s.handleGetJobLogs))
+}
+
+// SetEnvDenylistExceptions installs per-node overrides for the feature-
+// 25 env-var denylist. Must be called before Serve — the slice is read
+// without locking on every submit, so mutating it at runtime is not
+// supported.
+//
+// Parse the coordinator's HELION_ENV_DENYLIST_EXCEPTIONS via
+// ParseEnvDenylistExceptions before calling; pass nil / empty to keep
+// the denylist absolute (the safe default).
+func (s *Server) SetEnvDenylistExceptions(exceptions []EnvDenylistException) {
+	s.envDenylistExceptions = exceptions
 }
 
 // SetEventBus enables the real-time event stream endpoint /ws/events.

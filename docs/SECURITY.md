@@ -48,6 +48,10 @@ operational procedures.
 | ML-pipeline DoS via oversize artifact metadata | `http.MaxBytesReader` at 1 MiB on `POST /api/datasets` and `POST /api/models` — shared with the job-submit handler. Rate-limited per-subject via `registryQueryAllow` (2 rps burst 30). |
 | CPU job on a GPU-equipped node escapes per-job GPU pinning by setting its own `CUDA_VISIBLE_DEVICES` | Runtime stamps `CUDA_VISIBLE_DEVICES=""` into the subprocess env map (not via OS env precedence) for `req.GPUs == 0` on nodes with `allocator.Capacity() > 0`. Map-based override is unambiguous — no platform-dependent first/last-set-wins. |
 | Malicious service job binds a privileged port or hides behind a non-loopback probe | `validateServiceSpec` rejects `port < 1024`, `port > 65535`, non-absolute `health_path`, whitespace/NUL in the path, and `health_initial_ms > 30 min`. The prober binds `127.0.0.1` only — coordinator never proxies a service, a client that needs external access puts an Nginx in front. |
+| Attacker with submit permission hijacks subprocess execution on the node via a dynamic-loader env var (`LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `LD_LIBRARY_PATH`, `GCONV_PATH`, …) | **Feature 25.** Centralised denylist (`internal/api/env_denylist.go`) rejects every env key matching `LD_*`/`DYLD_*` prefixes or one of five exact glibc module-loading names. Applied on `POST /jobs`, `POST /workflows` (per child), and under `?dry_run=true`. Rust runtime's `env_clear()` is defence-in-depth; the denylist is load-bearing on the Go runtime. Every rejection emits an `env_denylist_reject` audit event. |
+| Attacker stages a file:// artifact pointing at a system library or secret-material path (`/lib/libc.so.6`, `/proc/self/environ`, `/var/run/secrets/...`) | **Feature 25.** `validateArtifactBindingsCtx` refuses `file://` URIs rooted at `/lib`, `/lib64`, `/usr/lib`, `/usr/lib64`, `/proc`, `/sys`, `/dev`, `/etc`, `/boot`, `/root`, `/var/run/secrets`, `/run/secrets`, `/run/credentials`. Path is `path.Clean`-normalised first so `//` tricks don't bypass. |
+| Attacker stages a loader-critical library (`libc.so.6`, `ld-linux-x86-64.so.2`, `libpthread.so.0`) under the job's working dir as a dlopen/LD_LIBRARY_PATH hijack target | **Feature 25.** `isDangerousLibraryBasename` rejects LocalPath basenames matching the loader itself (`ld-linux*`, `ld-musl*`, `ld.so*`) or the handful of libraries the dynamic linker unconditionally loads (`libc.so*`, `libpthread.so*`, `libdl.so*`, `libm.so*`, `librt.so*`, `libnss_*`, `libresolv.so*`, `libcrypt.so*`). Narrow on purpose — legitimate CUDA/Torch libs (`libcudart.so.*`, `libtorch.so`) still pass. |
+| Admin operator needs `LD_LIBRARY_PATH` on a specific GPU pool for CUDA dlopen | **Feature 25 per-node overrides.** `HELION_ENV_DENYLIST_EXCEPTIONS=role=gpu:LD_LIBRARY_PATH` on the coordinator (parsed at startup; malformed input fails to start). A job's env var is allowed iff its NodeSelector carries the exact key=value pair AND the env key is in the rule's list. Each override use emits an `env_denylist_override` audit event so use of the escape hatch is always visible. |
 
 ---
 
@@ -471,7 +475,88 @@ New rule for future submit paths: **"No submit path may bypass
 the seven-layer stack documented in §§4-8. The submit tab is a
 convenience UI; it does not relax any server-side check."**
 
-### 9.2 Dry-run preflight (feature 24)
+### 9.2 Dangerous-env denylist (feature 25)
+
+Every submit path (`POST /jobs`, `POST /workflows` per child job,
+under `?dry_run=true` too) rejects env vars whose keys match the
+dynamic-loader / glibc module-loading denylist:
+
+- **Prefix matches:** `LD_*` (glibc dynamic loader — `LD_PRELOAD`,
+  `LD_LIBRARY_PATH`, `LD_AUDIT`, …), `DYLD_*` (macOS loader —
+  `DYLD_INSERT_LIBRARIES`, …).
+- **Exact matches:** `GCONV_PATH`, `GIO_EXTRA_MODULES`, `HOSTALIASES`,
+  `NLSPATH`, `RES_OPTIONS`.
+
+Matched verbatim because the Linux loader itself only honours
+uppercase — a lowercase `ld_preload` is inert and doesn't need
+blocking. Admin role is subject to the same denylist: there's no
+legitimate admin workflow that needs these keys through the submit
+path.
+
+The Go runtime previously passed submit env directly to
+`exec.Command.Env`, meaning anyone with submit permission could
+hijack every exec on the node with a single `LD_PRELOAD` value. The
+Rust runtime's `env_clear()` dodges this by accident but the denylist
+is load-bearing on the Go path and defence-in-depth on both.
+
+In addition to env keys, `validateArtifactBindingsCtx` rejects two
+artifact-staging patterns that could weaponise subprocess loading
+even after the env denylist:
+
+- **`file://` URIs rooted at system-library or secret paths** —
+  `/lib`, `/lib64`, `/usr/lib`, `/usr/lib64`, `/usr/local/lib`,
+  `/proc`, `/sys`, `/dev`, `/etc`, `/boot`, `/root`,
+  `/var/run/secrets`, `/run/secrets`, `/run/credentials`. Path is
+  `path.Clean`-normalised first so `//` tricks don't slip through.
+- **LocalPath basenames matching loader-critical shared libraries** —
+  `libc.so*`, `ld-linux*`, `ld-musl*`, `libpthread.so*`, `libdl.so*`,
+  `libm.so*`, `librt.so*`, `libnss_*`, `libresolv.so*`, `libcrypt.so*`.
+  Narrow on purpose: legitimate ML libs (`libcudart.so.11.0`,
+  `libtorch.so`, `libcuda.so.1`) still pass.
+
+Every reject emits an `env_denylist_reject` audit event carrying the
+blocked key + target job/workflow id so a reviewer can spot probes in
+the audit log without regex-matching error strings.
+
+#### Per-node overrides
+
+For legitimate needs (e.g. a dedicated GPU node pool needing
+`LD_LIBRARY_PATH` for CUDA dlopen), the coordinator accepts a
+whitelist via the `HELION_ENV_DENYLIST_EXCEPTIONS` environment
+variable at startup:
+
+```
+HELION_ENV_DENYLIST_EXCEPTIONS=role=gpu:LD_LIBRARY_PATH
+HELION_ENV_DENYLIST_EXCEPTIONS=role=gpu:LD_LIBRARY_PATH;pool=build:LD_LIBRARY_PATH,GCONV_PATH
+```
+
+Format: `<selector_key>=<selector_value>:<env_key>[,<env_key>]*[;<next_rule>]`.
+
+A job's env var is allowed iff its `NodeSelector` contains the exact
+`selector_key=selector_value` pair AND the env key appears in the
+rule's list. Safety properties:
+
+- **Only set via coordinator env at startup.** Nodes cannot declare
+  their own exceptions (a compromised node can't unlock `LD_PRELOAD`
+  for jobs it's about to run).
+- **Malformed input fails to start.** A typo in the env var yields
+  `os.Exit(1)` at boot rather than silently running with the denylist
+  disabled or half-parsed rules.
+- **Exception keys must themselves be on the denylist.** Adding
+  `PYTHONPATH` to an exception rule is a parse error — rules that
+  would have no effect are not silently accepted (they'd be a
+  confusing artefact that looked like a real exception).
+- **Overrides are loudly audited.** Every env var let through by an
+  exception emits its own `env_denylist_override` audit event with
+  the job id and env key, so the escape hatch's usage is traceable.
+- **Requires explicit selector match.** A job with no NodeSelector,
+  or with a NodeSelector value that doesn't match the rule, remains
+  denied. No "default allow" behaviour.
+- **Dry-run doesn't bypass.** `?dry_run=true` applies the same check
+  with the same audit events (with a `"dry_run": true` detail field
+  so reviewers can distinguish).
+
+### 9.3 Dry-run preflight (feature 24)
 
 `?dry_run=true` is accepted on every submit/register endpoint
 (`POST /jobs`, `POST /workflows`, `POST /api/datasets`,

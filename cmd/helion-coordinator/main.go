@@ -336,6 +336,24 @@ func main() {
 	apiSrv.SetRegistryStore(registryStore)
 	apiSrv.SetServiceRegistry(serviceRegistry)
 
+	// Feature 25 — per-node env-denylist overrides. Optional. If set,
+	// must parse cleanly: a malformed rule fails the coordinator to
+	// start rather than silently running with the denylist disabled.
+	//
+	// Format: <selector_key>=<selector_value>:<env_key>[,<env_key>]*[;<next_rule>]
+	// Example: HELION_ENV_DENYLIST_EXCEPTIONS=role=gpu:LD_LIBRARY_PATH
+	if rawEx := os.Getenv("HELION_ENV_DENYLIST_EXCEPTIONS"); rawEx != "" {
+		exceptions, exErr := api.ParseEnvDenylistExceptions(rawEx)
+		if exErr != nil {
+			log.Error("HELION_ENV_DENYLIST_EXCEPTIONS parse failed — refusing to start",
+				slog.Any("err", exErr))
+			os.Exit(1)
+		}
+		apiSrv.SetEnvDenylistExceptions(exceptions)
+		log.Warn("HELION_ENV_DENYLIST_EXCEPTIONS active — denylist overrides enabled",
+			slog.Int("rule_count", len(exceptions)))
+	}
+
 	// ── Analytics pipeline (opt-in) ──────────────────────────────────────
 	// Set HELION_ANALYTICS_DSN to a PostgreSQL connection string to enable
 	// the analytics pipeline. When unset, nothing happens — no PostgreSQL

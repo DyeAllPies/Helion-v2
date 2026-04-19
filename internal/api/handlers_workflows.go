@@ -171,6 +171,41 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: %s", j.Name, msg))
 			return
 		}
+		// Feature 25 — env-map validation on each child job. Covers the
+		// count cap, key/value shape rules, and the dynamic-loader
+		// denylist. Child-job env flows verbatim into cpb.Job.Env when
+		// the workflow is Started, so validating here is load-bearing —
+		// without it a workflow could sneak LD_PRELOAD past the same
+		// check that already guards POST /jobs. Per-node exceptions
+		// consulted via the Server's parsed rules; each override fires
+		// its own audit event.
+		envRes := validateEnvMap(j.Env, j.NodeSelector, s.envDenylistExceptions)
+		if envRes.Err != "" {
+			if envRes.BlockedKey != "" && s.audit != nil {
+				if err := s.audit.Log(r.Context(), audit.EventEnvDenylistReject, actorFromContext(r.Context()), map[string]interface{}{
+					"workflow_id": req.ID,
+					"job_name":    j.Name,
+					"blocked_key": envRes.BlockedKey,
+					"dry_run":     dryRun,
+				}); err != nil {
+					logAuditErr(false, "env_denylist_reject", err)
+				}
+			}
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: %s", j.Name, envRes.Err))
+			return
+		}
+		for _, k := range envRes.OverriddenKeys {
+			if s.audit != nil {
+				if err := s.audit.Log(r.Context(), audit.EventEnvDenylistOverride, actorFromContext(r.Context()), map[string]interface{}{
+					"workflow_id": req.ID,
+					"job_name":    j.Name,
+					"env_key":     k,
+					"dry_run":     dryRun,
+				}); err != nil {
+					logAuditErr(false, "env_denylist_override", err)
+				}
+			}
+		}
 	}
 
 	// Convert request to internal types.

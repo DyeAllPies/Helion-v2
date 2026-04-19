@@ -63,6 +63,24 @@ const (
 	EventDatasetDryRun   = "dataset.dry_run"
 	EventModelRegister   = "model.registered"
 	EventModelDryRun     = "model.dry_run"
+
+	// Feature 25 — env-var denylist. Two distinct events so a reviewer
+	// can filter "someone tried to set LD_PRELOAD" from "legitimate
+	// override on a GPU-pinned job" without parsing details.
+	//
+	//   EventEnvDenylistReject   — submit/workflow REJECTED at 400
+	//                              because its env carried a denylisted
+	//                              key without a matching per-node
+	//                              exception. Detail field carries
+	//                              the blocked key + job/workflow id.
+	//   EventEnvDenylistOverride — submit/workflow ACCEPTED but with a
+	//                              denylisted key let through by a
+	//                              HELION_ENV_DENYLIST_EXCEPTIONS rule.
+	//                              One event per overridden key so the
+	//                              audit log shows which escape hatch
+	//                              fired.
+	EventEnvDenylistReject   = "env_denylist_reject"
+	EventEnvDenylistOverride = "env_denylist_override"
 )
 
 // Event represents a single audit log entry.

@@ -1012,3 +1012,262 @@ func TestSubmitJob_DryRun_ResponseKeysSupersetOfReal(t *testing.T) {
 		t.Errorf("dry-run response missing `dry_run` flag: %#v", dry)
 	}
 }
+
+// ── Feature 25 — env-var denylist on POST /jobs ──────────────────────────────
+//
+// Invariants (see docs/planned-features/implemented/25-env-var-denylist.md):
+//
+//   1. LD_PRELOAD and every other loader-injection env var on the
+//      denylist is rejected at 400 on the real path.
+//   2. The same rejection fires on the dry-run path — dry-run is not
+//      a "skip validation" probe oracle.
+//   3. Rejection emits an env_denylist_reject audit event so reviewers
+//      can spot attempted probes.
+//   4. Non-denylisted env vars (PYTHONPATH, HELION_TOKEN, …) remain
+//      accepted. No over-matching regression.
+//   5. The error body names the denylist reason so an operator can
+//      diagnose without grepping source.
+//   6. Admin role is subject to the denylist too — no bypass.
+
+func TestSubmitJob_LDPRELOAD_Rejected(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{"id":"evil","command":"echo","env":{"LD_PRELOAD":"/tmp/evil.so"}}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "dynamic-loader") {
+		t.Errorf("error body must mention dynamic-loader for operator diagnosis: %s", rr.Body.String())
+	}
+}
+
+func TestSubmitJob_DenylistedKeys_AllRejected(t *testing.T) {
+	// One test per denylist entry so a future regression surfaces the
+	// exact key that slipped through.
+	cases := []string{
+		"LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG",
+		"DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+		"GCONV_PATH", "GIO_EXTRA_MODULES", "HOSTALIASES", "NLSPATH", "RES_OPTIONS",
+	}
+	for _, key := range cases {
+		t.Run(key, func(t *testing.T) {
+			srv := newServer(newMockJobStore(), nil, nil)
+			body := fmt.Sprintf(`{"id":"j-%s","command":"echo","env":{%q:"x"}}`, strings.ToLower(key), key)
+			rr := do(srv, "POST", "/jobs", body)
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("%s: want 400, got %d: %s", key, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestSubmitJob_DenylistUnderDryRun_StillRejected(t *testing.T) {
+	// Regression guard: dry-run must not bypass the denylist.
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{"id":"dry-evil","command":"echo","env":{"LD_PRELOAD":"/tmp/evil.so"}}`
+	rr := do(srv, "POST", "/jobs?dry_run=true", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("dry-run denylist: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSubmitJob_Denylist_EmitsAuditEvent(t *testing.T) {
+	store := newAuditStore()
+	auditLog := audit.NewLogger(store, 0)
+	js := newMockJobStore()
+	srv := api.NewServer(js, nil, nil, auditLog, nil, nil, nil, nil)
+	srv.DisableAuth()
+
+	body := `{"id":"audit-evil","command":"echo","env":{"LD_PRELOAD":"/tmp/evil.so"}}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	entries, err := store.Scan(context.Background(), "audit:", 0)
+	if err != nil {
+		t.Fatalf("audit scan: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+	var ev audit.Event
+	if err := json.Unmarshal(entries[0], &ev); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if ev.Type != audit.EventEnvDenylistReject {
+		t.Errorf("audit type: want %q, got %q", audit.EventEnvDenylistReject, ev.Type)
+	}
+	if bk, _ := ev.Details["blocked_key"].(string); bk != "LD_PRELOAD" {
+		t.Errorf("audit blocked_key: want LD_PRELOAD, got %v", ev.Details["blocked_key"])
+	}
+	// Invariant: denylist rejection must NOT be persisted.
+	if len(js.jobs) != 0 {
+		t.Errorf("denylist reject must not persist; got %d jobs", len(js.jobs))
+	}
+}
+
+func TestSubmitJob_NonDenylistedEnv_Accepted(t *testing.T) {
+	// Regression guard: a common ML env (PYTHONPATH + HELION_TOKEN)
+	// must still go through after the denylist wiring.
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{"id":"ok","command":"echo","env":{"PYTHONPATH":"/app","HELION_TOKEN":"abc","CUDA_VISIBLE_DEVICES":"0"}}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusCreated {
+		t.Errorf("non-denylisted env: want 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ── Feature 25 — per-node overrides ──────────────────────────────────────────
+
+func TestSubmitJob_Override_MatchingSelector_Accepted(t *testing.T) {
+	store := newAuditStore()
+	auditLog := audit.NewLogger(store, 0)
+	js := newMockJobStore()
+	srv := api.NewServer(js, nil, nil, auditLog, nil, nil, nil, nil)
+	srv.DisableAuth()
+
+	ex, err := api.ParseEnvDenylistExceptions("role=gpu:LD_LIBRARY_PATH")
+	if err != nil {
+		t.Fatalf("parse exceptions: %v", err)
+	}
+	srv.SetEnvDenylistExceptions(ex)
+
+	body := `{"id":"gpu-job","command":"echo","env":{"LD_LIBRARY_PATH":"/opt/cuda/lib64"},"node_selector":{"role":"gpu"}}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("want 201 with override, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Must emit env_denylist_override AND job_submit — one per key, plus the normal submit event.
+	entries, _ := store.Scan(context.Background(), "audit:", 0)
+	types := make(map[string]int)
+	for _, raw := range entries {
+		var ev audit.Event
+		_ = json.Unmarshal(raw, &ev)
+		types[ev.Type]++
+	}
+	if types[audit.EventEnvDenylistOverride] != 1 {
+		t.Errorf("want 1 env_denylist_override audit event, got %d (all: %v)", types[audit.EventEnvDenylistOverride], types)
+	}
+	if types[audit.EventJobSubmit] != 1 {
+		t.Errorf("want 1 job_submit audit event (real path still fires), got %d", types[audit.EventJobSubmit])
+	}
+}
+
+func TestSubmitJob_Override_WrongSelector_Rejected(t *testing.T) {
+	// Rule says role=gpu allows LD_LIBRARY_PATH. A job with role=cpu
+	// carrying LD_LIBRARY_PATH must still be rejected.
+	srv := newServer(newMockJobStore(), nil, nil)
+	ex, _ := api.ParseEnvDenylistExceptions("role=gpu:LD_LIBRARY_PATH")
+	srv.SetEnvDenylistExceptions(ex)
+
+	body := `{"id":"cpu-trying","command":"echo","env":{"LD_LIBRARY_PATH":"/cuda"},"node_selector":{"role":"cpu"}}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("wrong selector: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSubmitJob_Override_NoSelector_Rejected(t *testing.T) {
+	// No selector at all — denylist applies absolute.
+	srv := newServer(newMockJobStore(), nil, nil)
+	ex, _ := api.ParseEnvDenylistExceptions("role=gpu:LD_LIBRARY_PATH")
+	srv.SetEnvDenylistExceptions(ex)
+
+	body := `{"id":"nosel","command":"echo","env":{"LD_LIBRARY_PATH":"/cuda"}}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("no selector: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSubmitJob_Override_DoesNotExtendToUnlistedKeys(t *testing.T) {
+	// Rule allows only LD_LIBRARY_PATH; LD_PRELOAD must still reject
+	// even on matching selector.
+	srv := newServer(newMockJobStore(), nil, nil)
+	ex, _ := api.ParseEnvDenylistExceptions("role=gpu:LD_LIBRARY_PATH")
+	srv.SetEnvDenylistExceptions(ex)
+
+	body := `{"id":"mix","command":"echo","env":{"LD_PRELOAD":"/tmp/evil"},"node_selector":{"role":"gpu"}}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("unlisted key on matching selector: want 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ── Feature 25 — artifact-staging safety (deferred: symlinks at dangerous libs) ──
+
+func TestSubmitJob_ArtifactURI_SystemPath_Rejected(t *testing.T) {
+	cases := []string{
+		"file:///lib/libc.so.6",
+		"file:///usr/lib/libm.so.6",
+		"file:///proc/self/environ",
+		"file:///etc/passwd",
+		"file:///var/run/secrets/kubernetes.io/serviceaccount/token",
+		"file://host/lib64/ld-linux-x86-64.so.2",
+	}
+	for _, uri := range cases {
+		t.Run(uri, func(t *testing.T) {
+			srv := newServer(newMockJobStore(), nil, nil)
+			body := fmt.Sprintf(`{"id":"a","command":"echo","inputs":[{"name":"IN","local_path":"d/in","uri":%q}]}`, uri)
+			rr := do(srv, "POST", "/jobs", body)
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("%s: want 400, got %d: %s", uri, rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), "feature 25") {
+				t.Errorf("%s: err should cite feature 25: %s", uri, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestSubmitJob_ArtifactURI_SafePath_Accepted(t *testing.T) {
+	srv := newServer(newMockJobStore(), nil, nil)
+	body := `{"id":"safe","command":"echo","inputs":[{"name":"DATA","local_path":"inputs/train.parquet","uri":"file:///mnt/data/train.parquet"}]}`
+	rr := do(srv, "POST", "/jobs", body)
+	if rr.Code != http.StatusCreated {
+		t.Errorf("safe file URI: want 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSubmitJob_ArtifactLocalPath_DangerousLibBasename_Rejected(t *testing.T) {
+	cases := []string{
+		"libc.so",
+		"libc.so.6",
+		"ld-linux-x86-64.so.2",
+		"libpthread.so.0",
+	}
+	for _, base := range cases {
+		t.Run(base, func(t *testing.T) {
+			srv := newServer(newMockJobStore(), nil, nil)
+			body := fmt.Sprintf(`{"id":"a","command":"echo","inputs":[{"name":"IN","local_path":"stage/%s","uri":"s3://bucket/k"}]}`, base)
+			rr := do(srv, "POST", "/jobs", body)
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("basename %q: want 400, got %d: %s", base, rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), "feature 25") {
+				t.Errorf("basename %q: err should cite feature 25: %s", base, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestSubmitJob_ArtifactLocalPath_BenignLibBasename_Accepted(t *testing.T) {
+	// Common ML lib names must NOT be caught — libcudart, libtorch,
+	// libcuda, etc. are legitimately shipped alongside jobs.
+	cases := []string{
+		"libcudart.so.11.0",
+		"libtorch.so",
+		"libcuda.so.1",
+	}
+	for _, base := range cases {
+		t.Run(base, func(t *testing.T) {
+			srv := newServer(newMockJobStore(), nil, nil)
+			body := fmt.Sprintf(`{"id":"a-%s","command":"echo","inputs":[{"name":"LIB","local_path":"stage/%s","uri":"s3://bucket/k"}]}`, strings.ReplaceAll(base, ".", "-"), base)
+			rr := do(srv, "POST", "/jobs", body)
+			if rr.Code != http.StatusCreated {
+				t.Errorf("legitimate ML lib %q: want 201, got %d: %s", base, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
