@@ -183,7 +183,19 @@ async function submitServeAndWaitReady(token: string, timeoutMs: number): Promis
       id: SERVE_JOB_ID,
       command: 'uvicorn',
       args: ['serve:app', '--host', '0.0.0.0', '--port', '8000'],
-      env: { PYTHONPATH: '/app/ml-mnist' },
+      env: {
+        PYTHONPATH: '/app/ml-mnist',
+        // Rust runtime env_clear()s — uvicorn needs PATH for its own
+        // subprocess resolution. Even though we pin the service to
+        // Go-runtime nodes below, PATH is cheap insurance.
+        PATH: '/usr/local/bin:/usr/bin:/bin',
+      },
+      // Services don't benefit from the Rust runtime's cgroup /
+      // seccomp sandbox — they're long-lived HTTP responders. Pin
+      // to a Go-runtime node so the prober and uvicorn subprocess
+      // resolution both behave like the iris demo they were sized
+      // against.
+      node_selector: { runtime: 'go' },
       inputs: [{ name: 'MODEL', uri: modelURI, local_path: 'model.joblib' }],
       service: { port: 8000, health_path: '/healthz', health_initial_ms: 2000 },
     }),
@@ -351,9 +363,13 @@ test.describe('Feature 21 — MNIST walkthrough (video recording)', () => {
     //     already visible to ops" beat land immediately.
     await page.click('a.nav-link >> text=Analytics');
     await expect(page).toHaveURL(/\/analytics$/);
-    const tenMinBtn = page.locator('button.quick-range').filter({ hasText: /LAST\s*10\s*MIN/ });
-    await expect(tenMinBtn).toBeVisible({ timeout: 10_000 });
-    await tenMinBtn.click();
+    // MNIST end-to-end finishes in ~60 s, so the tightest quick
+    // range still brackets the full run. Picking it shows that
+    // the analytics pipeline surfaces activity on a minute-scale
+    // window — not just hourly snapshots.
+    const oneMinBtn = page.locator('button.quick-range').filter({ hasText: /LAST\s*1\s*MIN/ });
+    await expect(oneMinBtn).toBeVisible({ timeout: 10_000 });
+    await oneMinBtn.click();
     // Throughput chart is the headline panel — wait for the canvas
     // (ng2-charts renders into a <canvas>) before the linger pause
     // so the final frame actually shows a chart rather than a

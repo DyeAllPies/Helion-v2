@@ -436,26 +436,30 @@ export class AnalyticsDashboardComponent implements OnInit {
   // ── Data processors ────────────────────────────────────────────────────
 
   private processThroughput(rows: AnalyticsThroughputRow[]): void {
-    // Group by hour, split by status.
-    const hourSet = new Set<string>();
-    const completed = new Map<string, number>();
-    const failed    = new Map<string, number>();
-
+    // Index by the raw ISO hour (the key the backend emits from
+    // date_trunc('hour', ...)). We aggregate on that key, then
+    // project it into a display label *after* sorting so the
+    // x-axis is chronologically ordered (sorting the localised
+    // label is wrong: it puts "Apr 4" after "Apr 30").
+    const hours      = new Set<string>();
+    const completed  = new Map<string, number>();
+    const failed     = new Map<string, number>();
     for (const r of rows) {
-      const h = new Date(r.hour).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit' });
-      hourSet.add(h);
-      if (r.status === 'completed') completed.set(h, r.job_count);
-      if (r.status === 'failed')    failed.set(h, r.job_count);
+      hours.add(r.hour);
+      if (r.status === 'completed') completed.set(r.hour, r.job_count);
+      if (r.status === 'failed')    failed.set(r.hour, r.job_count);
     }
-
-    this.throughputLabels = [...hourSet].sort();
-    this.completedData    = this.throughputLabels.map(h => completed.get(h) ?? 0);
-    this.failedData       = this.throughputLabels.map(h => failed.get(h) ?? 0);
+    const sortedHours       = [...hours].sort();
+    this.throughputLabels   = sortedHours.map(formatHourLabel);
+    this.completedData      = sortedHours.map(h => completed.get(h) ?? 0);
+    this.failedData         = sortedHours.map(h => failed.get(h) ?? 0);
   }
 
   private processQueueWait(rows: AnalyticsQueueWaitRow[]): void {
-    this.queueWaitLabels = rows.map(r =>
-      new Date(r.hour).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit' }));
+    // The backend already returns rows ordered by hour; we project
+    // each row's ISO hour into the same display label as the
+    // throughput chart so both panels share an x-axis format.
+    this.queueWaitLabels = rows.map(r => formatHourLabel(r.hour));
     this.avgWaitData = rows.map(r => r.avg_wait_ms);
     this.p95WaitData = rows.map(r => r.p95_wait_ms);
   }
@@ -567,4 +571,34 @@ export class AnalyticsDashboardComponent implements OnInit {
   private toDateStr(d: Date): string {
     return d.toISOString().slice(0, 10);
   }
+}
+
+/**
+ * Format a backend-side hourly bucket into a compact x-axis label
+ * (e.g. "Apr 18, 14:00").
+ *
+ * Bug this fixes: the original call
+ *
+ *   toLocaleDateString(undefined, { month, day, hour })
+ *
+ * silently drops the `hour` option — `toLocaleDateString` only
+ * renders date fields. Every bucket collapsed to the same "Apr 18"
+ * string, so multi-hour windows showed one x-axis tick and
+ * sub-hour windows showed a naked date with no time context.
+ * `toLocaleString` honours the `hour` field, and we pin `hour12:
+ * false` so the label is unambiguous in 24-hour locales too.
+ *
+ * Exported for unit testing; callers use it to project a sorted
+ * list of ISO hours into the displayed label array.
+ */
+export function formatHourLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    month:   'short',
+    day:     'numeric',
+    hour:    '2-digit',
+    minute:  '2-digit',
+    hour12:  false,
+  });
 }

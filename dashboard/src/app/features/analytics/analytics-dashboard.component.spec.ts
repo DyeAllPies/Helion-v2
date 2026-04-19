@@ -9,7 +9,7 @@ import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testin
 import { provideAnimations } from '@angular/platform-browser/animations';
 import { Observable, of, throwError } from 'rxjs';
 
-import { AnalyticsDashboardComponent } from './analytics-dashboard.component';
+import { AnalyticsDashboardComponent, formatHourLabel } from './analytics-dashboard.component';
 import { ApiService } from '../../core/services/api.service';
 import {
   AnalyticsThroughputResponse,
@@ -340,4 +340,87 @@ describe('AnalyticsDashboardComponent', () => {
     tick();
     expect(component.loading).toBe(false);
   }));
+
+  // ── Chart labels render the hour, not just the date ─────────────────
+
+  it('throughput x-axis labels include the hour (regression: toLocaleDateString dropped `hour`)', () => {
+    // Two hour buckets on the same day. The original bug used
+    // toLocaleDateString, which ignored the `hour` option and
+    // collapsed both rows to the same "Apr 18" label — the chart
+    // showed one tick and the sub-hour-resolution view was
+    // unreadable. Guard that each bucket now projects into its
+    // own label.
+    apiSpy.getAnalyticsThroughput.and.returnValue(of({
+      from: '', to: '',
+      data: [
+        { hour: '2026-04-18T14:00:00Z', status: 'completed', job_count: 3 },
+        { hour: '2026-04-18T15:00:00Z', status: 'completed', job_count: 5 },
+      ],
+    } as AnalyticsThroughputResponse));
+    component.reload();
+    expect(component.throughputLabels.length).toBe(2);
+    // Labels must be distinct (bug made them identical).
+    expect(component.throughputLabels[0]).not.toBe(component.throughputLabels[1]);
+    // Hour digits must appear in each label (locale-neutral check).
+    for (const label of component.throughputLabels) {
+      expect(label).toMatch(/\d{1,2}/);
+    }
+    // Data arrays line up with the sorted hour sequence.
+    expect(component.completedData).toEqual([3, 5]);
+  });
+
+  it('throughput labels are sorted chronologically by the underlying ISO hour', () => {
+    // Input order deliberately shuffled. The sort key must be the
+    // ISO string (chronological), not the localised display label
+    // (which would put "May 1" lexicographically before "May 10").
+    apiSpy.getAnalyticsThroughput.and.returnValue(of({
+      from: '', to: '',
+      data: [
+        { hour: '2026-04-18T16:00:00Z', status: 'completed', job_count: 2 },
+        { hour: '2026-04-18T14:00:00Z', status: 'completed', job_count: 7 },
+        { hour: '2026-04-18T15:00:00Z', status: 'completed', job_count: 4 },
+      ],
+    } as AnalyticsThroughputResponse));
+    component.reload();
+    // completedData[0] corresponds to the earliest hour — 7 (the
+    // 14:00 row), not 2 (the 16:00 row which came first in input).
+    expect(component.completedData).toEqual([7, 4, 2]);
+  });
+
+  it('queue-wait x-axis labels include the hour for each bucket', () => {
+    apiSpy.getAnalyticsQueueWait.and.returnValue(of({
+      from: '', to: '',
+      data: [
+        { hour: '2026-04-18T14:00:00Z', avg_wait_ms: 120, p95_wait_ms: 340 },
+        { hour: '2026-04-18T15:00:00Z', avg_wait_ms: 200, p95_wait_ms: 500 },
+      ],
+    } as AnalyticsQueueWaitResponse));
+    component.reload();
+    expect(component.queueWaitLabels.length).toBe(2);
+    expect(component.queueWaitLabels[0]).not.toBe(component.queueWaitLabels[1]);
+  });
+});
+
+describe('formatHourLabel', () => {
+  it('projects an ISO hour into a label that carries both date and hour', () => {
+    const label = formatHourLabel('2026-04-18T14:00:00Z');
+    // Exact format depends on the Karma host's locale, so don't
+    // pin the string — just require that it's not the old buggy
+    // shape (date only) by asserting BOTH a month token *and* an
+    // hour token land in the output.
+    expect(label).toMatch(/Apr|04/);
+    expect(label).toMatch(/\d{1,2}:\d{2}/);
+  });
+
+  it('returns the original string when the input is unparseable', () => {
+    // Shouldn't throw on malformed input — the chart might receive
+    // a junk row from a misconfigured analytics backend, and the
+    // panel should still render.
+    expect(formatHourLabel('not-a-date')).toBe('not-a-date');
+  });
+
+  it('distinct ISO hours produce distinct labels', () => {
+    expect(formatHourLabel('2026-04-18T14:00:00Z'))
+      .not.toBe(formatHourLabel('2026-04-18T15:00:00Z'));
+  });
 });
