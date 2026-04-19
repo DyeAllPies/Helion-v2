@@ -789,8 +789,12 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	// returns a machine-readable deny code to clients. DisableAuth
 	// stamps a dev-admin principal upstream, so the dev path still
 	// passes this check without a bypass branch here.
+	//
+	// Feature 38 — pass the job's share list so the evaluator
+	// can widen access via rule 6b (grantee match, direct or
+	// via group).
 	if !s.authzCheck(w, r, authz.ActionRead,
-		authz.JobResource(job.ID, job.OwnerPrincipal, job.WorkflowID)) {
+		authz.JobResource(job.ID, job.OwnerPrincipal, job.WorkflowID, job.Shares)) {
 		return
 	}
 
@@ -812,7 +816,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.authzCheck(w, r, authz.ActionCancel,
-		authz.JobResource(job.ID, job.OwnerPrincipal, job.WorkflowID)) {
+		authz.JobResource(job.ID, job.OwnerPrincipal, job.WorkflowID, job.Shares)) {
 		return
 	}
 
@@ -910,7 +914,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	permitted := make([]*cpb.Job, 0, len(allJobs))
 	for _, job := range allJobs {
 		if authz.Allow(p, authz.ActionRead,
-			authz.JobResource(job.ID, job.OwnerPrincipal, job.WorkflowID)) == nil {
+			authz.JobResource(job.ID, job.OwnerPrincipal, job.WorkflowID, job.Shares)) == nil {
 			permitted = append(permitted, job)
 		}
 	}

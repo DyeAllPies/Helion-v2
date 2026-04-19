@@ -17,7 +17,11 @@
 
 package coordinatorpb
 
-import "time"
+import (
+	"time"
+
+	"github.com/DyeAllPies/Helion-v2/internal/authz"
+)
 
 // ── JobStatus ─────────────────────────────────────────────────────────────────
 
@@ -208,6 +212,18 @@ type Job struct {
 	// "legacy:"-owned resources — the same fail-closed behaviour
 	// the pre-feature-36 AUDIT L1 check produced for SubmittedBy==".
 	OwnerPrincipal string `json:"owner_principal,omitempty"`
+
+	// Feature 38 — per-resource share grants. Each Share names
+	// a grantee (user:*, operator:*, group:*) and the Actions
+	// the grantee may perform. Managed via the
+	// /admin/resources/job/{id}/share endpoints, mutated only
+	// by the resource owner or an admin. Nil / empty means
+	// "only owner + admin may act" (unchanged feature-36
+	// behaviour). Persisted alongside OwnerPrincipal in the
+	// same Badger record; legacy-owned resources (owner ==
+	// "legacy:") ignore this list because feature 37's legacy
+	// sentinel short-circuits before the share check runs.
+	Shares []authz.Share `json:"shares,omitempty"`
 
 	// Runtime records which backend executed the job ("go" or "rust").
 	// Set when the node reports the result.
@@ -543,4 +559,12 @@ type Workflow struct {
 	// Legacy records (pre-feature-36) load as "legacy:" and are
 	// treated by feature 37's policy as admin-only-readable.
 	OwnerPrincipal string `json:"owner_principal,omitempty"`
+
+	// Feature 38 — share grants. See Job.Shares for the full
+	// contract. Workflow-level shares do NOT cascade to child
+	// jobs — each materialised Job carries its own inherited
+	// list at Start() time (empty by default) so revoking a
+	// workflow share does not silently strip access on jobs
+	// that had been given their own shares after start.
+	Shares []authz.Share `json:"shares,omitempty"`
 }

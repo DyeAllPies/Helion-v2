@@ -146,6 +146,18 @@ type Resource struct {
 	// principals can access jobs that belong to the same
 	// workflow). Empty for standalone jobs.
 	WorkflowID string
+
+	// Shares is the feature-38 grant list attached to this
+	// resource. Evaluated by rule 6b in Allow — a grantee
+	// whose principal (or group membership) matches a share
+	// and whose action is in the share's Actions list is
+	// permitted even when the owner check fails.
+	//
+	// Always nil on ResourceKindSystem (system resources are
+	// admin-only by construction). May be nil or empty on
+	// user-owned resources — the evaluator treats nil/empty
+	// exactly the same as "no shares".
+	Shares []Share
 }
 
 // SystemResource returns the singleton Resource for
@@ -158,51 +170,74 @@ var systemResourceSingleton = Resource{Kind: ResourceKindSystem}
 
 // JobResource builds a Resource for a cluster job. owner is the
 // Job's OwnerPrincipal; workflowID is empty for standalone
-// jobs.
-func JobResource(id, owner, workflowID string) *Resource {
-	return &Resource{
+// jobs; shares is the feature-38 share list (nil ok).
+func JobResource(id, owner, workflowID string, shares ...[]Share) *Resource {
+	r := &Resource{
 		Kind:           ResourceKindJob,
 		ID:             id,
 		OwnerPrincipal: owner,
 		WorkflowID:     workflowID,
 	}
+	if len(shares) > 0 {
+		r.Shares = shares[0]
+	}
+	return r
 }
 
-// WorkflowResource builds a Resource for a workflow.
-func WorkflowResource(id, owner string) *Resource {
-	return &Resource{
+// WorkflowResource builds a Resource for a workflow. shares is
+// the feature-38 share list (nil ok).
+func WorkflowResource(id, owner string, shares ...[]Share) *Resource {
+	r := &Resource{
 		Kind:           ResourceKindWorkflow,
 		ID:             id,
 		OwnerPrincipal: owner,
 	}
+	if len(shares) > 0 {
+		r.Shares = shares[0]
+	}
+	return r
 }
 
 // DatasetResource builds a Resource for a registry dataset.
-func DatasetResource(id, owner string) *Resource {
-	return &Resource{
+func DatasetResource(id, owner string, shares ...[]Share) *Resource {
+	r := &Resource{
 		Kind:           ResourceKindDataset,
 		ID:             id,
 		OwnerPrincipal: owner,
 	}
+	if len(shares) > 0 {
+		r.Shares = shares[0]
+	}
+	return r
 }
 
 // ModelResource builds a Resource for a registry model.
-func ModelResource(id, owner string) *Resource {
-	return &Resource{
+func ModelResource(id, owner string, shares ...[]Share) *Resource {
+	r := &Resource{
 		Kind:           ResourceKindModel,
 		ID:             id,
 		OwnerPrincipal: owner,
 	}
+	if len(shares) > 0 {
+		r.Shares = shares[0]
+	}
+	return r
 }
 
 // ServiceResource builds a Resource for a ServiceEndpoint.
-// owner is the owning job's OwnerPrincipal.
-func ServiceResource(id, owner string) *Resource {
-	return &Resource{
+// owner is the owning job's OwnerPrincipal. Services inherit
+// shares from their owning Job in the handler layer — the
+// ServiceEndpoint itself doesn't carry its own share list.
+func ServiceResource(id, owner string, shares ...[]Share) *Resource {
+	r := &Resource{
 		Kind:           ResourceKindService,
 		ID:             id,
 		OwnerPrincipal: owner,
 	}
+	if len(shares) > 0 {
+		r.Shares = shares[0]
+	}
+	return r
 }
 
 // ── DenyError ───────────────────────────────────────────────
@@ -377,6 +412,19 @@ func Allow(p *principal.Principal, action Action, res *Resource) error {
 		}
 		if p.ID == res.OwnerPrincipal {
 			return nil
+		}
+		// Rule 6b (feature 38) — share grants. A share that
+		// names the principal directly (`user:bob`) OR a
+		// group the principal belongs to (`group:ml-team`)
+		// and whose Actions list contains the requested
+		// action widens access without making the grantee
+		// an owner or an admin. Runs AFTER the owner check
+		// so the happy path (owner reading own resource) is
+		// a single comparison.
+		for _, sh := range res.Shares {
+			if matchesGrantee(p, sh.Grantee) && containsAction(sh.Actions, action) {
+				return nil
+			}
 		}
 		return denyf(DenyCodeNotOwner, action, p, res,
 			"principal %q is not owner of %s/%s (owner=%q)",

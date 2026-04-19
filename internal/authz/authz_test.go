@@ -167,6 +167,136 @@ func TestAllow_UnknownKind_FailsClosed(t *testing.T) {
 	}
 }
 
+// ── Feature 38: share grants (rule 6b) ──────────────────────────────────────
+
+// TestAllow_DirectShare_AllowsGrantee covers the simplest share
+// path — a user:bob share with ActionRead lets Bob read a
+// resource owned by Alice.
+func TestAllow_DirectShare_AllowsGrantee(t *testing.T) {
+	bob := principal.User("bob", "user")
+	res := authz.WorkflowResource("wf-1", "user:alice", []authz.Share{
+		{Grantee: "user:bob", Actions: []authz.Action{authz.ActionRead}},
+	})
+	if err := authz.Allow(bob, authz.ActionRead, res); err != nil {
+		t.Fatalf("direct read share: want allow, got %v", err)
+	}
+}
+
+// TestAllow_ShareActionScoped guards the per-action scope —
+// a Share that grants only Read does NOT grant Cancel.
+func TestAllow_ShareActionScoped(t *testing.T) {
+	bob := principal.User("bob", "user")
+	res := authz.WorkflowResource("wf-1", "user:alice", []authz.Share{
+		{Grantee: "user:bob", Actions: []authz.Action{authz.ActionRead}},
+	})
+	err := authz.Allow(bob, authz.ActionCancel, res)
+	if err == nil {
+		t.Fatalf("cancel via read-only share: want deny, got allow")
+	}
+	var de *authz.DenyError
+	if !errors.As(err, &de) || de.Code != authz.DenyCodeNotOwner {
+		t.Fatalf("want not_owner, got %v", err)
+	}
+}
+
+// TestAllow_GroupShare_AllowsMember covers `group:ml-team` share
+// when Bob's Principal.Groups contains "ml-team".
+func TestAllow_GroupShare_AllowsMember(t *testing.T) {
+	bob := principal.User("bob", "user")
+	bob.Groups = []string{"ml-team", "ops"}
+	res := authz.WorkflowResource("wf-1", "user:alice", []authz.Share{
+		{Grantee: "group:ml-team", Actions: []authz.Action{authz.ActionRead, authz.ActionCancel}},
+	})
+	if err := authz.Allow(bob, authz.ActionRead, res); err != nil {
+		t.Fatalf("group-share read: want allow, got %v", err)
+	}
+	if err := authz.Allow(bob, authz.ActionCancel, res); err != nil {
+		t.Fatalf("group-share cancel: want allow, got %v", err)
+	}
+}
+
+// TestAllow_GroupShare_RejectsNonMember — Carol is NOT in
+// ml-team, so the group share doesn't help her.
+func TestAllow_GroupShare_RejectsNonMember(t *testing.T) {
+	carol := principal.User("carol", "user")
+	carol.Groups = []string{"other"}
+	res := authz.WorkflowResource("wf-1", "user:alice", []authz.Share{
+		{Grantee: "group:ml-team", Actions: []authz.Action{authz.ActionRead}},
+	})
+	err := authz.Allow(carol, authz.ActionRead, res)
+	if err == nil {
+		t.Fatalf("non-member read: want deny, got allow")
+	}
+	var de *authz.DenyError
+	if !errors.As(err, &de) || de.Code != authz.DenyCodeNotOwner {
+		t.Fatalf("want not_owner, got %v", err)
+	}
+}
+
+// TestAllow_ShareOnLegacyOwner_StillDeniedForNonAdmin — the
+// legacy sentinel short-circuits BEFORE rule 6b. An admin can
+// share a legacy-owned resource; the grantee is still denied
+// because feature 36's fail-closed behaviour is the
+// load-bearing security property for records without a
+// recoverable owner.
+func TestAllow_ShareOnLegacyOwner_StillDeniedForNonAdmin(t *testing.T) {
+	bob := principal.User("bob", "user")
+	res := authz.WorkflowResource("wf-1", principal.LegacyOwnerID, []authz.Share{
+		{Grantee: "user:bob", Actions: []authz.Action{authz.ActionRead}},
+	})
+	err := authz.Allow(bob, authz.ActionRead, res)
+	if err == nil {
+		t.Fatalf("share on legacy-owned: want deny for non-admin, got allow")
+	}
+	var de *authz.DenyError
+	if !errors.As(err, &de) || de.Code != authz.DenyCodeLegacyOwner {
+		t.Fatalf("want legacy_owner_admin_only, got %v", err)
+	}
+}
+
+// TestValidateShare_RejectsMalformed covers the share-shape
+// checks exposed to the HTTP endpoint.
+func TestValidateShare_RejectsMalformed(t *testing.T) {
+	cases := []struct {
+		name string
+		sh   authz.Share
+	}{
+		{"empty grantee", authz.Share{Grantee: "", Actions: []authz.Action{authz.ActionRead}}},
+		{"no prefix", authz.Share{Grantee: "alice", Actions: []authz.Action{authz.ActionRead}}},
+		{"unknown kind", authz.Share{Grantee: "weird:x", Actions: []authz.Action{authz.ActionRead}}},
+		{"empty actions", authz.Share{Grantee: "user:bob", Actions: nil}},
+		{"admin action", authz.Share{Grantee: "user:bob", Actions: []authz.Action{authz.ActionAdmin}}},
+		{"anonymous grantee", authz.Share{Grantee: "anonymous", Actions: []authz.Action{authz.ActionRead}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := authz.ValidateShare(c.sh)
+			if err == nil {
+				t.Fatalf("want ErrShareInvalid, got nil")
+			}
+			if !errors.Is(err, authz.ErrShareInvalid) {
+				t.Fatalf("want ErrShareInvalid, got %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateShare_AcceptsValid smoke-tests the happy path so
+// a future tightening doesn't inadvertently reject a known-good
+// shape.
+func TestValidateShare_AcceptsValid(t *testing.T) {
+	valid := []authz.Share{
+		{Grantee: "user:bob", Actions: []authz.Action{authz.ActionRead}},
+		{Grantee: "operator:alice@ops", Actions: []authz.Action{authz.ActionRead, authz.ActionCancel}},
+		{Grantee: "group:ml-team", Actions: []authz.Action{authz.ActionRead}},
+	}
+	for _, sh := range valid {
+		if err := authz.ValidateShare(sh); err != nil {
+			t.Errorf("ValidateShare(%+v): want nil, got %v", sh, err)
+		}
+	}
+}
+
 // TestAllow_DenyErrorCarriesContext verifies the error payload
 // is useful for audit. The evaluator is pure, so this is a
 // shape test, not a behaviour test.

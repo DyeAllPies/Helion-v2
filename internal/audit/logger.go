@@ -140,6 +140,33 @@ const (
 	// this event covers AUTHORISATION denials (403 — valid
 	// identity but policy refused).
 	EventAuthzDeny = "authz_deny"
+
+	// Feature 38 — group + share lifecycle.
+	//
+	// Each event carries enough context to answer
+	// "who gained access to this resource in the last 24h?"
+	// without scanning raw audit keys:
+	//
+	//   EventGroupCreated        details: {name, created_by}
+	//   EventGroupDeleted        details: {name, deleted_by}
+	//   EventGroupMemberAdded    details: {name, principal_id, added_by}
+	//   EventGroupMemberRemoved  details: {name, principal_id, removed_by}
+	//   EventResourceShared      details: {resource_kind, resource_id,
+	//                                      grantee, actions, granted_by}
+	//   EventResourceShareRevoked details:{resource_kind, resource_id,
+	//                                      grantee, revoked_by}
+	//
+	// The analytics auth-events panel (feature 28) renders each
+	// of these as its own type so dashboard viewers can filter
+	// by event family. Security reviewers watch EventResourceShared
+	// velocity for anomalies ("admin just granted reveal on
+	// 200 jobs in an hour").
+	EventGroupCreated         = "group_created"
+	EventGroupDeleted         = "group_deleted"
+	EventGroupMemberAdded     = "group_member_added"
+	EventGroupMemberRemoved   = "group_member_removed"
+	EventResourceShared       = "resource_shared"
+	EventResourceShareRevoked = "resource_share_revoked"
 )
 
 // Event represents a single audit log entry.

@@ -15,6 +15,8 @@ package registry
 
 import (
 	"time"
+
+	"github.com/DyeAllPies/Helion-v2/internal/authz"
 )
 
 // Dataset is a registered metadata record pointing at artifact bytes
@@ -39,6 +41,12 @@ type Dataset struct {
 	// CreatedBy → "user:<CreatedBy>" or "legacy:" if CreatedBy is
 	// empty, applied on load in the registry store.
 	OwnerPrincipal string `json:"owner_principal,omitempty"`
+
+	// Feature 38 — share grants. See cpb.Job.Shares for the
+	// full contract. Managed via
+	// POST /admin/resources/dataset/{name}/{version}/share
+	// (owner-or-admin).
+	Shares []authz.Share `json:"shares,omitempty"`
 }
 
 // Model is a registered metadata record pointing at artifact bytes
@@ -65,6 +73,10 @@ type Model struct {
 	// registering actor. See Dataset.OwnerPrincipal for the full
 	// contract.
 	OwnerPrincipal string `json:"owner_principal,omitempty"`
+
+	// Feature 38 — share grants. See cpb.Job.Shares for the
+	// full contract.
+	Shares []authz.Share `json:"shares,omitempty"`
 }
 
 // DatasetRef is a lineage pointer a Model carries back to the

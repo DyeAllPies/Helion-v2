@@ -363,9 +363,10 @@ func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	// Feature 37 — first time this endpoint has any per-workflow
 	// RBAC. Pre-37, any authenticated user could read any
-	// workflow. Now: admin OR workflow owner.
+	// workflow. Now: admin OR workflow owner. Feature 38 — the
+	// share list is also honoured via rule 6b.
 	if !s.authzCheck(w, r, authz.ActionRead,
-		authz.WorkflowResource(wf.ID, wf.OwnerPrincipal)) {
+		authz.WorkflowResource(wf.ID, wf.OwnerPrincipal, wf.Shares)) {
 		return
 	}
 
@@ -412,7 +413,7 @@ func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 	permitted := make([]*cpb.Workflow, 0, len(all))
 	for _, wf := range all {
 		if authz.Allow(p, authz.ActionRead,
-			authz.WorkflowResource(wf.ID, wf.OwnerPrincipal)) == nil {
+			authz.WorkflowResource(wf.ID, wf.OwnerPrincipal, wf.Shares)) == nil {
 			permitted = append(permitted, wf)
 		}
 	}
@@ -456,7 +457,7 @@ func (s *Server) handleCancelWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.authzCheck(w, r, authz.ActionCancel,
-		authz.WorkflowResource(wf.ID, wf.OwnerPrincipal)) {
+		authz.WorkflowResource(wf.ID, wf.OwnerPrincipal, wf.Shares)) {
 		return
 	}
 

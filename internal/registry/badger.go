@@ -24,6 +24,7 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 
+	"github.com/DyeAllPies/Helion-v2/internal/authz"
 	"github.com/DyeAllPies/Helion-v2/internal/principal"
 )
 
@@ -328,6 +329,62 @@ func (s *BadgerStore) loadModelsPrefixed(prefix []byte) ([]*Model, error) {
 		return nil
 	})
 	return out, err
+}
+
+// UpdateDatasetShares replaces the Shares slice on a Dataset
+// record. Feature 38. Read-modify-write inside a single Badger
+// transaction so a concurrent register of the same key sees
+// either the old Shares or the new ones but never a torn
+// intermediate state.
+func (s *BadgerStore) UpdateDatasetShares(_ context.Context, name, version string, shares []authz.Share) error {
+	key := datasetKey(name, version)
+	return s.db.Update(func(txn *badger.Txn) error {
+		item, err := txn.Get(key)
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("UpdateDatasetShares: probe: %w", err)
+		}
+		var d Dataset
+		if err := item.Value(func(v []byte) error {
+			return json.Unmarshal(v, &d)
+		}); err != nil {
+			return fmt.Errorf("UpdateDatasetShares: unmarshal: %w", err)
+		}
+		d.Shares = shares
+		raw, err := json.Marshal(d)
+		if err != nil {
+			return fmt.Errorf("UpdateDatasetShares: marshal: %w", err)
+		}
+		return txn.Set(key, raw)
+	})
+}
+
+// UpdateModelShares is the Model-side counterpart.
+func (s *BadgerStore) UpdateModelShares(_ context.Context, name, version string, shares []authz.Share) error {
+	key := modelKey(name, version)
+	return s.db.Update(func(txn *badger.Txn) error {
+		item, err := txn.Get(key)
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("UpdateModelShares: probe: %w", err)
+		}
+		var m Model
+		if err := item.Value(func(v []byte) error {
+			return json.Unmarshal(v, &m)
+		}); err != nil {
+			return fmt.Errorf("UpdateModelShares: unmarshal: %w", err)
+		}
+		m.Shares = shares
+		raw, err := json.Marshal(m)
+		if err != nil {
+			return fmt.Errorf("UpdateModelShares: marshal: %w", err)
+		}
+		return txn.Set(key, raw)
+	})
 }
 
 // backfillDatasetOwner synthesises an OwnerPrincipal for a Dataset

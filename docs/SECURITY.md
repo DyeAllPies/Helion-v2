@@ -581,6 +581,115 @@ for the slice reconciliation and test inventory.
 
 ---
 
+## 5d. Groups and resource shares (feature 38)
+
+Feature 37 gives admin-or-owner. Feature 38 adds two orthogonal
+delegation primitives that widen access without concentrating
+blast radius on the admin role:
+
+  1. **Groups** — named, flat collections of Principal IDs. A
+     group `ml-team` with members `user:alice`, `user:bob`,
+     `operator:carol@ops` is a single identifier that can
+     appear as a grantee on a resource share.
+  2. **Shares** — per-resource grants attached to a specific
+     resource (job, workflow, dataset, model) naming a grantee
+     (direct user / operator / service / job principal, OR a
+     `group:<name>` reference) and an enumerated Action set
+     the grantee may perform.
+
+### Safety properties
+
+- **Non-transitive.** A grantee with `ActionRead` on a resource
+  cannot re-share onward. Share-mutation endpoints require the
+  caller to be the resource owner OR have `ActionAdmin`.
+  Transitive delegation is explicitly deferred per the feature
+  spec.
+- **Typed namespace.** `user:`, `operator:`, `group:`, etc. are
+  prefix-qualified; a principal ID cannot collide with a group
+  name because their prefixes differ.
+- **Flat groups.** v1 does NOT support groups-of-groups —
+  recursion-risk without a concrete use case.
+- **Action-scoped.** A share granting only `[read]` does NOT
+  grant cancel / delete / reveal. The evaluator's rule 6b
+  checks `containsAction(share.Actions, action)` before
+  allowing.
+- **Legacy-sentinel still wins.** Resources with owner
+  `legacy:` (feature 36 backfill) stay admin-only regardless of
+  shares — the legacy fail-closed check runs BEFORE rule 6b.
+- **Admin cannot share `ActionAdmin`.** `ValidateShare` rejects
+  any share whose Actions include `ActionAdmin`. Admin is a
+  kind-level role, not a per-resource capability.
+- **Per-resource cap.** `MaxSharesPerResource = 32`. Beyond
+  that the endpoint returns 400 with a hint to use a group
+  grantee instead. Keeps the per-request Allow scan cheap and
+  nudges operators toward groups for large teams.
+- **Name validation.** Group names are `[a-zA-Z0-9._-]{1,64}`
+  and must not start with `.` (defence against path-traversal
+  key shapes).
+- **Admin-only management.** Group create/delete/member-edit
+  endpoints require `ActionAdmin`. Share-mutation endpoints
+  require owner-or-admin.
+
+### Management API
+
+```
+POST   /admin/groups                          {name}
+GET    /admin/groups                          -> [Group...]
+GET    /admin/groups/{name}                   -> Group
+DELETE /admin/groups/{name}
+POST   /admin/groups/{name}/members           {principal_id}
+DELETE /admin/groups/{name}/members/{id...}
+
+POST   /admin/resources/{kind}/share?id=<id>
+       body: {grantee, actions}
+GET    /admin/resources/{kind}/shares?id=<id>
+DELETE /admin/resources/{kind}/share?id=<id>&grantee=<id>
+```
+
+Supported resource kinds: `job`, `workflow`, `dataset`, `model`.
+Registry resource ids ride in the `id` query parameter as
+`name/version` (datasets + models).
+
+Share mutations are idempotent:
+  - POST same (grantee, actions) twice → single record.
+  - POST same grantee with different actions → actions replaced
+    (last-writer-wins).
+  - DELETE an absent grantee → 204.
+
+### Audit
+
+New event types — filtering the analytics panel on these lets
+a reviewer answer "who gained access to this resource in the
+last 24h?" without scanning raw audit keys:
+
+  - `group_created`, `group_deleted`
+  - `group_member_added`, `group_member_removed`
+  - `resource_shared`, `resource_share_revoked`
+
+Every share mutation emits an event carrying the resource
+kind + id, grantee, actions (for create), and the granting
+principal. Share-escalation attempts (non-owner trying to add
+a share) emit `authz_deny` with the same rich context.
+
+### Principal resolution
+
+`authMiddleware` populates `Principal.Groups` at every
+authenticated request via a single `GroupsFor(p.ID)` lookup on
+the configured groups store (O(1) via the reverse-index prefix
+scan). Store failures log at Warn and leave `Groups` nil — a
+lookup outage does not block authentication; the cost is that
+`group:<name>` shares become inert for that request until the
+store recovers.
+
+Deployments that don't configure a groups store (dev binaries)
+skip the lookup entirely. Direct `user:<id>` shares still work;
+`group:<name>` shares are inert (no groups exist to match).
+
+See [`docs/planned-features/implemented/38-groups-and-shares.md`](planned-features/implemented/38-groups-and-shares.md)
+for the slice reconciliation and test inventory.
+
+---
+
 ## 6. Audit logging
 
 Every security and operational event is written to an append-only log in BadgerDB.

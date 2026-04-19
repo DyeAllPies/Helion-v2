@@ -49,6 +49,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
+	groupspkg "github.com/DyeAllPies/Helion-v2/internal/groups"
 	registrypkg "github.com/DyeAllPies/Helion-v2/internal/registry"
 	"github.com/DyeAllPies/Helion-v2/internal/grpcserver"
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
@@ -336,6 +337,16 @@ func main() {
 	apiSrv.SetEventBus(eventBus)
 	apiSrv.SetRegistryStore(registryStore)
 	apiSrv.SetServiceRegistry(serviceRegistry)
+
+	// Feature 38 — group + share management. Shares the main
+	// BadgerDB with jobs / workflows / registry; group records
+	// are tiny and low-traffic so a dedicated DB would be
+	// operational overhead for no isolation benefit. Enables
+	// the /admin/groups/* and /admin/resources/*/share endpoints
+	// and populates Principal.Groups on every authenticated
+	// request.
+	groupsStore := groupspkg.NewBadgerStore(persister.DB())
+	apiSrv.SetGroupsStore(groupsStore)
 
 	// Feature 25 — per-node env-denylist overrides. Optional. If set,
 	// must parse cleanly: a malformed rule fails the coordinator to

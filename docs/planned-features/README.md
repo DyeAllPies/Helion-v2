@@ -53,7 +53,7 @@ relates to `audits/` and `deferred/`.
 | ~~35~~ | ~~IAM foundation — Principal model & auth-to-principal resolution~~ | **Implemented** (principal package + middleware + audit schema + dashboard badge); moved to [`implemented/35-principal-model.md`](implemented/35-principal-model.md) | P1 | — |
 | ~~36~~ | ~~IAM — Resource ownership on every stateful type (jobs, workflows, datasets, models, services)~~ | **Implemented** (OwnerPrincipal on Job/Workflow/Dataset/Model/ServiceEndpoint + legacy backfill on load + preserve-owner tests + audit resource_owner detail); moved to [`implemented/36-resource-ownership.md`](implemented/36-resource-ownership.md) | P1 | — |
 | ~~37~~ | ~~IAM — Authorization policy engine + middleware (replaces ad-hoc RBAC)~~ | **Implemented** (internal/authz package + per-resource RBAC on jobs/workflows/datasets/models/services + authz_deny audit + deny code response + legacy claims.Subject/SubmittedBy check removed + node-role JWTs denied on REST + DisableAuth stamps dev-admin); moved to [`implemented/37-authorization-policy.md`](implemented/37-authorization-policy.md) | P1 | — |
-| 38 | IAM — Groups and resource shares (delegation beyond owner-or-admin) | Pending | P2 | [38-groups-and-shares.md](38-groups-and-shares.md) |
+| ~~38~~ | ~~IAM — Groups and resource shares (delegation beyond owner-or-admin)~~ | **Implemented** (internal/groups package with BadgerDB + MemStore + reverse index; authz.Share + rule 6b; per-resource Shares on Job/Workflow/Dataset/Model; group CRUD + share CRUD endpoints with audit; Principal.Groups populated at resolve time); moved to [`implemented/38-groups-and-shares.md`](implemented/38-groups-and-shares.md) | P2 | — |
 
 ### Priority definitions
 

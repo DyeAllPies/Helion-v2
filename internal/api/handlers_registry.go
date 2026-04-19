@@ -210,9 +210,10 @@ func (s *Server) handleGetDataset(w http.ResponseWriter, r *http.Request) {
 	}
 	// Feature 37 — first per-dataset RBAC. Pre-37 this endpoint
 	// had no check beyond rate limiting; any authenticated caller
-	// could fetch any dataset metadata.
+	// could fetch any dataset metadata. Feature 38 — honour the
+	// dataset's share list via rule 6b.
 	if !s.authzCheck(w, r, authz.ActionRead,
-		authz.DatasetResource(name+"/"+version, d.OwnerPrincipal)) {
+		authz.DatasetResource(name+"/"+version, d.OwnerPrincipal, d.Shares)) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -245,7 +246,7 @@ func (s *Server) handleListDatasets(w http.ResponseWriter, r *http.Request) {
 	permitted := make([]*registry.Dataset, 0, len(all))
 	for _, d := range all {
 		if authz.Allow(p, authz.ActionRead,
-			authz.DatasetResource(d.Name+"/"+d.Version, d.OwnerPrincipal)) == nil {
+			authz.DatasetResource(d.Name+"/"+d.Version, d.OwnerPrincipal, d.Shares)) == nil {
 			permitted = append(permitted, d)
 		}
 	}
@@ -303,7 +304,7 @@ func (s *Server) handleDeleteDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.authzCheck(w, r, authz.ActionDelete,
-		authz.DatasetResource(name+"/"+version, existing.OwnerPrincipal)) {
+		authz.DatasetResource(name+"/"+version, existing.OwnerPrincipal, existing.Shares)) {
 		return
 	}
 	if err := s.datasets.DeleteDataset(r.Context(), name, version); err != nil {
@@ -467,9 +468,10 @@ func (s *Server) handleGetModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	// Feature 37 — per-model RBAC (admin OR owner).
+	// Feature 37 — per-model RBAC (admin OR owner). Feature 38
+	// — honour the model's share list via rule 6b.
 	if !s.authzCheck(w, r, authz.ActionRead,
-		authz.ModelResource(name+"/"+version, m.OwnerPrincipal)) {
+		authz.ModelResource(name+"/"+version, m.OwnerPrincipal, m.Shares)) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -496,8 +498,9 @@ func (s *Server) handleLatestModel(w http.ResponseWriter, r *http.Request) {
 	}
 	// Feature 37 — per-model RBAC. The "latest" resolver is a
 	// read and follows the same ActionRead policy as GetModel.
+	// Feature 38 — honour the resolved model's share list.
 	if !s.authzCheck(w, r, authz.ActionRead,
-		authz.ModelResource(m.Name+"/"+m.Version, m.OwnerPrincipal)) {
+		authz.ModelResource(m.Name+"/"+m.Version, m.OwnerPrincipal, m.Shares)) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -525,7 +528,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	permitted := make([]*registry.Model, 0, len(all))
 	for _, m := range all {
 		if authz.Allow(p, authz.ActionRead,
-			authz.ModelResource(m.Name+"/"+m.Version, m.OwnerPrincipal)) == nil {
+			authz.ModelResource(m.Name+"/"+m.Version, m.OwnerPrincipal, m.Shares)) == nil {
 			permitted = append(permitted, m)
 		}
 	}
@@ -577,7 +580,7 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.authzCheck(w, r, authz.ActionDelete,
-		authz.ModelResource(name+"/"+version, existing.OwnerPrincipal)) {
+		authz.ModelResource(name+"/"+version, existing.OwnerPrincipal, existing.Shares)) {
 		return
 	}
 	if err := s.models.DeleteModel(r.Context(), name, version); err != nil {

@@ -201,12 +201,55 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// stronger identity than the JWT alone, so we do NOT
 		// overwrite it with a JWT-derived principal.
 		existing := principal.FromContext(ctx)
-		if existing.Kind != principal.KindOperator {
-			ctx = principal.NewContext(ctx, resolvePrincipalFromClaims(claims))
+		var p *principal.Principal
+		if existing.Kind == principal.KindOperator {
+			p = existing
+		} else {
+			p = resolvePrincipalFromClaims(claims)
 		}
+		// Feature 38 — populate Principal.Groups from the
+		// configured group store. Without this, authz's rule 6b
+		// (share-via-group) can never match: the Principal's
+		// Groups list would be empty regardless of membership.
+		// If no groups store is configured (dev deployments that
+		// opted out) we leave Groups nil; direct `user:<id>`
+		// shares still work, only `group:<name>` shares become
+		// inert.
+		s.populateGroups(r.Context(), p)
+		ctx = principal.NewContext(ctx, p)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
+}
+
+// populateGroups consults the groups store and fills p.Groups
+// in place. Safe to call with a nil store (no-op) or on a
+// Principal whose Kind has no stable ID (anonymous: skipped
+// because group membership on anonymous is nonsensical and
+// authz denies anonymous everywhere regardless).
+//
+// Store failures are logged at Warn and do NOT block the
+// request — a coordinator that refused auth on every group
+// lookup failure would be operationally fragile. The cost of
+// a missed group lookup is that a group-share grantee might
+// be denied an action until the next retry; the cost of a
+// hard failure would be a total auth outage. Logged for
+// monitoring.
+func (s *Server) populateGroups(ctx context.Context, p *principal.Principal) {
+	if s == nil || s.groups == nil || p == nil {
+		return
+	}
+	if p.Kind == principal.KindAnonymous {
+		return
+	}
+	list, err := s.groups.GroupsFor(ctx, p.ID)
+	if err != nil {
+		slog.Warn("groups lookup failed",
+			slog.String("principal", p.ID),
+			slog.Any("err", err))
+		return
+	}
+	p.Groups = list
 }
 
 // resolvePrincipalFromClaims maps a validated *auth.Claims into a

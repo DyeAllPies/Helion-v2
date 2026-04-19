@@ -9,6 +9,8 @@ package registry
 import (
 	"context"
 	"errors"
+
+	"github.com/DyeAllPies/Helion-v2/internal/authz"
 )
 
 // Sentinel errors. Callers match with errors.Is so the REST handler
@@ -36,6 +38,14 @@ type DatasetStore interface {
 	// Backs helion_datasets_total. Kept on the interface so a fake
 	// test store can satisfy the metrics path without a full scan.
 	CountDatasets(ctx context.Context) (int, error)
+
+	// UpdateDatasetShares replaces the Shares slice on an
+	// existing dataset in a single Badger transaction. Returns
+	// ErrNotFound when the record is missing; silently writes
+	// an empty / nil slice (revoke-all) without error. Added
+	// for feature 38; the rest of the Dataset record is
+	// immutable via this path — only Shares change.
+	UpdateDatasetShares(ctx context.Context, name, version string, shares []authz.Share) error
 }
 
 // ModelStore is the equivalent surface for models. Separate from
@@ -49,6 +59,11 @@ type ModelStore interface {
 	LatestModel(name string) (*Model, error)
 	ListModels(ctx context.Context, page, size int) ([]*Model, int, error)
 	DeleteModel(ctx context.Context, name, version string) error
+	// UpdateModelShares — see DatasetStore.UpdateDatasetShares
+	// for the contract. Separate methods per resource kind
+	// keep the interface minimal without a generic "Update"
+	// primitive.
+	UpdateModelShares(ctx context.Context, name, version string, shares []authz.Share) error
 	// CountModels returns the number of registered model entries.
 	// Backs helion_models_total.
 	CountModels(ctx context.Context) (int, error)

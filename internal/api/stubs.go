@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/DyeAllPies/Helion-v2/internal/authz"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 )
 
@@ -24,6 +25,7 @@ type JobStoreAdapter struct {
 		List() []*cpb.Job
 		GetJobsByStatus(ctx context.Context, status string) ([]*cpb.Job, error)
 		CancelJob(ctx context.Context, jobID, reason string) error
+		UpdateShares(ctx context.Context, jobID string, shares []authz.Share) error
 	}
 }
 
@@ -36,8 +38,14 @@ func NewJobStoreAdapter(store interface {
 	List() []*cpb.Job
 	GetJobsByStatus(ctx context.Context, status string) ([]*cpb.Job, error)
 	CancelJob(ctx context.Context, jobID, reason string) error
+	UpdateShares(ctx context.Context, jobID string, shares []authz.Share) error
 }) *JobStoreAdapter {
 	return &JobStoreAdapter{store: store}
+}
+
+// UpdateShares delegates to the underlying store. Feature 38.
+func (a *JobStoreAdapter) UpdateShares(ctx context.Context, jobID string, shares []authz.Share) error {
+	return a.store.UpdateShares(ctx, jobID, shares)
 }
 
 func (a *JobStoreAdapter) Submit(ctx context.Context, j *cpb.Job) error {

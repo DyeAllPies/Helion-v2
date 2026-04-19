@@ -69,6 +69,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
+	"github.com/DyeAllPies/Helion-v2/internal/groups"
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
 	"github.com/DyeAllPies/Helion-v2/internal/registry"
@@ -161,6 +162,15 @@ type Server struct {
 	// Read-only after construction; handlers consult the slice on every
 	// submit with no locking because it's never mutated post-Serve.
 	envDenylistExceptions []EnvDenylistException
+
+	// Feature 38 — group membership store. Populated via
+	// SetGroupsStore during coordinator wiring. When non-nil
+	// authMiddleware calls groups.GroupsFor() after stamping
+	// the Principal so p.Groups is available to the authz
+	// evaluator for share-via-group matching. Nil disables
+	// group membership entirely — shares with `group:<name>`
+	// grantees are inert, direct `user:<id>` shares still work.
+	groups groups.Store
 }
 
 // DisableAuth turns off authentication for this Server. Intended ONLY for
@@ -175,6 +185,51 @@ func (s *Server) DisableAuth() {
 func (s *Server) SetLogStore(ls logstore.Store) {
 	s.logStore = ls
 	s.mux.HandleFunc("GET /jobs/{id}/logs", s.authMiddleware(s.handleGetJobLogs))
+}
+
+// SetGroupsStore wires the feature-38 group-membership store.
+// Must be called BEFORE Serve starts dispatching requests so
+// authMiddleware can populate Principal.Groups on every
+// authenticated call.
+//
+// Enables the admin endpoints:
+//   POST   /admin/groups                          — create
+//   GET    /admin/groups                          — list
+//   GET    /admin/groups/{name}                   — get
+//   DELETE /admin/groups/{name}                   — delete
+//   POST   /admin/groups/{name}/members           — add member
+//   DELETE /admin/groups/{name}/members/{id...}   — remove member
+//
+// A nil store disables group membership entirely — shares with
+// `group:<name>` grantees become inert, direct shares still
+// work. That's acceptable for dev deployments that haven't
+// opted into groups, but production should always configure
+// a real BadgerStore.
+func (s *Server) SetGroupsStore(g groups.Store) {
+	s.groups = g
+	if g == nil {
+		return
+	}
+	s.mux.HandleFunc("POST /admin/groups", s.authMiddleware(s.adminMiddleware(s.handleCreateGroup)))
+	s.mux.HandleFunc("GET /admin/groups", s.authMiddleware(s.adminMiddleware(s.handleListGroups)))
+	s.mux.HandleFunc("GET /admin/groups/{name}", s.authMiddleware(s.adminMiddleware(s.handleGetGroup)))
+	s.mux.HandleFunc("DELETE /admin/groups/{name}", s.authMiddleware(s.adminMiddleware(s.handleDeleteGroup)))
+	s.mux.HandleFunc("POST /admin/groups/{name}/members", s.authMiddleware(s.adminMiddleware(s.handleAddGroupMember)))
+	// The member principal ID contains a ':' (e.g. "user:alice")
+	// and may contain further colons for subjects like
+	// "operator:alice@ops". Use a catch-all path pattern so the
+	// entire suffix after "members/" is the principal ID.
+	s.mux.HandleFunc("DELETE /admin/groups/{name}/members/{principal...}",
+		s.authMiddleware(s.adminMiddleware(s.handleRemoveGroupMember)))
+
+	// Share CRUD — owner-or-admin per-resource. Path:
+	//   /admin/resources/{kind}/{id...}/share[/{grantee...}]
+	// The `{id...}` is a catch-all so dataset keys like
+	// "mnist/1.0.0" (name/version) work without needing two
+	// levels of path variable.
+	s.mux.HandleFunc("POST /admin/resources/{kind}/share", s.authMiddleware(s.handleCreateShare))
+	s.mux.HandleFunc("GET /admin/resources/{kind}/shares", s.authMiddleware(s.handleListShares))
+	s.mux.HandleFunc("DELETE /admin/resources/{kind}/share", s.authMiddleware(s.handleRevokeShare))
 }
 
 // SetEnvDenylistExceptions installs per-node overrides for the feature-

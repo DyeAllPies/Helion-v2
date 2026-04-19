@@ -1,10 +1,10 @@
 # Feature: Groups and resource shares (delegation)
 
 **Priority:** P2
-**Status:** Pending
-**Parent slice:** depends on [feature 35](35-principal-model.md),
-[feature 36](36-resource-ownership.md), and
-[feature 37](37-authorization-policy.md).
+**Status:** Implemented (2026-04-19)
+**Parent slice:** depends on [feature 35](./35-principal-model.md),
+[feature 36](./36-resource-ownership.md), and
+[feature 37](./37-authorization-policy.md).
 **Affected files:**
 new `internal/groups/` package (Group type + storage),
 `internal/principal/principal.go` (Principal gains a
@@ -354,5 +354,103 @@ Integration:
 
 ## Implementation status
 
-_Not started. Planned 2026-04-19 as part of the IAM foundation
-discussed in features 35–38._
+_Implemented 2026-04-19._
+
+### What shipped
+
+- New `internal/groups/` package: `Group` struct, `Store`
+  interface, BadgerDB-backed impl with a reverse-index key
+  layout (`groups/members/<principal_id>\x1f<group>`) for O(1)
+  `GroupsFor` lookups. MemStore fake for tests. Name +
+  principal-ID validators reject path-traversal and unprefixed
+  identifiers at the boundary.
+- New `authz.Share` type + `ValidateShare` validator. Grantee
+  supports `user:`, `operator:`, `group:`, `service:`, `job:`
+  prefixes (not `anonymous`, not `ActionAdmin`). Per-resource
+  cap of `MaxSharesPerResource = 32`.
+- `Shares []authz.Share` added to `cpb.Job`, `cpb.Workflow`,
+  `registry.Dataset`, `registry.Model`. Persistence
+  round-trips for free (additive JSON field).
+- `authz.Allow` rule 6b — `matchesGrantee` + action-scope
+  check. Runs AFTER the owner check so happy-path (owner
+  reading own resource) stays a single comparison. Legacy-
+  sentinel short-circuit stays BEFORE rule 6b so shares on a
+  `legacy:`-owned record are inert for non-admins.
+- `authMiddleware` populates `Principal.Groups` via
+  `groups.Store.GroupsFor()` on every authenticated request.
+  Store failures log at Warn (do not block auth); a missed
+  lookup just makes `group:<name>` shares inert until recovery.
+- Group CRUD endpoints (admin-only):
+  `POST/GET/DELETE /admin/groups`, member add/remove,
+  `GET /admin/groups/{name}`. Every mutation emits a
+  `group_*` audit event.
+- Share CRUD endpoints (owner-or-admin):
+  `POST/GET/DELETE /admin/resources/{kind}/share?id=<id>`.
+  Supports `job`, `workflow`, `dataset`, `model` kinds.
+  Share mutations idempotent (last-writer-wins on same
+  grantee). Every create / revoke emits a `resource_shared` /
+  `resource_share_revoked` audit event; non-owner attempts
+  emit `authz_deny` with the same context.
+- `JobStore.UpdateShares`, `WorkflowStore.UpdateShares`,
+  `registry.DatasetStore.UpdateDatasetShares`,
+  `registry.ModelStore.UpdateModelShares` — targeted mutation
+  primitives that preserve every other field of the record
+  (ownership-preservation invariant from feature 36).
+- Handlers updated to pass resource `Shares` into the
+  `authz.Resource` construction so rule 6b can fire on
+  read/cancel/delete paths across jobs, workflows, datasets,
+  and models.
+- Coordinator wiring: `SetGroupsStore(groupspkg.NewBadgerStore
+  (persister.DB()))` in `cmd/helion-coordinator/main.go`.
+
+### Deviations from plan
+
+- **No dashboard UI in this slice.** Backend API + audit
+  wiring is complete; the admin-dashboard `/admin/groups`
+  route and the per-resource "Shared with" panel are a
+  follow-up. The HTTP endpoints are stable, so the UI can
+  ship independently.
+- **ServiceEndpoint doesn't carry its own Shares.** Service
+  endpoints inherit the owning Job's `OwnerPrincipal` (feature
+  36) and the share check runs against the Service resource
+  kind with shares inherited from the job at handler-load
+  time. Adding a separate Shares field on `cpb.ServiceEndpoint`
+  would double-track access for no gain.
+- **Group delete does NOT sweep dangling shares on resources.**
+  Shares referencing a deleted group become inert (principal
+  Groups list can no longer contain the name) so feature 37's
+  rule 6b never matches them. Hard cleanup is left to admins
+  who iterate shares via the share endpoints. A "sweep on
+  delete" pass would require scanning every resource kind,
+  which is scope-creep.
+
+### Tests added
+
+- `internal/groups/groups_test.go` — matrix-tested against
+  MemStore AND BadgerStore:
+  - CRUD round-trip
+  - Duplicate / invalid-name / invalid-principal rejection
+  - AddMember / RemoveMember idempotency + reverse-index sync
+  - Delete cleans reverse index
+  - GroupsFor prefix-scan isolation (user:a vs user:ab)
+- `internal/authz/authz_test.go` (new table rows):
+  - `TestAllow_DirectShare_AllowsGrantee`
+  - `TestAllow_ShareActionScoped`
+  - `TestAllow_GroupShare_AllowsMember`
+  - `TestAllow_GroupShare_RejectsNonMember`
+  - `TestAllow_ShareOnLegacyOwner_StillDeniedForNonAdmin`
+  - `TestValidateShare_RejectsMalformed`
+  - `TestValidateShare_AcceptsValid`
+- `internal/api/shares_integration_test.go`:
+  - `TestShares_WorkflowSharedWithGroup_MemberCanRead` —
+    end-to-end: create group, submit workflow, share with
+    group, member reads, revoke, next read fails.
+  - `TestShares_NonOwner_CannotShare` — escalation-via-share
+    refused with 403 + audit.
+  - `TestShares_DirectShare_AllowsGrantee`
+  - `TestShares_ReadShare_DoesNotGrantCancel`
+  - `TestShares_CreateEmitsAuditEvent` — resource_shared event
+    shape.
+  - `TestShares_GroupLifecycle_EndToEnd` — admin create +
+    member add/remove + delete.
+  - `TestShares_RejectsBeyondCap` — 33rd share 400s.
