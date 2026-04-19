@@ -53,10 +53,61 @@ export interface JobsPage {
   size:  number;
 }
 
+/**
+ * Client-side mirror of the Go `api.SubmitRequest`. Extended for
+ * feature 22 beyond the original three fields so the submission
+ * form can exercise the full validator surface.
+ *
+ * Note on the `env` field: the server currently accepts only the
+ * legacy `Record<string, string>` shape. When feature 26 lands, a
+ * typed slice `[{ key, value, secret }]` becomes the preferred
+ * form; until then the dashboard submits the legacy map. The
+ * secret flag is UX-only today — the input is masked with
+ * `type="password"` but the server echoes values on GET.
+ */
 export interface SubmitJobRequest {
-  id:      string;
-  command: string;
-  args?:   string[];
+  id:              string;
+  command:         string;
+  args?:           string[];
+  env?:            Record<string, string>;
+  timeout_seconds?: number;
+  priority?:       number;
+  node_selector?:  Record<string, string>;
+  working_dir?:    string;
+  inputs?:         SubmitArtifactBinding[];
+  outputs?:        SubmitArtifactBinding[];
+  limits?: {
+    memory_bytes?:  number;
+    cpu_quota_us?:  number;
+    cpu_period_us?: number;
+  };
+  resources?: {
+    gpus?: number;
+  };
+  service?: {
+    port:             number;
+    health_path:      string;
+    health_initial_ms?: number;
+  };
+}
+
+export interface SubmitArtifactBinding {
+  name:        string;
+  uri?:        string;
+  from?:       string;   // "<upstream-job>.<output-name>" reference (workflow jobs only)
+  local_path?: string;
+  sha256?:     string;
+}
+
+/**
+ * A single env var as used by the submission form. Not yet on the
+ * wire — `secret` is a client-side UI flag until feature 26
+ * lands. Kept here so form components share one type.
+ */
+export interface SubmitEnvEntry {
+  key:    string;
+  value:  string;
+  secret: boolean;
 }
 
 // ── Node ──────────────────────────────────────────────────────────────────────

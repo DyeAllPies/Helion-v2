@@ -104,9 +104,8 @@ export const routes: Routes = [
           { path: '', redirectTo: 'job', pathMatch: 'full' },
           {
             path: 'job',
-            data: { tab: 'job' },
             loadComponent: () =>
-              import('./features/submit/submit-placeholder.component').then(m => m.SubmitPlaceholderComponent),
+              import('./features/submit/submit-job.component').then(m => m.SubmitJobComponent),
           },
           {
             path: 'workflow',
