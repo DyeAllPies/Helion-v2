@@ -19,10 +19,22 @@ service_probe_events, job_log_entries),
 `internal/analytics/sink.go` (dispatch-switch additions +
 `SinkConfig.PIIMode/PIISalt`),
 `internal/analytics/sink_unified.go` (new — upserts + PII hashing),
-`internal/analytics/retention.go` (new — daily cron pruning every
-feature-28 table, `HELION_ANALYTICS_RETENTION_DAYS`),
+`internal/analytics/retention.go` (new — opt-in daily cron pruning
+every feature-28 table EXCEPT `job_log_entries`;
+`HELION_ANALYTICS_RETENTION_DAYS` default 0),
+`internal/analytics/log_confirmer.go` (new — PG-backed
+`logstore.PGLogConfirmer` for the reconciler),
+`internal/logstore/store.go` (new `Reconcilable` interface +
+`BadgerLogStore.ReconcileConfirmed` + `MemLogStore.ReconcileConfirmed`
+for tests; `Persistence` extended with `Delete`),
+`internal/logstore/reconciler.go` (new — background loop that
+deletes Badger log entries confirmed in PG),
+`internal/logstore/reconciler_test.go` (new — 7 cases covering
+confirmed/unconfirmed/age-gate/error/batching/idempotency),
 `internal/analytics/sink_unified_test.go` +
-`internal/analytics/retention_test.go` (new),
+`internal/analytics/retention_test.go` (new; retention test has a
+`TestRetentionCron_NeverPrunesJobLogs` guard against regressions
+in the excluded-tables list),
 `internal/events/topics.go` (new constants + constructors:
 `SubmissionRecorded`, `AuthOK` / `Fail` / `RateLimit` / `TokenMint`,
 `ArtifactUploaded` / `Downloaded`, `ServiceProbeTransition`, `JobLog`),
@@ -59,17 +71,37 @@ methods),
 
 ## Reconciliation (spec vs shipped)
 
-- **Per-job log ingestion (user add) shipped as dual-write.** The
-  spec's Deferred section said this was out of scope; the user
-  asked for it to land so BadgerDB's log TTL can eventually relax.
-  Shipped form: every chunk captured in
-  `grpcserver.StreamLogs` lands in BadgerDB (primary read path
-  today) AND publishes a `job.log` event that the sink persists to
-  PostgreSQL's `job_log_entries` (ON CONFLICT DO NOTHING on
-  (job_id, seq) so duplicate ingests are idempotent). A new
-  `GET /api/analytics/job-logs` endpoint reads from PG. A
-  follow-up slice can drop BadgerDB's `log:` prefix once PG has a
-  full retention window of coverage.
+- **Per-job log ingestion (user add) shipped with Badger→PG
+  reconciler.** The spec's Deferred section said this was out of
+  scope; the user asked for it to land so BadgerDB's log TTL
+  pressure can ease. Shipped form:
+  1. Every chunk captured in `grpcserver.StreamLogs` lands in
+     BadgerDB (primary live-tail read path) AND publishes a
+     `job.log` event.
+  2. Analytics sink batches the event into PG `job_log_entries`
+     (ON CONFLICT DO NOTHING on (job_id, seq) — idempotent).
+  3. Opt-in `internal/logstore/Reconciler` runs on
+     `HELION_LOGSTORE_RECONCILE=1`, periodically asking PG "do you
+     have this (job_id, seq) confirmed?" via the new
+     `internal/analytics/LogConfirmer` and deleting the Badger
+     copy only on positive confirmation + an age gate (default
+     5 min).
+  4. A new `GET /api/analytics/job-logs` endpoint reads from PG
+     for operators asking about older chunks.
+- **After user clarification on log retention direction:** the
+  initial feature-28 commit framed BadgerDB as the long-term
+  audit-style store and had analytics retention at 60 d default,
+  including `job_log_entries`. That was backwards — PG is the
+  better long-term log store (more flexible queries, no TTL).
+  Fixed in the same feature-28 slice:
+  - `HELION_ANALYTICS_RETENTION_DAYS` default flipped from `60`
+    → `0` (opt-in).
+  - `job_log_entries` REMOVED from the retention cron's table
+    list. `TestRetentionCron_NeverPrunesJobLogs` guards the
+    invariant.
+  - Persistence doc + SECURITY.md threat rows rewritten to
+    reflect "PG = forever log store; Badger = short-term live-
+    tail cache freed once PG has it".
 - **Artifact downloads emitted from the dispatch loop, not the node.**
   The node performs the actual byte transfer but does not report
   per-download RPCs today. `internal/cluster/dispatch.go` emits one

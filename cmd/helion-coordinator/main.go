@@ -407,15 +407,49 @@ func main() {
 		// Wire analytics API endpoints.
 		apiSrv.SetAnalyticsDB(pgPool)
 
-		// Feature 28 — retention cron. Prunes rows older than the
-		// configured retention window from every feature-28 table.
-		// Audit log (BadgerDB) is untouched — it's the forever-record.
-		retentionDays := envInt("HELION_ANALYTICS_RETENTION_DAYS", 60)
+		// Feature 28 — retention cron. OPT-IN: default 0 (disabled).
+		// PostgreSQL is the long-term analytics store; operators who
+		// want PG to age rows out set a positive retention window.
+		// The cron NEVER prunes job_log_entries — PG is the
+		// forever-home for per-job logs (see analytics/retention.go
+		// comment on retainedTables). Audit log (BadgerDB `audit/`
+		// prefix) is untouched by retention either way.
+		retentionDays := envInt("HELION_ANALYTICS_RETENTION_DAYS", 0)
 		if retentionDays > 0 {
 			retCron := analytics.NewRetentionCron(pgPool, retentionDays, log)
 			retCron.Start(ctx)
 			log.Info("analytics retention cron started",
-				slog.Int("retention_days", retentionDays))
+				slog.Int("retention_days", retentionDays),
+				slog.String("note", "job_log_entries excluded — PG is the forever-home for logs"))
+		} else {
+			log.Info("analytics retention cron disabled (HELION_ANALYTICS_RETENTION_DAYS=0)",
+				slog.String("effect", "analytics rows persist indefinitely"))
+		}
+
+		// Feature 28 — Badger→Postgres log reconciler.
+		//
+		// Opt-in. When enabled, a background loop deletes Badger log
+		// entries that are confirmed present in PostgreSQL's
+		// `job_log_entries`. Lets the Badger log cache stay small
+		// while PG becomes the authoritative long-term store. Never
+		// deletes unconfirmed entries (see
+		// internal/logstore/reconciler.go for the safety story).
+		//
+		// Off by default because operators who want belt-and-braces
+		// "both stores forever" can simply leave it off and let
+		// Badger's TTL free space naturally. On: explicit opt-in
+		// for clusters that feel Badger's log volume.
+		if envOr("HELION_LOGSTORE_RECONCILE", "") != "" {
+			confirmer := analytics.NewLogConfirmer(pgPool)
+			reconciler := logstore.NewReconciler(logStore, confirmer, logstore.ReconcilerConfig{
+				Interval:  time.Duration(envInt("HELION_LOGSTORE_RECONCILE_INTERVAL_MIN", 10)) * time.Minute,
+				MinAge:    time.Duration(envInt("HELION_LOGSTORE_RECONCILE_MIN_AGE_MIN", 5)) * time.Minute,
+				BatchSize: envInt("HELION_LOGSTORE_RECONCILE_BATCH", 200),
+			}, log)
+			reconciler.Start(ctx)
+			log.Info("logstore reconciler started — Badger log entries will be freed once PG confirms them",
+				slog.Int("interval_min", envInt("HELION_LOGSTORE_RECONCILE_INTERVAL_MIN", 10)),
+				slog.Int("min_age_min", envInt("HELION_LOGSTORE_RECONCILE_MIN_AGE_MIN", 5)))
 		}
 
 		log.Info("analytics pipeline enabled",

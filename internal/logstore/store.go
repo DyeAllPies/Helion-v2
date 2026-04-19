@@ -37,10 +37,48 @@ type Store interface {
 	Get(ctx context.Context, jobID string) ([]LogEntry, error)
 }
 
+// Reconcilable is the feature-28 extension capability: a store
+// that can safely drop entries that have been confirmed durably
+// stored elsewhere (PostgreSQL's `job_log_entries` table). Kept
+// separate from Store so the production BadgerDB path wires it
+// but tests that don't care about reconciliation (e.g.
+// `MemLogStore`) aren't forced to implement it.
+//
+// Split-brain guarantee: the reconciler MUST NOT call this with a
+// confirmedFn that returns true for an entry the caller hasn't
+// actually observed in the downstream store. A wrongly-reported
+// "confirmed" would permanently lose data (Badger is the only
+// copy until PG has it).
+type Reconcilable interface {
+	// ReconcileConfirmed walks every stored entry, calls
+	// confirmedFn(jobID, seq) for each, and deletes the Badger
+	// entry if BOTH:
+	//
+	//   (a) confirmedFn returns (true, nil), AND
+	//   (b) the entry's Timestamp is at least minAge old.
+	//
+	// The age check prevents a too-aggressive deletion when a
+	// chunk has just arrived and the PG sink hasn't flushed yet;
+	// it defaults to the interval the reconciler caller uses, not
+	// the Store's business.
+	//
+	// Returns (deleted, scanned, err). A per-entry delete failure
+	// is counted toward scanned but does NOT abort the scan — the
+	// next entry still gets its chance. The final err is the first
+	// non-nil one encountered, if any.
+	ReconcileConfirmed(
+		ctx context.Context,
+		minAge time.Duration,
+		confirmedFn func(jobID string, seq uint64) (bool, error),
+	) (deleted, scanned int, err error)
+}
+
 // Persistence is the narrow BadgerDB interface the logstore needs.
+// Delete is the feature-28 addition — see BadgerLogStore.ReconcileConfirmed.
 type Persistence interface {
 	Put(ctx context.Context, key string, value []byte) error
 	Scan(ctx context.Context, prefix string, limit int) ([][]byte, error)
+	Delete(ctx context.Context, key string) error
 }
 
 // BadgerLogStore implements Store using BadgerDB.
@@ -87,6 +125,71 @@ func (s *BadgerLogStore) Get(ctx context.Context, jobID string) ([]LogEntry, err
 	return entries, nil
 }
 
+// ReconcileConfirmed implements Reconcilable. See the interface doc
+// for the deletion contract. Feature 28: callers wire this to a PG-
+// backed confirmedFn so Badger log entries get freed once PG has
+// them, letting the (low-query-flexibility) Badger log cache shrink
+// while PG becomes the authoritative long-term store.
+//
+// Iteration strategy: Scan the entire `log:` prefix in one call
+// (no Badger API today for streaming key-only iteration from the
+// narrow Persistence interface). At realistic volumes (tens of
+// thousands of active job chunks) this is cheap; operators with
+// multi-million-chunk backlogs should size the reconciler interval
+// to match their cluster's log rate.
+func (s *BadgerLogStore) ReconcileConfirmed(
+	ctx context.Context,
+	minAge time.Duration,
+	confirmedFn func(jobID string, seq uint64) (bool, error),
+) (deleted, scanned int, firstErr error) {
+	if confirmedFn == nil {
+		return 0, 0, fmt.Errorf("logstore.ReconcileConfirmed: confirmedFn is required")
+	}
+	raw, err := s.db.Scan(ctx, "log:", 0)
+	if err != nil {
+		return 0, 0, fmt.Errorf("logstore.ReconcileConfirmed scan: %w", err)
+	}
+	ageCutoff := time.Now().Add(-minAge)
+	for _, data := range raw {
+		if err := ctx.Err(); err != nil {
+			return deleted, scanned, err
+		}
+		scanned++
+		var entry LogEntry
+		if err := json.Unmarshal(data, &entry); err != nil {
+			// Corrupt entries are left in place — the Badger TTL
+			// eventually removes them. Better to skip than to
+			// delete something we can't positively identify.
+			continue
+		}
+		// Safety margin: entries newer than minAge might not be in
+		// PG yet (sink batches every FlushInterval; we don't want
+		// to race with the sink flush).
+		if entry.Timestamp.After(ageCutoff) {
+			continue
+		}
+		ok, err := confirmedFn(entry.JobID, entry.Seq)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("confirmedFn(%s, %d): %w", entry.JobID, entry.Seq, err)
+			}
+			continue
+		}
+		if !ok {
+			continue
+		}
+		key := fmt.Sprintf("log:%s:%010d", entry.JobID, entry.Seq)
+		if err := s.db.Delete(ctx, key); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("delete %s: %w", key, err)
+			}
+			continue
+		}
+		deleted++
+	}
+	return deleted, scanned, firstErr
+}
+
 // ── In-memory store for tests ────────────────────────────────────────────────
 
 // MemLogStore is an in-memory Store for testing.
@@ -106,4 +209,46 @@ func (m *MemLogStore) Append(_ context.Context, entry LogEntry) error {
 
 func (m *MemLogStore) Get(_ context.Context, jobID string) ([]LogEntry, error) {
 	return m.entries[jobID], nil
+}
+
+// ReconcileConfirmed implements Reconcilable for the in-memory store
+// so tests for the feature-28 reconciler loop can use MemLogStore
+// directly (no Badger required).
+func (m *MemLogStore) ReconcileConfirmed(
+	ctx context.Context,
+	minAge time.Duration,
+	confirmedFn func(jobID string, seq uint64) (bool, error),
+) (deleted, scanned int, firstErr error) {
+	if confirmedFn == nil {
+		return 0, 0, fmt.Errorf("logstore.ReconcileConfirmed: confirmedFn is required")
+	}
+	ageCutoff := time.Now().Add(-minAge)
+	for jobID, list := range m.entries {
+		kept := list[:0]
+		for _, entry := range list {
+			if err := ctx.Err(); err != nil {
+				return deleted, scanned, err
+			}
+			scanned++
+			if entry.Timestamp.After(ageCutoff) {
+				kept = append(kept, entry)
+				continue
+			}
+			ok, err := confirmedFn(entry.JobID, entry.Seq)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				kept = append(kept, entry)
+				continue
+			}
+			if !ok {
+				kept = append(kept, entry)
+				continue
+			}
+			deleted++
+		}
+		m.entries[jobID] = kept
+	}
+	return deleted, scanned, firstErr
 }

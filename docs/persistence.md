@@ -116,7 +116,7 @@ See [ml-pipelines.md](ml-pipelines.md) for the ML-side
 implications and [ARCHITECTURE.md § 13](ARCHITECTURE.md#13-ml-pipeline)
 for the diagram.
 
-## Storage tiers — the audit ↔ analytics contract (feature 28)
+## Storage tiers — audit ↔ analytics ↔ logs (feature 28)
 
 Helion's persistence story runs on **three stores with distinct
 purposes**. Knowing which to hit for a given question is the
@@ -125,36 +125,84 @@ difference between a clean forensic trail and a support escalation.
 | Store           | Backing | Retention | Purpose | Query shape |
 |---|---|---|---|---|
 | **Audit log**   | BadgerDB (`audit/` prefix) | **forever** (append-only) | Accountability. Compliance. Security incident response. | Per-key lookup; `Scan(prefix)` range walk. |
-| **Analytics**   | PostgreSQL (feature 09 + 28) | **operational window** (default 60 d, set via `HELION_ANALYTICS_RETENTION_DAYS`) | Dashboards. Capacity planning. Trend graphs. | `GROUP BY date_trunc` aggregation + percentiles. |
-| **Log store**   | BadgerDB (`log:` prefix) + PostgreSQL (`job_log_entries`, feature 28) | BadgerDB 7 d (configurable); PG subject to analytics retention | Per-job stdout/stderr. | `GET /jobs/{id}/logs` (Badger); `GET /api/analytics/job-logs?job_id=…` (PG). |
+| **Analytics (non-log)** | PostgreSQL (feature 09 + 28) | **indefinite by default**; opt-in retention via `HELION_ANALYTICS_RETENTION_DAYS` | Dashboards. Capacity planning. Trend graphs. | `GROUP BY date_trunc` aggregation + percentiles. |
+| **Log store**   | PostgreSQL (`job_log_entries`) — **authoritative long-term home**; BadgerDB (`log:` prefix) — **short-term cache freed once PG has the chunk** | PG: indefinite (NEVER pruned by the retention cron); Badger: default 7 d TTL, or freed sooner by the reconciler when PG confirms | Per-job stdout/stderr. | `GET /jobs/{id}/logs` (Badger, fast live-tail); `GET /api/analytics/job-logs?job_id=…` (PG, full history). |
 
-**Invariant.** Every event in the analytics store has a
-complementary entry in the audit log. Deleting the oldest analytics
-rows at the retention edge **never** compromises the audit trail —
-an operator can always reconstruct "what happened last year" from
-BadgerDB, just more slowly than a PG `date_trunc` would.
+### Why PG is the log long-term store, not Badger
 
-**Which store to hit:**
+Badger's value on the log path is fast live-tail — the existing
+`/jobs/{id}/logs` endpoint scans a key prefix and streams. That
+works great for the first few minutes of a job's life. It stops
+being a good answer at month-old-archive timescales:
+
+- Badger is a key-value engine; log search / filtering across jobs
+  requires reading every key.
+- The Badger TTL (default 7 d) silently drops old chunks; there's
+  no "rotate to S3" escape hatch.
+- Operators who want SQL-shaped queries against log bytes
+  (`WHERE data ILIKE '%traceback%'`) can't get there from Badger.
+
+PostgreSQL's `job_log_entries` table solves all three. The
+feature-28 reconciler flips the natural deletion direction:
+
+1. Node streams a chunk → gRPC `StreamLogs` handler.
+2. Handler writes to Badger (primary read path today) AND
+   publishes `job.log` to the event bus.
+3. Analytics sink batches the event into `job_log_entries`.
+4. Reconciler periodically asks PG "do you have (job_id, seq)?"
+   and deletes the Badger copy when the answer is yes AND the
+   entry is at least `MinAge` old.
+
+After the reconciler catches up, **PG is the only durable copy**.
+That's the intended steady state: PG stores every chunk forever,
+Badger keeps only the last few minutes for live-tail speed.
+
+### Invariants
+
+- **PG `job_log_entries` is NEVER pruned by the retention cron.**
+  `retainedTables` in `internal/analytics/retention.go` deliberately
+  excludes it; a test (`TestRetentionCron_NeverPrunesJobLogs`)
+  guards against regressions. If an operator enables retention via
+  `HELION_ANALYTICS_RETENTION_DAYS=30`, every other feature-28
+  table ages out but logs stay.
+- **Badger log entries are deleted only when PG confirms them.**
+  The reconciler runs a `SELECT 1 FROM job_log_entries WHERE
+  job_id = $1 AND seq = $2` for each candidate; a miss means
+  "don't delete". A PG outage never causes data loss — the next
+  tick retries.
+- **Safety-margin MinAge (default 5 min)** keeps just-landed
+  chunks from racing the sink's batched flush. Entries younger
+  than MinAge are skipped even when PG confirms them.
+- **Every event in the `events` / feature-28 tables has a
+  complementary entry in the audit log.** Losing an analytics row
+  (retention, corruption, restore from backup) never compromises
+  accountability — the audit log in BadgerDB is authoritative.
+  The one exception: **logs are not in the audit log**; they live
+  only in PG (long-term) + Badger (short-term cache), which is
+  why PG logs are never pruned.
+
+### Which store to hit
 
 - "Who submitted this job?" → **audit log**. Canonical per-event
   record, never rotated.
 - "How many jobs per hour did we run last week?" → **analytics**.
   Time-series-shaped, fast range aggregation.
-- "Show me the stdout of job X from 30 minutes ago." → **log
-  store (Badger)** via `/jobs/{id}/logs`.
-- "Show me the stdout of job X from 2 months ago." → **log
-  store (PG)** via `/api/analytics/job-logs?job_id=X`, provided
-  the request falls inside the analytics retention window.
+- "Show me the stdout of job X from 30 minutes ago." → **Badger
+  log cache** via `/jobs/{id}/logs`. Fast live-tail.
+- "Show me the stdout of job X from 2 months ago." → **PG
+  `job_log_entries`** via `/api/analytics/job-logs?job_id=X`. The
+  reconciler has long since deleted Badger's copy, but PG has
+  everything.
 - "Who logged in during the breach window?" → **audit log** for
   accountability AND **analytics** `auth_events` for the
   time-series form. Both stores are authoritative, both are
   cross-referenceable by `occurred_at`.
 
-**Tier invariants:**
+### Compromise semantics
 
 - **A compromised analytics database does NOT compromise the audit
-  trail.** The retention cron DELETEs analytics rows; the audit log
-  in Badger is untouched.
+  trail.** The audit log in Badger is untouched. Logs are at risk
+  (PG is the long-term home), but the audit log proves what ran.
 - **A compromised audit store is a full cluster compromise.** If
   BadgerDB is writable by an attacker, both audit history and job
   state are in play — treat as a security incident.
@@ -164,11 +212,14 @@ BadgerDB, just more slowly than a PG `date_trunc` would.
   deployments — dashboards still get per-subject trends via
   consistent hashing, but a PG dump doesn't expose raw identities.
 
-**Retention knobs** (set on the coordinator):
+### Configuration knobs
 
-- `HELION_ANALYTICS_RETENTION_DAYS` — default 60. Older rows in
-  every feature-28 table are DELETEd by a daily cron. Set to 0 to
-  disable retention (PII / compliance pushback scenarios).
+Retention + PII + reconciler — all off by default. Operators opt
+in as their deployment grows.
+
+- `HELION_ANALYTICS_RETENTION_DAYS` — default **0 (disabled)**.
+  Set positive to prune non-log analytics rows older than N days.
+  `job_log_entries` is excluded regardless.
 - `HELION_ANALYTICS_PII_MODE` — `off` (default) or `hash_actor`.
   Controls whether actor columns are written as raw strings or
   SHA-256 hashes.
@@ -176,3 +227,12 @@ BadgerDB, just more slowly than a PG `date_trunc` would.
   SHA-256. Empty salt logs a WARN at boot; rotating mid-deployment
   breaks per-subject grouping across the rotation boundary
   (documented, not automated).
+- `HELION_LOGSTORE_RECONCILE` — set to any non-empty value to
+  enable the Badger→PG reconciler. Default: disabled (Badger's
+  7 d TTL is the only log cleanup).
+- `HELION_LOGSTORE_RECONCILE_INTERVAL_MIN` — minutes between
+  reconciler sweeps. Default 10.
+- `HELION_LOGSTORE_RECONCILE_MIN_AGE_MIN` — minimum age an entry
+  must be before it's eligible for reconciler deletion. Default 5.
+- `HELION_LOGSTORE_RECONCILE_BATCH` — candidates per PG query.
+  Default 200.

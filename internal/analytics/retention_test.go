@@ -44,6 +44,42 @@ func (m *mockRetentionDB) Execs() []string {
 	return out
 }
 
+// TestRetentionCron_NeverPrunesJobLogs is the load-bearing
+// regression guard for feature 28's updated log-retention policy:
+// PostgreSQL is the long-term store for per-job logs; the retention
+// cron must never DELETE from job_log_entries, no matter what
+// retention window the operator configures.
+//
+// If this test fails, a future edit accidentally reintroduced logs
+// into retainedTables and operators who enabled retention are
+// silently losing logs older than the window. Audit log (BadgerDB
+// `audit/` prefix) does NOT back up logs — they'd be gone for good.
+func TestRetentionCron_NeverPrunesJobLogs(t *testing.T) {
+	db := &mockRetentionDB{}
+	cron := NewRetentionCron(db, 30, nil)
+	cron.interval = 24 * time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	cron.Start(ctx)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	cron.Stop()
+
+	for _, sql := range db.Execs() {
+		if strings.Contains(sql, "DELETE FROM job_log_entries") {
+			t.Fatalf("retention cron pruned job_log_entries — this is a load-bearing bug. sql=%s", sql)
+		}
+	}
+	// Also check the table isn't listed in retainedTables. Belt and
+	// braces — the above loop would catch it via an actual prune,
+	// this loop catches a dev who adds it to the list but hasn't
+	// run the tests.
+	for _, table := range retainedTables {
+		if table == "job_log_entries" {
+			t.Fatalf("retainedTables contains job_log_entries — must not be pruned")
+		}
+	}
+}
+
 // TestRetentionCron_InitialSweepCoversEveryTable asserts the cron
 // fires a DELETE against every table in retainedTables on the
 // initial (Start) sweep.
@@ -92,7 +128,6 @@ func TestRetentionCron_UsesCorrectTimeColumn(t *testing.T) {
 		"submission_history":    "submitted_at",
 		"events":                "timestamp",
 		"auth_events":           "occurred_at",
-		"job_log_entries":       "occurred_at",
 		"artifact_transfers":    "occurred_at",
 		"service_probe_events":  "occurred_at",
 		"unschedulable_events":  "occurred_at",

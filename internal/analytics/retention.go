@@ -42,15 +42,24 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// retainedTables is the list of tables the cron prunes. Ordered
-// alphabetically so log output is predictable. A new feature-28
-// table added in a future migration must be appended here — the
-// retention cron is the single source of truth for "what ages out
-// of the analytics store".
+// retainedTables is the list of tables the cron prunes when
+// retention is explicitly enabled. Ordered alphabetically so log
+// output is predictable. A new feature-28 table added in a future
+// migration must be appended here — the retention cron is the
+// single source of truth for "what ages out of the analytics store
+// when the operator opts in to retention".
+//
+// NOTABLY ABSENT: `job_log_entries`. Per user direction after the
+// original feature-28 commit, PostgreSQL is the LONG-TERM home for
+// per-job logs, not a retention-bounded mirror — Badger's log copy
+// is the ephemeral one (freed by the logstore reconciler once PG
+// has confirmed the chunk). Pruning logs from PG would defeat the
+// whole point of having them there. If operators truly need to
+// free PG log space, they can add an external cron or a future
+// feature can add a knob; the default is "never touch logs".
 var retainedTables = []string{
 	"artifact_transfers",
 	"auth_events",
-	"job_log_entries",
 	"registry_mutations",
 	"service_probe_events",
 	"submission_history",
@@ -59,7 +68,7 @@ var retainedTables = []string{
 	// Existing tables from earlier migrations. These were
 	// previously retention-unbounded (the events table in
 	// particular can grow indefinitely on a busy cluster).
-	// Retention cron now covers them consistently.
+	// Retention cron now covers them consistently when opted in.
 	"events",
 }
 
