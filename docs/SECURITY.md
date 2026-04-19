@@ -435,6 +435,26 @@ paths record `actor = "anonymous"`.
   `console.error` — never rendered in the UI.
 - Nginx CSP header: no inline scripts, no eval, same-origin only.
 
+### 9.1 Submission tab (feature 22)
+
+The `/submit` route group is the dashboard's single place to
+start a run — single jobs, workflows, ML-templated workflows,
+and form-driven DAGs all POST through the existing submit
+endpoints (`POST /jobs`, `POST /workflows`). The UI is not a
+trusted client; every control has a server-side counterpart:
+
+| Client control | Server-side counterpart |
+|---|---|
+| Two-click Validate → Preview → Submit | Per-subject rate limit (10 rps default) bounds accidental-click floods |
+| Client-side env-key denylist (`LD_*`, `DYLD_*`, `GCONV_PATH`, …) | **Deferred to feature 25.** UX-only today; a malicious client can POST raw JSON past the denylist. Load-bearing rejection lands server-side. |
+| Secret env toggle (`type="password"` on the value input) | **Deferred to feature 26.** Masks in the DOM today; server still echoes values on `GET /jobs/{id}`. |
+| Validate button runs shape validator in-browser | **Deferred to feature 24.** Client-side only today; feature 24 swaps in `POST /jobs?dry_run=true` / `POST /workflows?dry_run=true` so the server validator is the authority. |
+| YAML/JSON editor uses `JSON.parse` (no YAML) | `JSON.parse` has no code-execution path. YAML arrives with the feature 22 Monaco upgrade and MUST use `js-yaml` with `JSON_SCHEMA` (no custom tags, no aliases). |
+
+New rule for future submit paths: **"No submit path may bypass
+the seven-layer stack documented in §§4-8. The submit tab is a
+convenience UI; it does not relax any server-side check."**
+
 ---
 
 ## 10. Operational guide & troubleshooting

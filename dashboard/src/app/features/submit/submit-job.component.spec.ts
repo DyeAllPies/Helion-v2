@@ -8,7 +8,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 
 import { SubmitJobComponent } from './submit-job.component';
 import { ApiService } from '../../core/services/api.service';
-import { Job } from '../../shared/models';
+import { Job, SubmitJobRequest } from '../../shared/models';
 
 function stubJob(over: Partial<Job> = {}): Job {
   return {
@@ -164,7 +164,7 @@ describe('SubmitJobComponent', () => {
     expect(component.validationOk).toBeTrue();
     // Peek at the build output by opening the preview.
     component.openPreview();
-    const body = component.previewBody as any;
+    const body = component.previewBody as SubmitJobRequest & { resources?: { gpus?: number } };
     expect(body.node_selector).toEqual({ runtime: 'rust', role: 'heavy' });
   });
 
@@ -212,7 +212,7 @@ describe('SubmitJobComponent', () => {
     component.openPreview();
 
     expect(component.previewOpen).toBeTrue();
-    const body = component.previewBody as any;
+    const body = component.previewBody as SubmitJobRequest & { resources?: { gpus?: number } };
     expect(body.id).toBe('hello');
     expect(body.command).toBe('python');
     expect(body.args).toEqual(['/app/script.py', '--flag']);

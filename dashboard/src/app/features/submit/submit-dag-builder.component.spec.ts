@@ -8,7 +8,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 
 import { SubmitDagBuilderComponent } from './submit-dag-builder.component';
 import { ApiService } from '../../core/services/api.service';
-import { Workflow } from '../../shared/models';
+import { Workflow, SubmitWorkflowJobRequest } from '../../shared/models';
 
 describe('SubmitDagBuilderComponent', () => {
   let fixture:   ComponentFixture<SubmitDagBuilderComponent>;
@@ -122,7 +122,7 @@ describe('SubmitDagBuilderComponent', () => {
     expect(component.validationErrors).toEqual([]);
     expect(component.validationOk).toBeTrue();
 
-    const body = component.previewBody as any;
+    const body = component.previewBody as { id: string; jobs: SubmitWorkflowJobRequest[] };
     expect(body.id).toBe('my-wf');
     expect(body.jobs.length).toBe(2);
     const ingest = body.jobs[0];

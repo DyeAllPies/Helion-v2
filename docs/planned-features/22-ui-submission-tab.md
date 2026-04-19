@@ -1,14 +1,23 @@
 # Feature: Dashboard submission tab (jobs, workflows, ML workflows)
 
 **Priority:** P1
-**Status:** Pending
+**Status:** Shipped (UI + shape validators + DAG builder). Backend
+prerequisites (23 hybrid-PQC on REST, 24 dry-run preflight, 25 env
+denylist, 26 secret env redaction) still pending — client-side
+covers the UX half of each rule, server-side hardening still
+needed. See the Implementation status section at the bottom for
+specifics.
 **Affected files:**
-`dashboard/src/app/features/submit/` (new — components, routes,
-forms, YAML editor),
+`dashboard/src/app/features/submit/` (10 files: shell, job form,
+workflow editor, ML template tab, DAG builder, preview dialog,
+shape validator, ML templates, specs),
 `dashboard/src/app/shell/shell.component.ts` (new nav entry),
-`dashboard/src/app/app.routes.ts` (new route),
-`docs/dashboard.md` (new section),
-`docs/SECURITY.md` (new rows for the UI submit threat model).
+`dashboard/src/app/app.routes.ts` (new routes),
+`dashboard/src/app/shared/models/index.ts` (extended
+`SubmitJobRequest` + `SubmitWorkflowJobRequest` to carry every
+field the server accepts),
+`docs/dashboard.md` (new "Submit module" section),
+`docs/SECURITY.md` (new §9.1).
 
 **Depends on** (each a separate slice, split out of this spec):
 - [Feature 23](23-rest-hybrid-pqc.md) — hybrid-PQC on the REST +
@@ -307,3 +316,58 @@ Playwright:
   transfers, service probes) lands in the same PostgreSQL
   store as the existing throughput + queue-wait tables, with
   matching dashboard panels.
+- **Visual DAG builder.** Promoted IN at user request during
+  implementation; see the Implementation status section below.
+
+## Implementation status
+
+| Step | Status | Landed as |
+|---|---|---|
+| 1. Submit feature module shell | ✅ | `SubmitShellComponent` + 4 child routes under `/submit` |
+| 2. Job form | ✅ | `SubmitJobComponent` — reactive form, every field on the server-side `SubmitRequest`, client-side shape + env-denylist validators |
+| 3. Workflow editor | ✅ | `SubmitWorkflowComponent` — JSON textarea + `workflow-shape-validator.ts` pure function. YAML support is the Monaco follow-up noted in the original open questions |
+| 4. ML template tab | ✅ | `SubmitMlWorkflowComponent` — Iris + MNIST templates hard-coded in `ml-templates.ts`, picker preloads the editor |
+| 5. Preview modal + Submit action | ✅ | `SubmitPreviewDialogComponent` shared across tabs |
+| 6. Documentation | ✅ | `docs/dashboard.md` "Submit module" section + `docs/SECURITY.md` §9.1 |
+| 7. E2E walkthrough extension | Deferred | Will land with the batch e2e pass after features 22-28 all ship |
+| **+ DAG builder (promoted from deferred)** | ✅ | `SubmitDagBuilderComponent` — form-driven job list + depends_on multi-select + live JSON preview, posts to `POST /workflows` |
+
+### Deliberate scope cut
+
+Feature 23 (hybrid-PQC on REST) was intentionally NOT landed
+alongside 22. It's an infrastructure refactor that touches every
+e2e test's TLS path and warrants its own focused session; current
+plain-HTTP REST is functional end to end, and the layered-defence
+checks on the submit path (auth, rate-limit, validation, audit,
+error-scrubbing) are unchanged. 22 ships on top of the existing
+transport; 23 hardens the transport whenever it lands next.
+
+Features 24, 25, 26 are "depends on" per the original spec but
+were similarly NOT required to ship 22: each client-side control
+has a server-side counterpart documented in `docs/SECURITY.md`
+§9.1, and every deferred control has a `<a href=… feature N>`
+link in the UI itself so operators see what's client-side-only
+today. Once 24/25/26 ship the submit UI degrades gracefully — no
+changes required to the tabs themselves.
+
+### Test coverage at merge
+
+88 specs under `dashboard/src/app/features/submit/`. Coverage
+highlights:
+
+- Shape validator: happy path + every rejection path + env
+  denylist table + depends_on resolution.
+- Job form: every validator, secret toggle DOM effect,
+  Preview gating, Submit navigation + server error surface.
+- Workflow editor: parse error vs schema error vs server
+  reject, edit invalidates OK, end-to-end submit.
+- ML template tab: feature-21 regression guard
+  (`train.node_selector = runtime:rust`, every MNIST job
+  carries `PATH`).
+- DAG builder: add/remove with depends_on cascade, candidate
+  list excludes self, live preview updates, end-to-end submit.
+- Preview modal: confirm/dismiss/backdrop/Escape all dispatch
+  the right result, stop-propagation on dialog click.
+
+Full playwright walkthrough extension (step 7) deferred to the
+batch e2e pass after features 22-28 all land.

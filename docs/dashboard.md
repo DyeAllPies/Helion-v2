@@ -254,6 +254,45 @@ additions worth noting:
   (`deferred/26-pipelines-event-integration.md`); today the raw
   events are visible on `/events`.
 
+## Submit module
+
+Feature 22 adds a `/submit` route group — the dashboard's single
+place to start a run. Four lazy-loaded tabs under one shell:
+
+| Route | Component | Writes | What it shows |
+|---|---|---|---|
+| `/submit` | `SubmitShellComponent` | — | Tab bar + `<router-outlet>`; redirects `/submit` → `/submit/job` |
+| `/submit/job` | `SubmitJobComponent` | `POST /jobs` | Reactive form mirroring `internal/api/handlers_jobs.go#SubmitRequest`. Fields: id, command, args, env (typed entries with a secret toggle), timeout, priority, gpus, node_selector. Client-side env-key denylist + shape validators; Validate → Preview → Submit flow |
+| `/submit/workflow` | `SubmitWorkflowComponent` | `POST /workflows` | Textarea editor accepting JSON bodies matching `SubmitWorkflowRequest`. Pure-function shape validator (`workflow-shape-validator.ts`) covers required fields, per-job shape, depends_on resolvability, env denylist |
+| `/submit/ml-workflow` | `SubmitMlWorkflowComponent` | `POST /workflows` | Template picker (Iris / MNIST / Custom) above the same editor. MNIST template preserves feature-21 heterogeneous scheduling (`train → runtime: rust`) + the `PATH` env the Rust runtime env_clear()s |
+| `/submit/dag-builder` | `SubmitDagBuilderComponent` | `POST /workflows` | Form-driven DAG builder: per-job rows on the left, editor on the right, live JSON preview at the bottom. depends_on is a multi-select over the other job names; removing an upstream cascades into downstream depends_on |
+
+### Submit security model
+
+Every submit tab enforces the same client-side posture:
+
+- **Two-click Validate → Preview → Submit** is deliberate: the
+  Preview modal renders the exact JSON that will be POSTed so
+  the operator sees the committed shape, and requires a second
+  click to fire the network call. Accidental submits from
+  muscle memory should be hard.
+- **Client-side env denylist** mirrors the future feature 25
+  server-side list (`LD_*`, `DYLD_*`, `GCONV_PATH`,
+  `GIO_EXTRA_MODULES`, `HOSTALIASES`, `NLSPATH`, `RES_OPTIONS`).
+  This is UX, not a security boundary — any authenticated
+  client can POST raw JSON directly. Load-bearing rejection
+  lands with feature 25 on the server.
+- **Secret env toggle** flips the value `<input>` to
+  `type="password"` so clipboard-glance / screenshare leakage
+  is reduced. Until feature 26 lands, the coordinator still
+  echoes secret values on a subsequent `GET /jobs/{id}`; every
+  secret-flagged row shows a tooltip spelling this out.
+- **Validate button runs client-side only** today. When
+  feature 24 (dry-run preflight) ships, the Validate handler
+  swaps to `POST /jobs?dry_run=true` /
+  `POST /workflows?dry_run=true` — the shape validator
+  becomes a fallback for offline typing.
+
 ### E2E
 
 Four iris-specific Angular + Playwright test files cover the
