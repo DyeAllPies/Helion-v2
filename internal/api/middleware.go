@@ -29,6 +29,18 @@ const (
 	tokenIssueBurst = 5   // allow short bursts up to 5
 )
 
+// Feature 26 — per-admin rate limit on POST /admin/jobs/{id}/reveal-secret.
+// Kept deliberately tight. Every reveal writes an audit event and gives the
+// operator a plaintext value; a compromised admin token should not be able
+// to dump every secret in bulk in the seconds before the operator notices.
+// At 1/5s with a burst of 3, a single-subject attacker can read ≤3 secrets
+// before the limiter slows them to a crawl that is easy to detect in the
+// audit stream.
+const (
+	revealSecretRate  = 0.2 // 1 reveal per 5 seconds per subject
+	revealSecretBurst = 3   // tolerate a small burst for legitimate batch use
+)
+
 // ── Analytics rate-limit constants ──────────────────────────────────────────
 
 // Per-subject token-bucket limiter for GET /api/analytics/*. Analytics queries
@@ -165,6 +177,24 @@ func (s *Server) tokenIssueAllow(subject string) bool {
 		s.tokenIssueLimiters[subject] = lim
 	}
 	s.tokenIssueMu.Unlock()
+	return lim.Allow()
+}
+
+// ── revealSecretAllow ────────────────────────────────────────────────────────
+
+// revealSecretAllow returns true if the caller identified by subject is
+// within the reveal-secret rate limit. Feature 26: POST /admin/jobs/{id}/
+// reveal-secret is tighter than token issuance because every call exposes
+// a plaintext value — a slow limiter bounds the damage of a leaked admin
+// token. Creates a per-subject limiter on first use.
+func (s *Server) revealSecretAllow(subject string) bool {
+	s.revealSecretMu.Lock()
+	lim, ok := s.revealSecretLimiters[subject]
+	if !ok {
+		lim = rate.NewLimiter(revealSecretRate, revealSecretBurst)
+		s.revealSecretLimiters[subject] = lim
+	}
+	s.revealSecretMu.Unlock()
 	return lim.Allow()
 }
 

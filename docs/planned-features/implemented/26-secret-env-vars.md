@@ -1,18 +1,73 @@
 # Feature: Secret env-var support on jobs
 
 **Priority:** P1
-**Status:** Pending
+**Status:** Implemented (2026-04-19). Deferred "Operator-facing
+'show me the secret' action" rolled in at implementation time per
+user request. Deferred "Key-level ACL on secrets" filed under
+[deferred/28-key-level-acl-on-secrets.md](../deferred/28-key-level-acl-on-secrets.md).
+Two "Not attempting" items promoted to planned features:
+[29 — stdout secret scrubbing](../29-stdout-secret-scrubbing.md) and
+[30 — encrypted env storage](../30-encrypted-env-storage.md).
+
 **Affected files:**
-`internal/proto/coordinatorpb/types.go` (new `Secret` flag on
-the env-var representation),
-`internal/api/handlers_jobs.go` (accept + redact),
-`internal/api/handlers_workflows.go` (same path for workflow
-jobs),
-`internal/audit/logger.go` or equivalent (audit detail scrubbing),
-`dashboard/src/app/core/services/api.service.ts` (type update),
-`dashboard/src/app/features/jobs/job-detail.component.ts` (mask
-display),
-`docs/SECURITY.md` (new row).
+`internal/api/secret_env.go` (new — helpers),
+`internal/api/secret_env_test.go` (new — 20+ cases),
+`internal/proto/coordinatorpb/types.go` (new `SecretKeys` field on
+`Job` and `WorkflowJob`),
+`internal/api/types.go` (`SubmitRequest.SecretKeys`,
+`JobResponse.SecretKeys`),
+`internal/api/handlers_jobs.go` (validate + populate + redact),
+`internal/api/handlers_workflows.go` (per-child validate + workflow
+Start threads `SecretKeys` through; redaction on
+`workflowToResponse`),
+`internal/api/handlers_admin.go` (new
+`POST /admin/jobs/{id}/reveal-secret` handler, admin-only,
+rate-limited, audited),
+`internal/api/middleware.go` (new `revealSecretAllow` limiter),
+`internal/api/server.go` (new `revealSecretLimiters` + route wire),
+`internal/audit/logger.go` (new `EventSecretRevealed` +
+`EventSecretRevealReject` + `secret_keys` detail field on
+`job_submit` events),
+`internal/cluster/workflow_submit.go` (propagates `SecretKeys` onto
+the materialised job at workflow Start),
+`dashboard/src/app/shared/models/index.ts` (types),
+`dashboard/src/app/core/services/api.service.ts` (`revealSecret`),
+`dashboard/src/app/features/submit/submit-job.component.ts`
+(form builds `secret_keys` array from the per-row `secret` flag),
+`dashboard/src/app/features/jobs/job-detail.component.ts` (env
+card with redacted values + REVEAL button that prompts for reason),
+`docs/SECURITY.md` (new §9.3 secret env vars + §9.4 reveal-secret).
+
+## Reconciliation (spec vs shipped)
+
+- **Flat `env` + `secret_keys` list, not the polymorphic `env`
+  field.** The spec proposed accepting `env` as either
+  `map[string]string` OR `[]{key,value,secret}` with a discriminator
+  function on decode. Shipped form keeps `env: map[string]string`
+  and adds a sibling `secret_keys: string[]` naming which keys
+  hold secret values. Same security properties; simpler JSON
+  decoder (no `UnmarshalJSON` try-map-then-slice); automatic
+  back-compat (omit `secret_keys` and behaviour is unchanged).
+  No deprecation warning cycle needed.
+- **`LogJobSubmit` signature preserved.** The shared audit
+  interface consumed by grpcserver + nodeserver + tests stays as
+  `(ctx, actor, jobID, command)`; the handler-side code calls
+  `audit.Log(EventJobSubmit, ...)` directly when it needs to
+  attach `secret_keys` to the event details. Keeps the interface
+  stable while still surfacing the metadata reviewers need.
+- **Reveal-secret audit event is written BEFORE the response.**
+  A downed audit sink yields 500 rather than leaking the
+  plaintext without a record. This exceeds the spec's "detail
+  field scrubbing" expectation.
+- **Rate limit on reveal-secret is 1 per 5s with burst 3.**
+  Deliberately tighter than `tokenIssueRate` (1/s burst 5)
+  because every reveal call exposes a plaintext value — a
+  compromised admin token should not be able to bulk-dump
+  secrets in a tight loop before detection.
+- **Dashboard reveal flow prompts for a reason.** The server
+  already validates the reason field; the UI prompt is the
+  operator-visible surface that makes the audit trail obvious.
+  Cancelling the prompt is a no-op.
 
 ## Problem
 
@@ -199,11 +254,26 @@ secret: true}` just like the real submit would.
 
 ## Deferred
 
-- **Operator-facing "show me the secret" action.** Deliberately
-  not built. If an operator forgets their token, they regenerate
-  it; they don't read it out of the coordinator. Matches Vault /
-  AWS Secrets Manager ergonomics.
-- **Key-level ACL on secrets** (who can SET a given key, who
-  can DISPATCH a job that reads one). Requires a user-identity
-  model the coordinator doesn't have. Noted under
-  `deferred/`.
+- ~~**Operator-facing "show me the secret" action.**~~ Rolled in at
+  implementation time per user request. Shipped as `POST /admin/jobs/
+  {id}/reveal-secret` (admin-only, 1/5s rate-limited, mandatory
+  audit `reason`, audit-before-response fail-closed on audit-sink
+  failure).
+- **Key-level ACL on secrets** (who can SET a given key, who can
+  DISPATCH a job that reads one). Requires a user-identity model
+  the coordinator doesn't have. Filed under
+  [deferred/28-key-level-acl-on-secrets.md](../deferred/28-key-level-acl-on-secrets.md).
+
+## Promoted from "Not attempting"
+
+Two items the original spec had under "Not attempting" are now
+planned features, not dead. See their specs for the concrete design:
+
+- **Detecting "leaked via stdout".** A job that prints its own
+  `$HELION_TOKEN` to stdout bypasses every env redaction control
+  this feature puts in place. Now tracked as
+  [feature 29 — stdout secret scrubbing](../29-stdout-secret-scrubbing.md).
+- **Encrypting stored values.** The coordinator's BadgerDB still
+  holds plaintext secrets at rest. Now tracked as
+  [feature 30 — encrypted env storage](../30-encrypted-env-storage.md),
+  envelope encryption with a rotatable KEK.

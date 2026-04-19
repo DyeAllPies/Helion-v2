@@ -96,6 +96,10 @@ func (s *WorkflowStore) Start(ctx context.Context, workflowID string, jobs *JobS
 			Inputs:       wj.Inputs,
 			Outputs:      wj.Outputs,
 			NodeSelector: wj.NodeSelector,
+			// Feature 26 — propagate secret-key flags through to the
+			// materialised Job so GET /jobs/{wf-id}/{name} redacts the
+			// same values the workflow submit declared.
+			SecretKeys: wj.SecretKeys,
 		}
 
 		if err := jobs.Submit(ctx, job); err != nil {

@@ -33,12 +33,20 @@ func writeJSON(w http.ResponseWriter, handler string, v interface{}) {
 }
 
 // jobToResponse converts a protobuf Job into the HTTP JobResponse shape.
+//
+// Feature 26: env values whose key is in j.SecretKeys render as
+// "[REDACTED]" here; the stored Job record keeps plaintext because
+// the runtime needs it to dispatch. SecretKeys is echoed back so
+// clients can render a badge next to the redacted field. Operators
+// who need the real value must call
+// POST /admin/jobs/{id}/reveal-secret (admin-only, audited).
 func jobToResponse(j *cpb.Job) JobResponse {
 	resp := JobResponse{
 		ID:             j.ID,
 		Command:        j.Command,
 		Args:           j.Args,
-		Env:            j.Env,
+		Env:            redactSecretEnv(j.Env, j.SecretKeys),
+		SecretKeys:     j.SecretKeys,
 		TimeoutSeconds: j.TimeoutSeconds,
 		Limits: ResourceLimits{
 			MemoryBytes: j.Limits.MemoryBytes,

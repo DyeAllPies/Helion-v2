@@ -107,6 +107,11 @@ type Server struct {
 	tokenIssueMu       sync.Mutex
 	tokenIssueLimiters map[string]*rate.Limiter // keyed by admin subject
 
+	// Feature 26 — per-admin rate limiter on POST /admin/jobs/{id}/reveal-secret.
+	// Deliberately tighter than token issuance (see middleware.go comment).
+	revealSecretMu       sync.Mutex
+	revealSecretLimiters map[string]*rate.Limiter // keyed by admin subject
+
 	// analyticsMu protects analyticsLimiters. Per-subject rate limiter on
 	// the /api/analytics/* endpoints to prevent DoS via expensive queries
 	// (PERCENTILE_CONT, date-range scans on job_summary).
@@ -234,7 +239,8 @@ func NewServer(
 		readiness:          readiness,
 		promHandler:        promHandler,
 		mux:                http.NewServeMux(),
-		tokenIssueLimiters: make(map[string]*rate.Limiter),
+		tokenIssueLimiters:   make(map[string]*rate.Limiter),
+		revealSecretLimiters: make(map[string]*rate.Limiter),
 		analyticsLimiters:  make(map[string]*rate.Limiter),
 		registryLimiters:   make(map[string]*rate.Limiter),
 		upgrader: websocket.Upgrader{
@@ -291,6 +297,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /admin/nodes/{id}/revoke", s.authMiddleware(s.adminMiddleware(s.handleRevokeNode)))
 	s.mux.HandleFunc("POST /admin/tokens", s.authMiddleware(s.adminMiddleware(s.handleIssueToken)))
 	s.mux.HandleFunc("DELETE /admin/tokens/{jti}", s.authMiddleware(s.adminMiddleware(s.handleRevokeToken)))
+	// Feature 26 — operator-facing "show me the secret" action.
+	// Admin-only; every call rate-limited + audited (success AND reject).
+	s.mux.HandleFunc("POST /admin/jobs/{id}/reveal-secret", s.authMiddleware(s.adminMiddleware(s.handleRevealSecret)))
 
 	// AUDIT 2026-04-12-01/H2 (fixed): WebSocket endpoints authenticate via
 	// first-message pattern instead of URL query parameters. The connection is

@@ -171,10 +171,9 @@ describe('SubmitJobComponent', () => {
   // ── Secret toggle UX ──────────────────────────────────────────────
 
   it('secret toggle flips the value input to type="password"', () => {
-    // Ship feature 26 and the server will also redact on GET; for
-    // now the toggle is pure client-side masking. Asserting the
-    // type attribute is enough — no `value=` leaks to a visible
-    // DOM attribute.
+    // Feature 26: the toggle is now backed by real server-side
+    // redaction — the UI masking asserted here is the second
+    // line of defence against DOM leaks.
     component.addEnvEntry();
     component.envControls[0].patchValue({ key: 'API_KEY', value: 'sekret', secret: false });
     fixture.detectChanges();
@@ -185,6 +184,33 @@ describe('SubmitJobComponent', () => {
     fixture.detectChanges();
     input = fixture.nativeElement.querySelector('.env-entry__value') as HTMLInputElement;
     expect(input.type).toBe('password');
+  });
+
+  // ── Feature 26 — secret_keys plumbed to the API payload ─────────────
+
+  it('secret-flagged env rows populate secret_keys on submit; unflagged rows do not', () => {
+    component.form.patchValue({ id: 'j-26', command: 'echo' });
+    component.addEnvEntry();
+    component.envControls[0].patchValue({ key: 'HF_TOKEN', value: 'hf_sekret', secret: true });
+    component.addEnvEntry();
+    component.envControls[1].patchValue({ key: 'PYTHONPATH', value: '/app', secret: false });
+    component.onValidate();
+    component.openPreview();
+
+    const body = component.previewBody as SubmitJobRequest;
+    expect(body.env).toEqual({ HF_TOKEN: 'hf_sekret', PYTHONPATH: '/app' });
+    expect(body.secret_keys).toEqual(['HF_TOKEN']);
+  });
+
+  it('secret_keys is omitted when no row is flagged secret', () => {
+    component.form.patchValue({ id: 'j-26b', command: 'echo' });
+    component.addEnvEntry();
+    component.envControls[0].patchValue({ key: 'PYTHONPATH', value: '/app', secret: false });
+    component.onValidate();
+    component.openPreview();
+
+    const body = component.previewBody as SubmitJobRequest;
+    expect(body.secret_keys).toBeUndefined();
   });
 
   // ── Preview + Submit flow ────────────────────────────────────────

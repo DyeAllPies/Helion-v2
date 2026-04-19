@@ -31,6 +31,14 @@ export interface Job {
   finished_at?:  string;
   exit_code?:    number;
   error?:        string;
+  /**
+   * Feature 26: env values for keys listed in `secret_keys` are
+   * server-redacted (render as "[REDACTED]") in every GET response.
+   * The plaintext is available only via
+   * POST /admin/jobs/{id}/reveal-secret (admin-only, audited).
+   */
+  env?:          Record<string, string>;
+  secret_keys?:  string[];
 }
 
 export interface JobLogEntry {
@@ -58,18 +66,20 @@ export interface JobsPage {
  * feature 22 beyond the original three fields so the submission
  * form can exercise the full validator surface.
  *
- * Note on the `env` field: the server currently accepts only the
- * legacy `Record<string, string>` shape. When feature 26 lands, a
- * typed slice `[{ key, value, secret }]` becomes the preferred
- * form; until then the dashboard submits the legacy map. The
- * secret flag is UX-only today — the input is masked with
- * `type="password"` but the server echoes values on GET.
+ * Note on the `env` + `secret_keys` fields: the shipped form
+ * (feature 26) is the `Record<string, string>` env map paired with
+ * a sibling `secret_keys: string[]` list. The server redacts values
+ * whose key is in `secret_keys` on every GET path; operators who
+ * need to read one back must POST /admin/jobs/{id}/reveal-secret
+ * (admin-only, audited).
  */
 export interface SubmitJobRequest {
   id:              string;
   command:         string;
   args?:           string[];
   env?:            Record<string, string>;
+  /** Feature 26 — keys whose values must be redacted on any GET path. */
+  secret_keys?:    string[];
   timeout_seconds?: number;
   priority?:       number;
   node_selector?:  Record<string, string>;
@@ -100,14 +110,38 @@ export interface SubmitArtifactBinding {
 }
 
 /**
- * A single env var as used by the submission form. Not yet on the
- * wire — `secret` is a client-side UI flag until feature 26
- * lands. Kept here so form components share one type.
+ * A single env var as used by the submission form. The `secret`
+ * flag is now plumbed to the server (feature 26): the form
+ * collects the array and splits it into `env` (map) +
+ * `secret_keys` (list) when building the SubmitJobRequest payload.
  */
 export interface SubmitEnvEntry {
   key:    string;
   value:  string;
   secret: boolean;
+}
+
+/**
+ * Feature 26 — POST /admin/jobs/{id}/reveal-secret request + response.
+ *
+ * Admin-only endpoint. Every successful AND every rejected call is
+ * audited (secret_revealed / secret_reveal_reject). The `reason`
+ * field is mandatory and is written into the audit record — a
+ * dashboard that lets a user reveal a secret without entering a
+ * reason is a bug (the server will return 400).
+ */
+export interface RevealSecretRequest {
+  key:    string;
+  reason: string;
+}
+
+export interface RevealSecretResponse {
+  job_id:       string;
+  key:          string;
+  value:        string;
+  revealed_at:  string;
+  revealed_by:  string;
+  audit_notice: string;
 }
 
 // ── Node ──────────────────────────────────────────────────────────────────────

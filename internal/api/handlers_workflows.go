@@ -47,6 +47,11 @@ type WorkflowJobRequest struct {
 	Inputs       []ArtifactBindingRequest `json:"inputs,omitempty"`
 	Outputs      []ArtifactBindingRequest `json:"outputs,omitempty"`
 	NodeSelector map[string]string        `json:"node_selector,omitempty"`
+
+	// Feature 26 — per-child secret env keys. Flows through
+	// cpb.WorkflowJob and onto cpb.Job at workflow Start. See
+	// SubmitRequest.SecretKeys for the full contract.
+	SecretKeys []string `json:"secret_keys,omitempty"`
 }
 
 // SubmitWorkflowRequest is the JSON body for POST /workflows.
@@ -62,12 +67,18 @@ type WorkflowJobResponse struct {
 	Name           string            `json:"name"`
 	Command        string            `json:"command"`
 	Args           []string          `json:"args,omitempty"`
+	// Env is redacted: values whose key appears in SecretKeys render
+	// as "[REDACTED]". See jobToResponse for the equivalent on
+	// /jobs/{id}.
 	Env            map[string]string `json:"env,omitempty"`
 	TimeoutSeconds int64             `json:"timeout_seconds,omitempty"`
 	DependsOn      []string          `json:"depends_on,omitempty"`
 	Condition      string            `json:"condition"`
 	JobID          string            `json:"job_id,omitempty"`
 	JobStatus      string            `json:"job_status,omitempty"`
+	// Feature 26 — echoed back so the dashboard can render a
+	// "secret" badge next to redacted values without guessing.
+	SecretKeys     []string          `json:"secret_keys,omitempty"`
 }
 
 // WorkflowResponse is the JSON body returned for workflow endpoints.
@@ -206,6 +217,13 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// Feature 26 — secret-key declarations on each child. Mirrors
+		// the POST /jobs check: every flagged key must exist in the
+		// child's Env, no duplicates, no empty entries, count capped.
+		if msg := validateSecretKeys(j.Env, j.SecretKeys); msg != "" {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("job %q: %s", j.Name, msg))
+			return
+		}
 	}
 
 	// Convert request to internal types.
@@ -224,6 +242,7 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 			Inputs:         convertBindings(j.Inputs),
 			Outputs:        convertBindings(j.Outputs),
 			NodeSelector:   j.NodeSelector,
+			SecretKeys:     j.SecretKeys, // feature 26
 		}
 		if j.Priority != nil {
 			wj.Priority = *j.Priority
@@ -443,7 +462,11 @@ func workflowToResponse(wf *cpb.Workflow, jobs workflowJobStoreIface) WorkflowRe
 			Name:           wj.Name,
 			Command:        wj.Command,
 			Args:           wj.Args,
-			Env:            wj.Env,
+			// Feature 26 — redact the child's env on the way out.
+			// Stored record keeps plaintext (runtime needs it);
+			// response strips values whose key is flagged secret.
+			Env:            redactSecretEnv(wj.Env, wj.SecretKeys),
+			SecretKeys:     wj.SecretKeys,
 			TimeoutSeconds: wj.TimeoutSeconds,
 			DependsOn:      wj.DependsOn,
 			Condition:      wj.Condition.String(),

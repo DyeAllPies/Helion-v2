@@ -41,9 +41,11 @@ relates to `audits/` and `deferred/`.
 | ~~23~~ | ~~Hybrid-PQC on coordinator REST + WebSocket listener~~ | **Implemented** (code + 8 tests shipped; existing e2e overlays opt out via `HELION_REST_TLS=off` pending the batch e2e migration); moved to [`implemented/23-rest-hybrid-pqc.md`](implemented/23-rest-hybrid-pqc.md) | P1 | — |
 | ~~24~~ | ~~Dry-run preflight (`?dry_run=true` on submit endpoints)~~ | **Implemented** (jobs + workflows + datasets + models — deferred item rolled in); moved to [`implemented/24-dry-run-preflight.md`](implemented/24-dry-run-preflight.md) | P1 | — |
 | ~~25~~ | ~~Dangerous-env denylist (`LD_*`, `DYLD_*`, `GCONV_PATH`, …)~~ | **Implemented** (jobs + workflows + artifact staging guards + per-node overrides — both deferred items rolled in); moved to [`implemented/25-env-var-denylist.md`](implemented/25-env-var-denylist.md) | P1 | — |
-| 26 | Secret env-var support (redact on GET + scrub audit) | Pending | P1 | [26-secret-env-vars.md](26-secret-env-vars.md) |
+| ~~26~~ | ~~Secret env-var support (redact on GET + scrub audit)~~ | **Implemented** (redaction + admin reveal-secret endpoint; two Not-attempting items promoted to features 29 + 30); moved to [`implemented/26-secret-env-vars.md`](implemented/26-secret-env-vars.md) | P1 | — |
 | 27 | Browser mTLS for dashboard operators (opt-in; depends on 23) | Pending | P2 | [27-browser-mtls.md](27-browser-mtls.md) |
 | 28 | Unified analytics sink — capture every interesting event | Pending | P2 | [28-analytics-unified-sink.md](28-analytics-unified-sink.md) |
+| 29 | Job stdout/stderr secret scrubbing (closes feature 26's "echo $HELION_TOKEN" gap) | Pending | P2 | [29-stdout-secret-scrubbing.md](29-stdout-secret-scrubbing.md) |
+| 30 | Encrypted env-value storage (envelope encryption + KEK rotation) | Pending | P2 | [30-encrypted-env-storage.md](30-encrypted-env-storage.md) |
 
 ### Priority definitions
 

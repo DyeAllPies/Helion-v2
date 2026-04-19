@@ -81,6 +81,24 @@ const (
 	//                              fired.
 	EventEnvDenylistReject   = "env_denylist_reject"
 	EventEnvDenylistOverride = "env_denylist_override"
+
+	// Feature 26 — secret env var reveal.
+	//
+	//   EventSecretRevealed — admin used POST /admin/jobs/{id}/
+	//                         reveal-secret to read back a declared
+	//                         secret value. Detail carries job_id,
+	//                         key, reason (operator-supplied), and
+	//                         is emitted BEFORE the value goes in the
+	//                         response so a downed audit sink fails
+	//                         the reveal closed.
+	//   EventSecretRevealReject — same endpoint but the request was
+	//                             rejected (unknown job, key not on
+	//                             the job's secret list, malformed
+	//                             request, rate limit). Also audited
+	//                             so probes of "which keys are
+	//                             secret on which jobs?" show up.
+	EventSecretRevealed     = "secret_revealed"
+	EventSecretRevealReject = "secret_reveal_reject"
 )
 
 // Event represents a single audit log entry.

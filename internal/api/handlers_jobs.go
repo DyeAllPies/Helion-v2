@@ -529,6 +529,14 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	// Feature 26 — secret-key declarations must be well-formed and must
+	// name only keys that actually appear in Env. Rejected at submit so
+	// a typo never ships to storage where GET would silently not redact
+	// a value the operator thought they flagged.
+	if msg := validateSecretKeys(req.Env, req.SecretKeys); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 
 	job := &cpb.Job{
 		ID:             req.ID,
@@ -545,6 +553,7 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		Inputs:       convertBindings(req.Inputs),
 		Outputs:      convertBindings(req.Outputs),
 		NodeSelector: req.NodeSelector,
+		SecretKeys:   req.SecretKeys, // feature 26
 	}
 	if req.Service != nil {
 		job.Service = &cpb.ServiceSpec{
@@ -680,9 +689,21 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Phase 4: Log job submission to audit log
+	// Phase 4: Log job submission to audit log. Feature 26 — include
+	// the declared secret-key NAMES so a reviewer can see which env
+	// vars the submitter marked secret. Values are never included.
+	// Called via Log (not LogJobSubmit) so we can attach secret_keys
+	// without changing the shared LogJobSubmit interface that
+	// grpcserver / nodeserver / tests also implement.
 	if s.audit != nil {
-		if err := s.audit.LogJobSubmit(r.Context(), actor, job.ID, job.Command); err != nil {
+		details := map[string]interface{}{
+			"job_id":  job.ID,
+			"command": job.Command,
+		}
+		if sk := auditSafeSecretKeys(job.SecretKeys); len(sk) > 0 {
+			details["secret_keys"] = sk
+		}
+		if err := s.audit.Log(r.Context(), audit.EventJobSubmit, actor, details); err != nil {
 			logAuditErr(false, "job.submit", err)
 		}
 	}

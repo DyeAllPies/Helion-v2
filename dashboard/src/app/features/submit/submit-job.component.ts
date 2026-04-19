@@ -112,10 +112,12 @@ function commaListToArray(raw: string): string[] {
       only; server dry-run preflight ships with
       <a href="https://github.com/DyeAllPies/Helion-v2/blob/main/docs/planned-features/24-dry-run-preflight.md"
          target="_blank" rel="noopener">feature 24</a>.
-      Secret env vars are masked in this form but the server still
-      echoes their values until
-      <a href="https://github.com/DyeAllPies/Helion-v2/blob/main/docs/planned-features/26-secret-env-vars.md"
-         target="_blank" rel="noopener">feature 26</a> lands.
+      Secret env vars are masked in this form AND redacted server-
+      side on every GET path
+      (<a href="https://github.com/DyeAllPies/Helion-v2/blob/main/docs/planned-features/implemented/26-secret-env-vars.md"
+         target="_blank" rel="noopener">feature 26</a>).
+      An admin can read a value back via POST /admin/jobs/&#123;id&#125;/reveal-secret;
+      every reveal is audited.
     </span>
   </div>
 
@@ -157,7 +159,7 @@ function commaListToArray(raw: string): string[] {
         <input class="input mono env-entry__value"
                [type]="entry.value.secret ? 'password' : 'text'"
                formControlName="value" placeholder="value" />
-        <label class="env-entry__secret" title="Mask the value in the UI. Server redaction ships with feature 26.">
+        <label class="env-entry__secret" title="Mask in UI AND send as a secret_keys entry. Server redacts values on every GET path.">
           <input type="checkbox" formControlName="secret" />
           <span>secret</span>
         </label>
@@ -538,9 +540,18 @@ export class SubmitJobComponent implements OnInit {
   private buildBody(): SubmitJobRequest {
     const v = this.form.value;
     const env: Record<string, string> = {};
+    // Feature 26 — split the form's (key,value,secret) rows into the
+    // flat `env` map + sibling `secret_keys` list the API accepts.
+    // The secret flag on a row is only meaningful when that row has
+    // a key; rows without a key are skipped for env AND for secret_keys.
+    const secretKeys: string[] = [];
     for (const row of this.envControls) {
       const k = (row.get('key')!.value as string) ?? '';
-      if (k) env[k] = (row.get('value')!.value as string) ?? '';
+      if (!k) continue;
+      env[k] = (row.get('value')!.value as string) ?? '';
+      if (row.get('secret')!.value === true) {
+        secretKeys.push(k);
+      }
     }
     const ns = this.parseNodeSelector() ?? {};
     const body: SubmitJobRequest = {
@@ -548,6 +559,7 @@ export class SubmitJobComponent implements OnInit {
       command:         v.command,
       args:            commaListToArray(v.argsRaw || ''),
       env:             Object.keys(env).length > 0 ? env : undefined,
+      secret_keys:     secretKeys.length > 0 ? secretKeys : undefined,
       timeout_seconds: v.timeout_seconds ? Number(v.timeout_seconds) : undefined,
       priority:        v.priority != null ? Number(v.priority) : undefined,
       node_selector:   Object.keys(ns).length > 0 ? ns : undefined,

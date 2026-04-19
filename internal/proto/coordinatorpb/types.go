@@ -244,6 +244,20 @@ type Job struct {
 	// mapping on the first `ready` event so clients can look up the
 	// upstream URL via GET /api/services/{id}.
 	Service *ServiceSpec `json:"service,omitempty"`
+
+	// ── Feature 26: secret env keys ──────────────────────────────────────
+	//
+	// SecretKeys names env keys whose VALUE must never appear in a
+	// response body, slog line, or audit detail. The coordinator keeps
+	// the plaintext value in Env (the runtime needs it to dispatch), but
+	// every GET/list/dry-run path runs the env through
+	// redactSecretEnv(Env, SecretKeys) before marshaling. Audit event
+	// details carry the KEY NAMES (so reviewers can see which keys were
+	// flagged) but never the values.
+	//
+	// Old BadgerDB entries without this field deserialise to nil, which
+	// yields no redactions (unchanged legacy behaviour).
+	SecretKeys []string `json:"secret_keys,omitempty"`
 }
 
 // ServiceSpec turns a job into a long-running inference service.
@@ -459,6 +473,12 @@ type WorkflowJob struct {
 	Inputs       []ArtifactBinding `json:"inputs,omitempty"`
 	Outputs      []ArtifactBinding `json:"outputs,omitempty"`
 	NodeSelector map[string]string `json:"node_selector,omitempty"`
+
+	// Feature 26 — per-child secret env keys. Propagated onto the
+	// materialised Job at workflow Start() so response redaction +
+	// reveal-secret authorisation carry through the same as a
+	// standalone submit.
+	SecretKeys []string `json:"secret_keys,omitempty"`
 }
 
 // ── Workflow ─────────────────────────────────────────────────────────────────

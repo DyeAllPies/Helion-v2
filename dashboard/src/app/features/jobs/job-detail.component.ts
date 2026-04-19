@@ -83,6 +83,51 @@ import { Job, LogChunk } from '../../shared/models';
       </div>
     </div>
 
+    <!-- Env + Secrets card (feature 26) -->
+    <div class="env-card" *ngIf="hasEnv()">
+      <div class="env-card__header">
+        <span class="material-icons">vpn_key</span>
+        <span>ENVIRONMENT</span>
+        <span class="env-card__hint"
+              *ngIf="(job.secret_keys?.length || 0) > 0"
+              title="Secret values are redacted on every GET. An admin may reveal via POST /admin/jobs/&#123;id&#125;/reveal-secret — every call is audited.">
+          {{ job.secret_keys?.length }} secret{{ (job.secret_keys?.length || 0) === 1 ? '' : 's' }}
+        </span>
+      </div>
+      <div class="env-list">
+        <div class="env-row" *ngFor="let entry of envEntries()">
+          <span class="env-row__key mono">{{ entry.key }}</span>
+          <span class="env-row__eq">=</span>
+          <span class="env-row__value mono"
+                [class.env-row__value--secret]="entry.isSecret">{{ entry.value }}</span>
+          <span class="env-row__badge" *ngIf="entry.isSecret" title="Declared secret at submit; value redacted in this response.">SECRET</span>
+          <button class="btn-reveal"
+                  *ngIf="entry.isSecret"
+                  type="button"
+                  [disabled]="entry.revealing"
+                  (click)="revealSecret(entry.key)"
+                  title="Admin-only. Writes an audit event carrying actor + reason.">
+            <span class="material-icons">visibility</span>
+            {{ entry.revealing ? 'REVEALING…' : 'REVEAL' }}
+          </button>
+        </div>
+      </div>
+      <div class="env-card__reveal" *ngIf="revealOutcome">
+        <div class="env-card__reveal-title">
+          <span class="material-icons">warning</span>
+          {{ revealOutcome.ok ? 'Secret revealed — this action was audited' : 'Reveal failed' }}
+        </div>
+        <div class="env-card__reveal-body" *ngIf="revealOutcome.ok">
+          <span class="env-card__reveal-kv mono">{{ revealOutcome.key }} = {{ revealOutcome.value }}</span>
+          <div class="env-card__reveal-notice">{{ revealOutcome.notice }}</div>
+        </div>
+        <div class="env-card__reveal-body text-error" *ngIf="!revealOutcome.ok">
+          {{ revealOutcome.error }}
+        </div>
+        <button class="btn-ghost" type="button" (click)="dismissReveal()">dismiss</button>
+      </div>
+    </div>
+
     <!-- Log viewer -->
     <div class="log-panel">
       <div class="log-panel__header">
@@ -301,6 +346,98 @@ import { Job, LogChunk } from '../../shared/models';
     }
 
     @keyframes blink-cursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+    /* Feature 26 — env + reveal-secret panel */
+    .env-card {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      margin-top: 16px;
+      padding: 16px 20px;
+    }
+    .env-card__header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      color: var(--color-muted);
+      margin-bottom: 12px;
+    }
+    .env-card__header .material-icons { font-size: 16px; }
+    .env-card__hint {
+      margin-left: auto;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: rgba(255, 180, 60, 0.12);
+      color: #d9a649;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+    }
+    .env-list { display: flex; flex-direction: column; gap: 6px; }
+    .env-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      padding: 4px 0;
+    }
+    .env-row__key { color: var(--color-accent); }
+    .env-row__eq  { color: var(--color-muted); }
+    .env-row__value { color: #d0dde8; word-break: break-all; }
+    .env-row__value--secret {
+      color: #d9a649;
+      letter-spacing: 0.05em;
+    }
+    .env-row__badge {
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: rgba(217, 166, 73, 0.18);
+      color: #d9a649;
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      font-weight: 600;
+    }
+    .btn-reveal {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 10px;
+      border: 1px solid var(--color-border);
+      background: transparent;
+      color: var(--color-muted);
+      border-radius: 3px;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+    }
+    .btn-reveal:hover:not([disabled]) { color: #d9a649; border-color: #d9a649; }
+    .btn-reveal[disabled] { opacity: 0.5; cursor: wait; }
+    .btn-reveal .material-icons { font-size: 14px; }
+
+    .env-card__reveal {
+      margin-top: 14px;
+      padding: 10px 12px;
+      border-left: 3px solid #d9a649;
+      background: rgba(217, 166, 73, 0.06);
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .env-card__reveal-title {
+      display: flex; align-items: center; gap: 6px;
+      color: #d9a649;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .env-card__reveal-title .material-icons { font-size: 15px; }
+    .env-card__reveal-kv { color: #ecf0f3; }
+    .env-card__reveal-notice {
+      margin-top: 4px;
+      color: var(--color-muted);
+      font-style: italic;
+    }
   `]
 })
 export class JobDetailComponent implements OnInit, OnDestroy, AfterViewChecked {
@@ -314,6 +451,19 @@ export class JobDetailComponent implements OnInit, OnDestroy, AfterViewChecked {
   error        = '';
   wsConnected  = false;
   wsEnded      = false;
+
+  // Feature 26 — reveal-secret interaction state.
+  // revealOutcome is rendered inline under the env card; populated on
+  // both success (ok=true) and failure (ok=false) so the operator
+  // always sees server feedback.
+  revealOutcome: {
+    ok: boolean;
+    key?: string;
+    value?: string;
+    notice?: string;
+    error?: string;
+  } | null = null;
+  private revealingKeys = new Set<string>();
 
   private wsSub?:     Subscription;
   private autoScroll  = true;
@@ -364,6 +514,79 @@ export class JobDetailComponent implements OnInit, OnDestroy, AfterViewChecked {
   scrollToBottom(): void {
     const el = this.logBodyRef?.nativeElement;
     if (el) el.scrollTop = el.scrollHeight;
+  }
+
+  // ── Feature 26 — env display + reveal-secret action ───────────────
+
+  hasEnv(): boolean {
+    const env = this.job?.env;
+    return !!env && Object.keys(env).length > 0;
+  }
+
+  envEntries(): { key: string; value: string; isSecret: boolean; revealing: boolean }[] {
+    if (!this.job?.env) return [];
+    const secrets = new Set(this.job.secret_keys ?? []);
+    const keys = Object.keys(this.job.env).sort();
+    return keys.map(k => ({
+      key:       k,
+      value:     this.job!.env![k],
+      isSecret:  secrets.has(k),
+      revealing: this.revealingKeys.has(k),
+    }));
+  }
+
+  revealSecret(key: string): void {
+    if (!this.job || this.revealingKeys.has(key)) return;
+    // Reason is mandatory server-side; the dashboard prompts for one
+    // so the operator explicitly types why they need the value. The
+    // server still validates — this is belt-and-braces.
+    const reason = (typeof window !== 'undefined' && typeof window.prompt === 'function')
+      ? window.prompt(
+          'Feature 26: reveal a secret value.\n\n' +
+          'This writes a `secret_revealed` audit event carrying your ' +
+          'subject + the reason you enter below. Admin token required.\n\n' +
+          'Reason:'
+        )
+      : '';
+    if (reason === null) return; // operator cancelled
+    const trimmed = (reason ?? '').trim();
+    if (trimmed.length === 0) {
+      this.revealOutcome = {
+        ok: false,
+        error: 'Reason is required — every reveal is audited.',
+      };
+      return;
+    }
+
+    this.revealingKeys.add(key);
+    this.revealOutcome = null;
+    this.api.revealSecret(this.job.id, { key, reason: trimmed }).subscribe({
+      next: resp => {
+        this.revealingKeys.delete(key);
+        this.revealOutcome = {
+          ok:     true,
+          key:    resp.key,
+          value:  resp.value,
+          notice: resp.audit_notice,
+        };
+      },
+      error: err => {
+        this.revealingKeys.delete(key);
+        const status = err?.status;
+        const body   = err?.error?.error ?? err?.message ?? 'unknown error';
+        let message = `reveal failed (${status}): ${body}`;
+        if (status === 403) {
+          message = 'Forbidden: only admin-role tokens may reveal secrets.';
+        } else if (status === 429) {
+          message = 'Rate limit hit. Retry in a few seconds.';
+        }
+        this.revealOutcome = { ok: false, error: message };
+      },
+    });
+  }
+
+  dismissReveal(): void {
+    this.revealOutcome = null;
   }
 
   private connectLogs(job: Job): void {

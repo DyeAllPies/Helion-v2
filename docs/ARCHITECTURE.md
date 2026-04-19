@@ -186,6 +186,7 @@ a real submission.
 | `POST` | `/admin/nodes/{id}/revoke` | Bearer (admin) | Revoke node registration |
 | `POST` | `/admin/tokens` | Bearer (admin) | Issue scoped JWT `{subject, role, ttl_hours}` |
 | `DELETE` | `/admin/tokens/{jti}` | Bearer (admin) | Immediately revoke a token by JTI |
+| `POST` | `/admin/jobs/{id}/reveal-secret` | Bearer (admin) | Feature 26 — read back a declared secret env value `{key, reason}`. Reason is mandatory and audited; every reject is audited too. Rate-limited 1/5s per subject. |
 | `GET` | `/ws/jobs/{id}/logs` | First-message | WebSocket live log stream |
 | `GET` | `/ws/metrics` | First-message | WebSocket live cluster metrics |
 | `GET` | `/ws/events` | First-message | WebSocket event stream (subscribe with topic patterns) |

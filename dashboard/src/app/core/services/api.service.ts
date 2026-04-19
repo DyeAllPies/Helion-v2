@@ -18,6 +18,7 @@ import {
   MLModel, ModelListResponse, ModelRegisterRequest,
   ServiceEndpoint, ServiceListResponse,
   WorkflowLineage,
+  RevealSecretRequest, RevealSecretResponse,
 } from '../../shared/models';
 
 // Raw API response shapes (may differ from dashboard models)
@@ -88,6 +89,24 @@ export class ApiService {
     let params = new HttpParams();
     if (tail) params = params.set('tail', tail);
     return this.http.get<JobLogsResponse>(`${this.base}/jobs/${id}/logs`, { params });
+  }
+
+  /**
+   * Feature 26 — POST /admin/jobs/{id}/reveal-secret.
+   *
+   * Admin-only endpoint. Reads the plaintext value of an env var
+   * that was declared secret at submit. Every success AND every
+   * reject is recorded in the audit log with actor + reason; the
+   * server refuses empty/whitespace reasons with 400 and throttles
+   * repeated calls with 429.
+   *
+   * Callers must:
+   *   - be an admin (node-role tokens get 403),
+   *   - provide a non-empty `reason` (shown on-screen + logged).
+   */
+  revealSecret(jobId: string, req: RevealSecretRequest): Observable<RevealSecretResponse> {
+    return this.http.post<RevealSecretResponse>(
+      `${this.base}/admin/jobs/${encodeURIComponent(jobId)}/reveal-secret`, req);
   }
 
   // ── Metrics ──────────────────────────────────────────────────────────────────

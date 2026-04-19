@@ -52,6 +52,11 @@ operational procedures.
 | Attacker stages a file:// artifact pointing at a system library or secret-material path (`/lib/libc.so.6`, `/proc/self/environ`, `/var/run/secrets/...`) | **Feature 25.** `validateArtifactBindingsCtx` refuses `file://` URIs rooted at `/lib`, `/lib64`, `/usr/lib`, `/usr/lib64`, `/proc`, `/sys`, `/dev`, `/etc`, `/boot`, `/root`, `/var/run/secrets`, `/run/secrets`, `/run/credentials`. Path is `path.Clean`-normalised first so `//` tricks don't bypass. |
 | Attacker stages a loader-critical library (`libc.so.6`, `ld-linux-x86-64.so.2`, `libpthread.so.0`) under the job's working dir as a dlopen/LD_LIBRARY_PATH hijack target | **Feature 25.** `isDangerousLibraryBasename` rejects LocalPath basenames matching the loader itself (`ld-linux*`, `ld-musl*`, `ld.so*`) or the handful of libraries the dynamic linker unconditionally loads (`libc.so*`, `libpthread.so*`, `libdl.so*`, `libm.so*`, `librt.so*`, `libnss_*`, `libresolv.so*`, `libcrypt.so*`). Narrow on purpose — legitimate CUDA/Torch libs (`libcudart.so.*`, `libtorch.so`) still pass. |
 | Admin operator needs `LD_LIBRARY_PATH` on a specific GPU pool for CUDA dlopen | **Feature 25 per-node overrides.** `HELION_ENV_DENYLIST_EXCEPTIONS=role=gpu:LD_LIBRARY_PATH` on the coordinator (parsed at startup; malformed input fails to start). A job's env var is allowed iff its NodeSelector carries the exact key=value pair AND the env key is in the rule's list. Each override use emits an `env_denylist_override` audit event so use of the escape hatch is always visible. |
+| Dashboard user / CI read-only token extracts `HF_TOKEN` / `AWS_SECRET_ACCESS_KEY` by calling `GET /jobs/{id}` | **Feature 26.** Submitter flags keys via `secret_keys`; server replaces matching values with `[REDACTED]` on every response path (single/list/dry-run/workflow). Plaintext exists on-disk in the Job record (runtime needs it) but is unreachable via any non-admin endpoint. See §9.3. |
+| Admin operator needs to recover a declared secret value (forgot, debugging, credential rotation) | **Feature 26 reveal-secret endpoint.** `POST /admin/jobs/{id}/reveal-secret` — admin-only, rate-limited (1/5s, burst 3), mandatory audit `reason`, audit-before-response fail-closed, refuses non-declared keys. See §9.4. |
+| Attacker probes "does job X have a secret named Y?" via reveal-secret 404s | Every reject is itself audited as `secret_reveal_reject` with the target job_id + key + reason-for-reject. Enumeration shows up loud in the audit stream. |
+| Attacker with filesystem access reads secret plaintext from BadgerDB | **Acknowledged gap.** Feature 26 redacts in-transit and at-the-API; the underlying Badger record still holds plaintext because the runtime needs it to dispatch. Tracked as [feature 30 — encrypted env storage](planned-features/30-encrypted-env-storage.md). |
+| Job prints its own `$HELION_TOKEN` to stdout → captured by logstore → visible via `GET /jobs/{id}/logs` | **Acknowledged gap.** Tracked as [feature 29 — stdout secret scrubbing](planned-features/29-stdout-secret-scrubbing.md). Write-path scrubber that replaces declared secret VALUES with `[REDACTED]` as chunks land. |
 
 ---
 
@@ -467,7 +472,7 @@ trusted client; every control has a server-side counterpart:
 |---|---|
 | Two-click Validate → Preview → Submit | Per-subject rate limit (10 rps default) bounds accidental-click floods |
 | Client-side env-key denylist (`LD_*`, `DYLD_*`, `GCONV_PATH`, …) | **Deferred to feature 25.** UX-only today; a malicious client can POST raw JSON past the denylist. Load-bearing rejection lands server-side. |
-| Secret env toggle (`type="password"` on the value input) | **Deferred to feature 26.** Masks in the DOM today; server still echoes values on `GET /jobs/{id}`. |
+| Secret env toggle (`type="password"` on the value input) | **Feature 26 shipped.** Form now emits a `secret_keys` list alongside the `env` map; server redacts those values to `[REDACTED]` on every GET path. Read-back requires `POST /admin/jobs/{id}/reveal-secret` (admin-only, audited, rate-limited). See §9.3 + §9.4. |
 | Validate button runs shape validator in-browser | **Feature 24 shipped.** The dashboard Validate button can now call `POST /jobs?dry_run=true` / `POST /workflows?dry_run=true` / `POST /api/datasets?dry_run=true` / `POST /api/models?dry_run=true` — the server validator is the authority for accept/reject. Dry-run returns `200` with `"dry_run": true` in the body and never persists, dispatches, or publishes a bus event. Audit emits a distinct event type (`job_dry_run`, `workflow_dry_run`, `dataset.dry_run`, `model.dry_run`) so reviewers can filter probes from real submissions. A typo (`?dry_run=maybe`) returns `400` rather than silently falling through to the real path. |
 | YAML/JSON editor uses `JSON.parse` (no YAML) | `JSON.parse` has no code-execution path. YAML arrives with the feature 22 Monaco upgrade and MUST use `js-yaml` with `JSON_SCHEMA` (no custom tags, no aliases). |
 
@@ -556,7 +561,94 @@ rule's list. Safety properties:
   with the same audit events (with a `"dry_run": true` detail field
   so reviewers can distinguish).
 
-### 9.3 Dry-run preflight (feature 24)
+### 9.3 Secret env vars (feature 26)
+
+`SubmitRequest` carries a sibling `secret_keys: string[]` list that
+names env keys whose values must be redacted on every response path.
+The coordinator keeps the plaintext value in `Env` (the runtime
+needs it to dispatch to the node) but wraps every response build
+through `redactSecretEnv(env, secretKeys)`. Applied on:
+
+- `GET /jobs/{id}` (single job)
+- `GET /jobs` (paginated list)
+- `POST /jobs` + `POST /workflows` on the 201 response body
+- `?dry_run=true` responses on all submit paths
+- `GET /workflows/{id}` child-job env
+
+The replacement string is the literal `[REDACTED]`. The redactor
+never mutates the caller's map — it returns a fresh copy, so
+mutating a response map never pollutes the stored record.
+
+Validation rules enforced at submit:
+
+- Every key in `secret_keys` MUST appear in `env`. A flag on a
+  non-existent key is rejected with 400 — either a typo or a probe
+  for which names the server silently accepts.
+- No duplicates; no empty strings; list capped at 32 entries (the
+  overall env map caps at 128, but a pathological "flag everything"
+  submit would render GET useless).
+
+Audit invariants:
+
+- `job_submit` events carry a `secret_keys` detail field listing
+  the KEY NAMES. Values are NEVER in audit details.
+- The submit handler emits `env_denylist_reject` + `env_denylist_
+  override` (feature 25) with the same value-free policy.
+
+### 9.4 Reveal-secret endpoint (feature 26)
+
+`POST /admin/jobs/{id}/reveal-secret` is the single audited path
+by which an operator can read back a declared secret value.
+Shipped from feature 26's original "deferred" list on user request.
+
+Request body:
+
+```json
+{ "key": "HF_TOKEN", "reason": "on-call debug of HF model load" }
+```
+
+Safety properties:
+
+- **Admin role only.** `adminMiddleware` runs first; `node`-role
+  tokens get 403 before the handler sees the request.
+- **Rate-limited per subject** at 1 reveal / 5 s (burst 3). Tighter
+  than the `/admin/tokens` limit because every successful call
+  exposes a plaintext value. A compromised admin token cannot
+  bulk-dump the coordinator's secret inventory before the audit
+  stream triggers detection.
+- **Reason field is mandatory**, non-empty, trimmed, ≤ 512 bytes,
+  NUL-free. The reason lands verbatim in the audit detail so
+  post-incident review can tell intentional debugging apart from
+  enumeration.
+- **Key must be declared secret on THAT job.** Reading a
+  non-secret env value via this endpoint is refused with 404 —
+  the endpoint is not a generic env reader (operators can use
+  `GET /jobs/{id}` for non-secret values). Removes the uplift an
+  attacker would gain from using this endpoint as an env dump.
+- **Audit event written BEFORE response.** `secret_revealed` is
+  persisted before the plaintext enters the response body. A
+  downed audit sink yields 500 and no leak — we fail closed on
+  the accountability story rather than the confidentiality story.
+- **Every reject is audited too.** Unknown-job, not-declared-secret,
+  malformed-body, and missing-reason paths each emit
+  `secret_reveal_reject` with actor + reason-for-reject. This
+  means a probe sweep ("does job X have a secret named HF_TOKEN?")
+  shows up loud and clear in the audit stream, not silent 404s.
+- **Response body carries an audit notice.** The `audit_notice`
+  string in `RevealSecretResponse` reminds the operator on-screen
+  that the reveal was logged; the dashboard renders it alongside
+  the value. Belt-and-braces against "I didn't know it was logged"
+  post-hoc claims.
+- **Storage still holds plaintext.** A compromised filesystem /
+  backup remains a key-compromise event regardless of this
+  endpoint. [Feature 30](planned-features/30-encrypted-env-storage.md)
+  tracks at-rest encryption.
+- **stdout leaks are out of scope.** If a job prints its own
+  `$HELION_TOKEN` to stdout, the coordinator's logstore captures
+  it. [Feature 29](planned-features/29-stdout-secret-scrubbing.md)
+  tracks the write-path scrubber.
+
+### 9.5 Dry-run preflight (feature 24)
 
 `?dry_run=true` is accepted on every submit/register endpoint
 (`POST /jobs`, `POST /workflows`, `POST /api/datasets`,

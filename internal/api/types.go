@@ -82,6 +82,14 @@ type SubmitRequest struct {
 	// endpoint after HealthInitialMs. Mutually compatible with Inputs
 	// (model bytes staged before serve start).
 	Service *ServiceSpecRequest `json:"service,omitempty"`
+
+	// Feature 26 — env keys whose VALUES must never appear in a
+	// response, slog line, or audit detail. Every listed key must
+	// appear in Env; a flag on a non-existent key is rejected at
+	// submit. The coordinator still forwards the plaintext to the
+	// node runtime — we need the value to dispatch — but every
+	// response-path render runs env through redactSecretEnv first.
+	SecretKeys []string `json:"secret_keys,omitempty"`
 }
 
 // ServiceSpecRequest is the JSON shape of the optional Service block
@@ -113,6 +121,13 @@ type JobResponse struct {
 	Attempt        uint32            `json:"attempt,omitempty"`
 	RetryAfter     *time.Time        `json:"retry_after,omitempty"`
 	Service        *ServiceSpecRequest `json:"service,omitempty"`
+
+	// Feature 26 — declared secret keys. Echoed back so a client can
+	// render a "secret" badge next to the redacted value. Values in
+	// Env for keys listed here are replaced with "[REDACTED]" by
+	// jobToResponse before marshaling; operators who need the real
+	// value must call POST /admin/jobs/{id}/reveal-secret.
+	SecretKeys []string `json:"secret_keys,omitempty"`
 }
 
 // ErrorResponse is the JSON body for error responses.
