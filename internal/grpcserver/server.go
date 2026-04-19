@@ -38,6 +38,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
@@ -111,6 +112,12 @@ type Server struct {
 	retryChecker      RetryChecker          // nil means no retry support
 	logStore          logstore.Store        // nil means logs are discarded
 	services          *cluster.ServiceRegistry // nil means feature-17 service lookup is not wired
+
+	// Feature 28 — analytics event bus. Optional; nil means no
+	// analytics mirroring of service-probe transitions or log
+	// chunks. Set via WithEventBus.
+	eventBus *events.Bus
+
 	log               *slog.Logger
 
 	// Active heartbeat streams: nodeID → done channel.
@@ -178,6 +185,13 @@ func WithLogStore(ls logstore.Store) Option {
 // them don't fail.
 func WithServiceRegistry(sr *cluster.ServiceRegistry) Option {
 	return func(s *Server) { s.services = sr }
+}
+
+// WithEventBus injects the analytics event bus so feature-28
+// publishers in ReportServiceEvent + StreamLogs can mirror
+// gRPC-arriving data into the analytics pipeline.
+func WithEventBus(bus *events.Bus) Option {
+	return func(s *Server) { s.eventBus = bus }
 }
 
 // WithLogger injects a structured logger.

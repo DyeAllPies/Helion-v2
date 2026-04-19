@@ -1,8 +1,119 @@
 # Feature: Unified analytics sink — capture every interesting event
 
 **Priority:** P2
-**Status:** Pending
+**Status:** Implemented (2026-04-19). User asked for "Per-job log
+ingestion into analytics" to land in this slice (not deferred) so
+BadgerDB's log TTL pressure can ease over time; shipped as a
+dual-write write-path (Badger keeps its primary reads, PG gains a
+durable mirror via the `job_log_entries` table + new
+`GET /api/analytics/job-logs` endpoint). Four "out of scope" items
+from the original spec moved to
+[`deferred/`](../deferred/) with their own entries (GPU time-series,
+federated analytics, alerting thresholds, cost attribution).
+
 **Affected files:**
+`internal/analytics/migrations/005_unified_sink.up.sql` + `.down.sql`
+(new tables: submission_history, registry_mutations,
+unschedulable_events, auth_events, artifact_transfers,
+service_probe_events, job_log_entries),
+`internal/analytics/sink.go` (dispatch-switch additions +
+`SinkConfig.PIIMode/PIISalt`),
+`internal/analytics/sink_unified.go` (new — upserts + PII hashing),
+`internal/analytics/retention.go` (new — daily cron pruning every
+feature-28 table, `HELION_ANALYTICS_RETENTION_DAYS`),
+`internal/analytics/sink_unified_test.go` +
+`internal/analytics/retention_test.go` (new),
+`internal/events/topics.go` (new constants + constructors:
+`SubmissionRecorded`, `AuthOK` / `Fail` / `RateLimit` / `TokenMint`,
+`ArtifactUploaded` / `Downloaded`, `ServiceProbeTransition`, `JobLog`),
+`internal/api/handlers_analytics.go` (new route registration),
+`internal/api/handlers_analytics_unified.go` (new — seven read-side
+endpoints),
+`internal/api/analytics_publisher.go` (new — `recordSubmission`,
+`recordAuthOK/Fail/RateLimit`, `recordTokenMint` helpers),
+`internal/api/handlers_jobs.go` + `internal/api/handlers_workflows.go`
+(submission-history publisher at accept / reject / dry-run
+branches),
+`internal/api/handlers_admin.go` (token-mint publisher),
+`internal/api/middleware.go` (auth-event publishers +
+`classifyAuthFailure`),
+`internal/cluster/dispatch.go` (artifact.downloaded at dispatch
+time per declared Input),
+`internal/grpcserver/handlers.go` (artifact.uploaded at
+attestOutputs + service.probe_transition mirror + job.log mirror on
+StreamLogs),
+`internal/grpcserver/server.go` (new `WithEventBus` option),
+`cmd/helion-coordinator/main.go`
+(`HELION_ANALYTICS_PII_MODE` / `_PII_SALT` / `_RETENTION_DAYS`
+parsing; retention cron start; grpcserver wired with event bus),
+`dashboard/src/app/shared/models/index.ts` (new types),
+`dashboard/src/app/core/services/api.service.ts` (new service
+methods),
+`dashboard/src/app/features/analytics/analytics-dashboard.component.ts`
+(new Submission History + Auth Events panels),
+`dashboard/src/app/features/analytics/analytics-dashboard.component.spec.ts`
+(spy updates),
+`docs/persistence.md` (new storage-tier contract section),
+`docs/SECURITY.md` (new analytics-store threat rows),
+`docs/ARCHITECTURE.md` (seven new REST rows).
+
+## Reconciliation (spec vs shipped)
+
+- **Per-job log ingestion (user add) shipped as dual-write.** The
+  spec's Deferred section said this was out of scope; the user
+  asked for it to land so BadgerDB's log TTL can eventually relax.
+  Shipped form: every chunk captured in
+  `grpcserver.StreamLogs` lands in BadgerDB (primary read path
+  today) AND publishes a `job.log` event that the sink persists to
+  PostgreSQL's `job_log_entries` (ON CONFLICT DO NOTHING on
+  (job_id, seq) so duplicate ingests are idempotent). A new
+  `GET /api/analytics/job-logs` endpoint reads from PG. A
+  follow-up slice can drop BadgerDB's `log:` prefix once PG has a
+  full retention window of coverage.
+- **Artifact downloads emitted from the dispatch loop, not the node.**
+  The node performs the actual byte transfer but does not report
+  per-download RPCs today. `internal/cluster/dispatch.go` emits one
+  `artifact.downloaded` event per declared Input at dispatch time
+  with bytes=0 / duration_ms=NULL — the panel gets the "what was
+  referenced" signal; a follow-up `ReportArtifactDownload` RPC (not
+  shipped) can backfill the numeric columns.
+- **Workflow outcome + MLResolveFailed sinks are no-ops by design.**
+  The existing `handleAnalyticsWorkflowOutcomes` endpoint already
+  queries the raw `events` table; no rollup table is required
+  today. The upsert functions exist as hooks for a future
+  workflow_outcome_summary table without touching the dispatch
+  switch.
+- **PII hashing done at write, not read.** A mid-deployment switch
+  between `off` and `hash_actor` produces a mixed table; the sink
+  does not re-key existing rows. Operators who want a clean change
+  truncate the feature-28 tables OR let retention age them out.
+- **Defence in depth: submit body never in analytics.**
+  `submission_history` stores only `resource_id` (ULID), never
+  command/args/env. A forensic reviewer who needs the full
+  submission follows `resource_id` back to the audit log. This
+  keeps secret env values (feature 26) from ever landing in
+  analytics even if feature 26's redaction regresses.
+- **Retention sweeps the existing `events` table too.** Pre-feature-28
+  migrations stored raw events with no retention. The retention cron
+  now covers `events` alongside the new feature-28 tables so the
+  analytics database has one consistent operational-window contract
+  rather than a mix of "aged out" and "forever".
+
+## Still out of scope (promoted to deferred/)
+
+All four items the original spec listed under "Deferred (out of
+scope for this spec)" are now formally filed under `deferred/`:
+
+- [GPU time-series](../deferred/29-gpu-time-series.md) —
+  sample-per-minute heartbeat rollup.
+- [Federated analytics across clusters](../deferred/30-federated-analytics.md) —
+  cross-coordinator analytics aggregation.
+- [Alerting on thresholds](../deferred/31-alerting-thresholds.md) —
+  "auth_fail rate > X/min" notifier.
+- [Cost attribution](../deferred/32-cost-attribution.md) — pricing
+  model + cost dashboards.
+
+**Affected files (legacy list, replaced by the above):**
 `internal/analytics/sink.go` (new event-type switch cases),
 `internal/analytics/migrations/` (new tables + views),
 `internal/api/handlers_analytics*.go` (new query endpoints),

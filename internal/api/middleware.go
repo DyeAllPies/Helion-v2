@@ -18,6 +18,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 )
 
 // ── Token admin rate-limit constants ─────────────────────────────────────────
@@ -129,6 +130,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 					logAuditErr(true, "auth.missing_bearer", err)
 				}
 			}
+			s.recordAuthFail(r, events.AuthFailReasonMissingToken, "") // feature 28
 			writeError(w, http.StatusUnauthorized, "missing or invalid authorization header")
 			return
 		}
@@ -143,14 +145,47 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 					logAuditErr(true, "auth.invalid_token", aerr)
 				}
 			}
+			// Feature 28 — classify the failure for the analytics
+			// panel. ValidateToken's error string is not structured;
+			// we substring-match the common cases and fall back to
+			// invalid_signature for anything else.
+			s.recordAuthFail(r, classifyAuthFailure(err), "") // feature 28
 			slog.Error("token validation failed", slog.String("remote", r.RemoteAddr), slog.Any("err", err))
 			writeError(w, http.StatusUnauthorized, "authentication failed")
 			return
 		}
 
+		// Feature 28 — successful auth goes to analytics too so the
+		// dashboard's auth-events panel can show logins-per-minute.
+		s.recordAuthOK(r, claims.Subject)
+
 		// Store claims in request context
 		ctx := context.WithValue(r.Context(), claimsContextKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	}
+}
+
+// classifyAuthFailure maps a ValidateToken error into one of the
+// stable events.AuthFailReason* constants the analytics panel
+// filters on. The TokenManager doesn't expose typed errors today,
+// so we substring-match — imperfect but the reasons are stable
+// English strings in internal/auth/token.go.
+func classifyAuthFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "expired"):
+		return events.AuthFailReasonExpired
+	case strings.Contains(msg, "revoked"):
+		return events.AuthFailReasonRevoked
+	case strings.Contains(msg, "invalid") && strings.Contains(msg, "signature"):
+		return events.AuthFailReasonInvalidSignature
+	case strings.Contains(msg, "malformed"), strings.Contains(msg, "format"):
+		return events.AuthFailReasonInvalidFormat
+	default:
+		return events.AuthFailReasonInvalidSignature
 	}
 }
 

@@ -85,6 +85,9 @@ func (s *Server) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	// Per-admin rate limit: at most tokenIssueRate issuances per second per subject.
 	if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
 		if !s.tokenIssueAllow(claims.Subject) {
+			// Feature 28 — record the 429 in analytics so the auth-events
+			// panel shows spikes in admin-surface rate-limiting.
+			s.recordAuthRateLimit(r, claims.Subject, r.URL.Path)
 			writeError(w, http.StatusTooManyRequests, "token issuance rate limit exceeded")
 			return
 		}
@@ -121,11 +124,11 @@ func (s *Server) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	actor := "system"
+	if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
+		actor = claims.Subject
+	}
 	if s.audit != nil {
-		actor := "system"
-		if claims, ok := r.Context().Value(claimsContextKey).(*auth.Claims); ok {
-			actor = claims.Subject
-		}
 		if err := s.audit.Log(r.Context(), "token.issued", actor, map[string]interface{}{
 			"subject":   req.Subject,
 			"role":      req.Role,
@@ -134,6 +137,10 @@ func (s *Server) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 			logAuditErr(true, "token.issue", err)
 		}
 	}
+	// Feature 28 — analytics mirror of token issuance. Lets the
+	// dashboard panel show "token mints per hour" + highlight
+	// unusual TTLs.
+	s.recordTokenMint(actor, req.Subject, req.Role, ttl)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

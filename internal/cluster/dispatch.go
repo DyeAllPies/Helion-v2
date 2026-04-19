@@ -311,5 +311,19 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 			slog.String("node_id", node.NodeID),
 			slog.String("node_addr", node.Address),
 		)
+		// Feature 28 — emit one artifact.downloaded event per Input
+		// at dispatch time. This is the coordinator's earliest
+		// reliable view of "input was referenced for this job"; the
+		// node performs the actual byte transfer but does not send a
+		// per-download RPC today. The analytics table accepts NULL
+		// bytes / duration_ms for these rows — a follow-up that adds
+		// a node-side ReportArtifactDownload RPC can backfill the
+		// numeric columns.
+		for _, in := range job.Inputs {
+			if in.URI == "" {
+				continue
+			}
+			d.jobs.publishEvent(events.ArtifactDownloaded(job.ID, in.URI, 0, 0, nil))
+		}
 	}
 }

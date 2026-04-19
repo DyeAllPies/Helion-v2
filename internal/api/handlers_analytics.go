@@ -77,6 +77,17 @@ func (s *Server) SetAnalyticsDB(db AnalyticsDB) {
 	s.mux.HandleFunc("GET /api/analytics/queue-wait", s.authMiddleware(s.handleAnalyticsQueueWait))
 	s.mux.HandleFunc("GET /api/analytics/workflow-outcomes", s.authMiddleware(s.handleAnalyticsWorkflowOutcomes))
 	s.mux.HandleFunc("GET /api/analytics/events", s.authMiddleware(s.handleAnalyticsEvents))
+
+	// Feature 28 — unified sink endpoints. Every handler rides the
+	// same authMiddleware + analyticsQueryAllow limiter + time-range
+	// parser as the above. Routes live in handlers_analytics_unified.go.
+	s.mux.HandleFunc("GET /api/analytics/submission-history", s.authMiddleware(s.handleAnalyticsSubmissionHistory))
+	s.mux.HandleFunc("GET /api/analytics/auth-events", s.authMiddleware(s.handleAnalyticsAuthEvents))
+	s.mux.HandleFunc("GET /api/analytics/unschedulable", s.authMiddleware(s.handleAnalyticsUnschedulable))
+	s.mux.HandleFunc("GET /api/analytics/registry-growth", s.authMiddleware(s.handleAnalyticsRegistryGrowth))
+	s.mux.HandleFunc("GET /api/analytics/service-probe", s.authMiddleware(s.handleAnalyticsServiceProbe))
+	s.mux.HandleFunc("GET /api/analytics/artifact-throughput", s.authMiddleware(s.handleAnalyticsArtifactThroughput))
+	s.mux.HandleFunc("GET /api/analytics/job-logs", s.authMiddleware(s.handleAnalyticsJobLogs))
 }
 
 // ── Shared pre-flight ────────────────────────────────────────────────────

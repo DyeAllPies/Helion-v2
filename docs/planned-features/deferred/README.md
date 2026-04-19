@@ -50,5 +50,9 @@ the single moved file so future reviewers can see the full arc.
 | 26 | [Pipelines view event integration (resolve_failed + unschedulable)](./26-pipelines-event-integration.md) | feature 18 | P3 |
 | 27 | [Pipelines filter — workflows that produced a registered model](./27-pipelines-produced-models-filter.md) | feature 18 | P3 |
 | 28 | [Key-level ACL on secrets](./28-key-level-acl-on-secrets.md) | feature 26 | P3 |
+| 29 | [GPU time-series (sample-per-minute rollup)](./29-gpu-time-series.md) | feature 28 | P3 |
+| 30 | [Federated analytics across clusters](./30-federated-analytics.md) | feature 28 | P3 |
+| 31 | [Alerting on analytics thresholds](./31-alerting-thresholds.md) | feature 28 | P3 |
+| 32 | [Cost attribution](./32-cost-attribution.md) | feature 28 | P3 |
 
 > **GPU / accelerator resources:** moved to [feature 10 step 5](../10-minimal-ml-pipeline.md) — GPU as a first-class resource. The pointer is retained so older commits and audits still resolve.

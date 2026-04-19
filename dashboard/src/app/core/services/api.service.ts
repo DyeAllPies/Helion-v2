@@ -14,6 +14,7 @@ import {
   Workflow, WorkflowsPage, SubmitWorkflowRequest,
   AnalyticsThroughputResponse, AnalyticsNodeReliabilityRow, AnalyticsRetryRow,
   AnalyticsQueueWaitResponse, AnalyticsWorkflowOutcomesResponse,
+  SubmissionHistoryResponse, AuthEventsResponse,
   Dataset, DatasetListResponse, DatasetRegisterRequest,
   MLModel, ModelListResponse, ModelRegisterRequest,
   ServiceEndpoint, ServiceListResponse,
@@ -188,6 +189,42 @@ export class ApiService {
     const params = new HttpParams().set('from', from).set('to', to);
     return this.http.get<AnalyticsWorkflowOutcomesResponse>(
       `${this.base}/api/analytics/workflow-outcomes`, { params });
+  }
+
+  // ── Feature 28 — unified analytics sink ──────────────────────────────────
+
+  /**
+   * Submission history — every POST /jobs and POST /workflows (accepted,
+   * rejected, AND dry-run) with enough metadata to answer "what did X
+   * submit?" without exposing the submit body. Redacted: command/args/env
+   * never land in analytics — follow the `resource_id` back to the audit
+   * log for the plaintext.
+   */
+  getAnalyticsSubmissionHistory(
+    from: string, to: string, opts: { kind?: 'job' | 'workflow'; actor?: string; accepted?: boolean; limit?: number } = {},
+  ): Observable<SubmissionHistoryResponse> {
+    let params = new HttpParams().set('from', from).set('to', to);
+    if (opts.kind) params = params.set('kind', opts.kind);
+    if (opts.actor) params = params.set('actor', opts.actor);
+    if (opts.accepted !== undefined) params = params.set('accepted', String(opts.accepted));
+    if (opts.limit) params = params.set('limit', String(opts.limit));
+    return this.http.get<SubmissionHistoryResponse>(
+      `${this.base}/api/analytics/submission-history`, { params });
+  }
+
+  /**
+   * Auth events — logins, token mints, auth failures, rate-limit hits.
+   * Feeds the dashboard's "who's logging in" and "when did failures
+   * spike" panels without touching the audit log.
+   */
+  getAnalyticsAuthEvents(
+    from: string, to: string, opts: { event_type?: string; limit?: number } = {},
+  ): Observable<AuthEventsResponse> {
+    let params = new HttpParams().set('from', from).set('to', to);
+    if (opts.event_type) params = params.set('event_type', opts.event_type);
+    if (opts.limit) params = params.set('limit', String(opts.limit));
+    return this.http.get<AuthEventsResponse>(
+      `${this.base}/api/analytics/auth-events`, { params });
   }
 
   // ── ML registry: datasets ───────────────────────────────────────────────────

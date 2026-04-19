@@ -14,6 +14,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 
 	"github.com/DyeAllPies/Helion-v2/internal/cluster"
+	"github.com/DyeAllPies/Helion-v2/internal/events"
 	cpb "github.com/DyeAllPies/Helion-v2/internal/proto/coordinatorpb"
 	pb "github.com/DyeAllPies/Helion-v2/proto"
 	"google.golang.org/grpc"
@@ -372,6 +373,14 @@ func (s *Server) attestOutputs(jobID, nodeID string, src []*pb.ArtifactOutput, d
 			SHA256:    o.Sha256,
 			LocalPath: o.LocalPath,
 		})
+		// Feature 28 — one analytics event per attested upload.
+		// This is the coordinator's first reliable view of a
+		// completed artifact transfer (the node did the Put and
+		// then told us about it). We have no client-side duration
+		// yet; leave it 0 until the node RPC carries it.
+		if s.eventBus != nil {
+			s.eventBus.Publish(events.ArtifactUploaded(jobID, o.Uri, int64(o.Size), 0))
+		}
 	}
 	return out
 }
@@ -549,6 +558,15 @@ func (s *Server) ReportServiceEvent(
 				slog.String("event", eventName), slog.Any("err", aerr))
 		}
 	}
+	// Feature 28 — analytics mirror. Edge-triggered transitions
+	// feed the service-probe panel on the dashboard.
+	if s.eventBus != nil {
+		newState := "ready"
+		if !evt.Ready {
+			newState = "unhealthy"
+		}
+		s.eventBus.Publish(events.ServiceProbeTransition(evt.JobId, newState, evt.ConsecutiveFailures))
+	}
 	return &pb.Ack{Ok: true}, nil
 }
 
@@ -574,6 +592,15 @@ func (s *Server) StreamLogs(stream grpc.ClientStreamingServer[pb.LogChunk, pb.Ac
 				s.log.Warn("failed to store log chunk",
 					slog.String("job_id", chunk.JobId),
 					slog.Any("err", err))
+			}
+			// Feature 28 — mirror every chunk into analytics so
+			// PG carries a durable copy. Emitted AFTER the Badger
+			// append so a failing PG sink doesn't drop the
+			// primary store; emitted even if Badger failed so the
+			// analytics side is best-effort independent. The PG
+			// sink de-dups on (job_id, seq) via ON CONFLICT.
+			if s.eventBus != nil {
+				s.eventBus.Publish(events.JobLog(chunk.JobId, int64(chunk.Seq), time.Now(), entry.Data))
 			}
 		}
 	}

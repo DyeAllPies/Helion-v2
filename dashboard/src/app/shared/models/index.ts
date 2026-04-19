@@ -346,6 +346,42 @@ export interface AnalyticsWorkflowOutcomesResponse {
   data: AnalyticsWorkflowOutcomeRow[];
 }
 
+// ── Feature 28 — unified analytics sink ─────────────────────────────────────
+
+export interface SubmissionHistoryRow {
+  id:             string;
+  submitted_at:   string;
+  actor:          string;
+  operator_cn?:   string;
+  source:         string;   // 'dashboard' | 'cli' | 'ci' | 'unknown'
+  kind:           string;   // 'job' | 'workflow'
+  resource_id:    string;
+  dry_run:        boolean;
+  accepted:       boolean;
+  reject_reason?: string;
+  user_agent?:    string;
+}
+
+export interface SubmissionHistoryResponse {
+  rows:         SubmissionHistoryRow[];
+  total:        number;
+  next_cursor?: string;
+}
+
+export interface AuthEventRow {
+  occurred_at: string;
+  event_type:  string;   // 'login' | 'token_mint' | 'auth_fail' | 'rate_limit'
+  actor?:      string;
+  remote_ip?:  string;
+  user_agent?: string;
+  reason?:     string;
+}
+
+export interface AuthEventsResponse {
+  rows:  AuthEventRow[];
+  total: number;
+}
+
 // ── ML Registry (features 16 + 17) ───────────────────────────────────────────
 
 export interface Dataset {

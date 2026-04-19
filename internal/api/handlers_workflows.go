@@ -282,6 +282,7 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 				logAuditErr(false, "workflow.dry_run", err)
 			}
 		}
+		s.recordSubmission(r, "workflow", wf.ID, true, true, "") // feature 28
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		writeJSON(w, "handleSubmitWorkflow.dry_run", dryRunResponse(workflowToResponse(wf, nil)))
@@ -321,6 +322,7 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 	// Re-read the workflow to get the updated state with job IDs.
 	wf, _ = s.workflowStore.Get(wf.ID)
 
+	s.recordSubmission(r, "workflow", wf.ID, false, true, "") // feature 28
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, "handleSubmitWorkflow", workflowToResponse(wf, s.workflowJobStore))

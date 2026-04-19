@@ -36,6 +36,20 @@ type SinkConfig struct {
 	BatchSize     int           // events per flush (default 100)
 	FlushInterval time.Duration // max time between flushes (default 500ms)
 	BufferLimit   int           // max in-memory buffer before dropping (default 10000)
+
+	// Feature 28 — PII hashing. When PIIMode == "hash_actor" the
+	// sink writes sha256(PIISalt || raw_actor) into the `actor`
+	// columns of feature-28 tables (submission_history,
+	// registry_mutations, auth_events). An empty PIIMode keeps
+	// raw values — the default.
+	//
+	// PIISalt should be set when PIIMode is hash_actor; an empty
+	// salt produces unsalted hashes (still bound-same-actor for
+	// trend graphs, but trivially brute-forceable against a short
+	// subject list). The coordinator logs a WARN on empty salt +
+	// hash_actor so the operator sees the tradeoff at boot.
+	PIIMode string
+	PIISalt string
 }
 
 func (c SinkConfig) withDefaults() SinkConfig {
@@ -306,6 +320,44 @@ func (s *Sink) upsertSummaries(ctx context.Context, tx pgx.Tx, batch []events.Ev
 			err = s.upsertNodeStale(ctx, tx, evt)
 		case "node.revoked":
 			err = s.upsertNodeRevoked(ctx, tx, evt)
+
+		// ── Feature 28 — previously-dropped events now persisted ──
+		case events.TopicWorkflowCompleted:
+			err = s.upsertWorkflowOutcome(ctx, tx, evt, "completed")
+		case events.TopicWorkflowFailed:
+			err = s.upsertWorkflowOutcome(ctx, tx, evt, "failed")
+		case events.TopicJobUnschedulable:
+			err = s.upsertUnschedulable(ctx, tx, evt)
+		case events.TopicMLResolveFailed:
+			err = s.upsertMLResolveFailed(ctx, tx, evt)
+		case events.TopicDatasetRegistered:
+			err = s.upsertRegistryMutation(ctx, tx, evt, "dataset", "registered")
+		case events.TopicDatasetDeleted:
+			err = s.upsertRegistryMutation(ctx, tx, evt, "dataset", "deleted")
+		case events.TopicModelRegistered:
+			err = s.upsertRegistryMutation(ctx, tx, evt, "model", "registered")
+		case events.TopicModelDeleted:
+			err = s.upsertRegistryMutation(ctx, tx, evt, "model", "deleted")
+
+		// ── Feature 28 — new event families ───────────────────────
+		case events.TopicSubmissionRecorded:
+			err = s.upsertSubmissionHistory(ctx, tx, evt)
+		case events.TopicAuthOK:
+			err = s.upsertAuthEvent(ctx, tx, evt, "login")
+		case events.TopicAuthFail:
+			err = s.upsertAuthEvent(ctx, tx, evt, "auth_fail")
+		case events.TopicAuthRateLimit:
+			err = s.upsertAuthEvent(ctx, tx, evt, "rate_limit")
+		case events.TopicAuthTokenMint:
+			err = s.upsertAuthEvent(ctx, tx, evt, "token_mint")
+		case events.TopicArtifactUploaded:
+			err = s.upsertArtifactTransfer(ctx, tx, evt, "upload")
+		case events.TopicArtifactDownloaded:
+			err = s.upsertArtifactTransfer(ctx, tx, evt, "download")
+		case events.TopicServiceProbeTransition:
+			err = s.upsertServiceProbeEvent(ctx, tx, evt)
+		case events.TopicJobLog:
+			err = s.upsertJobLog(ctx, tx, evt)
 		}
 		if err != nil {
 			return fmt.Errorf("upsert summary for %s: %w", evt.Type, err)
@@ -597,4 +649,29 @@ func nilIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+// extractBool pulls a bool value from the event's Data map. Tolerates
+// either a native bool or JSON-round-tripped forms ("true"/"false"
+// strings, 0/1 ints); anything else is false.
+func extractBool(data map[string]any, key string) bool {
+	if data == nil {
+		return false
+	}
+	v, ok := data[key]
+	if !ok {
+		return false
+	}
+	switch b := v.(type) {
+	case bool:
+		return b
+	case string:
+		return b == "true"
+	case int:
+		return b != 0
+	case float64:
+		return b != 0
+	default:
+		return false
+	}
 }

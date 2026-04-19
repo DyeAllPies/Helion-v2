@@ -115,3 +115,64 @@ Key boundaries:
 See [ml-pipelines.md](ml-pipelines.md) for the ML-side
 implications and [ARCHITECTURE.md § 13](ARCHITECTURE.md#13-ml-pipeline)
 for the diagram.
+
+## Storage tiers — the audit ↔ analytics contract (feature 28)
+
+Helion's persistence story runs on **three stores with distinct
+purposes**. Knowing which to hit for a given question is the
+difference between a clean forensic trail and a support escalation.
+
+| Store           | Backing | Retention | Purpose | Query shape |
+|---|---|---|---|---|
+| **Audit log**   | BadgerDB (`audit/` prefix) | **forever** (append-only) | Accountability. Compliance. Security incident response. | Per-key lookup; `Scan(prefix)` range walk. |
+| **Analytics**   | PostgreSQL (feature 09 + 28) | **operational window** (default 60 d, set via `HELION_ANALYTICS_RETENTION_DAYS`) | Dashboards. Capacity planning. Trend graphs. | `GROUP BY date_trunc` aggregation + percentiles. |
+| **Log store**   | BadgerDB (`log:` prefix) + PostgreSQL (`job_log_entries`, feature 28) | BadgerDB 7 d (configurable); PG subject to analytics retention | Per-job stdout/stderr. | `GET /jobs/{id}/logs` (Badger); `GET /api/analytics/job-logs?job_id=…` (PG). |
+
+**Invariant.** Every event in the analytics store has a
+complementary entry in the audit log. Deleting the oldest analytics
+rows at the retention edge **never** compromises the audit trail —
+an operator can always reconstruct "what happened last year" from
+BadgerDB, just more slowly than a PG `date_trunc` would.
+
+**Which store to hit:**
+
+- "Who submitted this job?" → **audit log**. Canonical per-event
+  record, never rotated.
+- "How many jobs per hour did we run last week?" → **analytics**.
+  Time-series-shaped, fast range aggregation.
+- "Show me the stdout of job X from 30 minutes ago." → **log
+  store (Badger)** via `/jobs/{id}/logs`.
+- "Show me the stdout of job X from 2 months ago." → **log
+  store (PG)** via `/api/analytics/job-logs?job_id=X`, provided
+  the request falls inside the analytics retention window.
+- "Who logged in during the breach window?" → **audit log** for
+  accountability AND **analytics** `auth_events` for the
+  time-series form. Both stores are authoritative, both are
+  cross-referenceable by `occurred_at`.
+
+**Tier invariants:**
+
+- **A compromised analytics database does NOT compromise the audit
+  trail.** The retention cron DELETEs analytics rows; the audit log
+  in Badger is untouched.
+- **A compromised audit store is a full cluster compromise.** If
+  BadgerDB is writable by an attacker, both audit history and job
+  state are in play — treat as a security incident.
+- **PII handling differs.** The audit log always stores raw actor
+  subjects (accountability). The analytics store can hash subjects
+  via `HELION_ANALYTICS_PII_MODE=hash_actor` for privacy-minded
+  deployments — dashboards still get per-subject trends via
+  consistent hashing, but a PG dump doesn't expose raw identities.
+
+**Retention knobs** (set on the coordinator):
+
+- `HELION_ANALYTICS_RETENTION_DAYS` — default 60. Older rows in
+  every feature-28 table are DELETEd by a daily cron. Set to 0 to
+  disable retention (PII / compliance pushback scenarios).
+- `HELION_ANALYTICS_PII_MODE` — `off` (default) or `hash_actor`.
+  Controls whether actor columns are written as raw strings or
+  SHA-256 hashes.
+- `HELION_ANALYTICS_PII_SALT` — per-install salt prepended to the
+  SHA-256. Empty salt logs a WARN at boot; rotating mid-deployment
+  breaks per-subject grouping across the rotation boundary
+  (documented, not automated).

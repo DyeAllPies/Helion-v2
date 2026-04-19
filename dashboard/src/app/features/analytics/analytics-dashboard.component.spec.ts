@@ -39,12 +39,17 @@ function mkApiSpy(): jasmine.SpyObj<ApiService> {
     'getAnalyticsRetryEffectiveness',
     'getAnalyticsQueueWait',
     'getAnalyticsWorkflowOutcomes',
+    // feature 28
+    'getAnalyticsSubmissionHistory',
+    'getAnalyticsAuthEvents',
   ]);
   spy.getAnalyticsThroughput.and.returnValue(of(emptyThroughput()));
   spy.getAnalyticsNodeReliability.and.returnValue(of({ data: [] }));
   spy.getAnalyticsRetryEffectiveness.and.returnValue(of({ data: [] }));
   spy.getAnalyticsQueueWait.and.returnValue(of(emptyQueueWait()));
   spy.getAnalyticsWorkflowOutcomes.and.returnValue(of(emptyWorkflow()));
+  spy.getAnalyticsSubmissionHistory.and.returnValue(of({ rows: [], total: 0 }));
+  spy.getAnalyticsAuthEvents.and.returnValue(of({ rows: [], total: 0 }));
   return spy;
 }
 

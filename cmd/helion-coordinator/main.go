@@ -267,6 +267,7 @@ func main() {
 		grpcserver.WithRetryChecker(jobs),
 		grpcserver.WithLogStore(logStore),
 		grpcserver.WithServiceRegistry(serviceRegistry),
+		grpcserver.WithEventBus(eventBus), // feature 28
 	)
 	if err != nil {
 		log.Error("create gRPC server", slog.Any("err", err))
@@ -381,10 +382,24 @@ func main() {
 		}
 
 		// Start the event bus → PostgreSQL sink.
+		//
+		// Feature 28 — PII mode + salt read at boot. `hash_actor`
+		// mode writes sha256(salt||actor) into feature-28 actor
+		// columns; empty salt is allowed but logged as WARN since
+		// it makes the hash trivially brute-forceable against a
+		// small subject list.
+		piiMode := os.Getenv("HELION_ANALYTICS_PII_MODE")
+		piiSalt := os.Getenv("HELION_ANALYTICS_PII_SALT")
+		if piiMode == analytics.PIIModeHashActor && piiSalt == "" {
+			log.Warn("HELION_ANALYTICS_PII_MODE=hash_actor without HELION_ANALYTICS_PII_SALT — " +
+				"actor hashes are unsalted and trivially brute-forceable")
+		}
 		sinkCfg := analytics.SinkConfig{
 			BatchSize:     envInt("HELION_ANALYTICS_BATCH", 100),
 			FlushInterval: time.Duration(envInt("HELION_ANALYTICS_FLUSH_MS", 500)) * time.Millisecond,
 			BufferLimit:   envInt("HELION_ANALYTICS_BUFFER", 10_000),
+			PIIMode:       piiMode,
+			PIISalt:       piiSalt,
 		}
 		analyticsSink = analytics.NewSink(pgPool, eventBus, sinkCfg, log)
 		analyticsSink.Start(ctx)
@@ -392,9 +407,21 @@ func main() {
 		// Wire analytics API endpoints.
 		apiSrv.SetAnalyticsDB(pgPool)
 
+		// Feature 28 — retention cron. Prunes rows older than the
+		// configured retention window from every feature-28 table.
+		// Audit log (BadgerDB) is untouched — it's the forever-record.
+		retentionDays := envInt("HELION_ANALYTICS_RETENTION_DAYS", 60)
+		if retentionDays > 0 {
+			retCron := analytics.NewRetentionCron(pgPool, retentionDays, log)
+			retCron.Start(ctx)
+			log.Info("analytics retention cron started",
+				slog.Int("retention_days", retentionDays))
+		}
+
 		log.Info("analytics pipeline enabled",
 			slog.Int("batch_size", sinkCfg.BatchSize),
-			slog.Int("buffer_limit", sinkCfg.BufferLimit))
+			slog.Int("buffer_limit", sinkCfg.BufferLimit),
+			slog.String("pii_mode", nonEmptyOr(piiMode, "off")))
 	}
 
 	// ── REST + WebSocket listener (feature 23) ────────────────────────────
@@ -604,6 +631,16 @@ func (r *coordinatorReadiness) RegistryLen() int { return r.reg.Len() }
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// nonEmptyOr returns v if non-empty, else def. Same shape as
+// envOr but takes the string directly — used by log annotations
+// that want "off" printed when an env var is unset.
+func nonEmptyOr(v, def string) string {
+	if v != "" {
 		return v
 	}
 	return def

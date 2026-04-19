@@ -27,6 +27,8 @@ import {
   AnalyticsRetryRow,
   AnalyticsQueueWaitRow,
   AnalyticsWorkflowOutcomeRow,
+  SubmissionHistoryRow,
+  AuthEventRow,
 } from '../../shared/models';
 import { environment } from '../../../environments/environment';
 
@@ -207,6 +209,80 @@ Chart.register(
       </div>
     </div>
 
+    <!-- ── Feature 28: submission history ── -->
+    <div class="chart-panel" *ngIf="submissionRows.length > 0">
+      <div class="chart-panel__header">
+        <span class="material-icons" style="font-size:16px;color:var(--color-accent-dim)">playlist_add_check</span>
+        SUBMISSION HISTORY — LAST {{ submissionRows.length }} ENTRIES
+      </div>
+      <div class="table-scroll">
+        <table class="compact-table">
+          <thead>
+            <tr>
+              <th>WHEN</th>
+              <th>ACTOR</th>
+              <th>KIND</th>
+              <th>RESOURCE</th>
+              <th>SOURCE</th>
+              <th>DRY</th>
+              <th>OUTCOME</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let s of submissionRows">
+              <td class="mono">{{ s.submitted_at | date:'yyyy-MM-dd HH:mm:ss' }}</td>
+              <td class="mono">{{ s.actor }}</td>
+              <td>{{ s.kind }}</td>
+              <td class="mono">{{ s.resource_id }}</td>
+              <td>{{ s.source }}</td>
+              <td>{{ s.dry_run ? 'yes' : '' }}</td>
+              <td>
+                <span *ngIf="s.accepted" class="pill pill--ok">accepted</span>
+                <span *ngIf="!s.accepted" class="pill pill--bad" [title]="s.reject_reason || ''">rejected</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── Feature 28: auth events ── -->
+    <div class="chart-panel" *ngIf="authEventRows.length > 0">
+      <div class="chart-panel__header">
+        <span class="material-icons" style="font-size:16px;color:var(--color-accent-dim)">lock</span>
+        AUTH EVENTS — LAST {{ authEventRows.length }} ENTRIES
+      </div>
+      <div class="table-scroll">
+        <table class="compact-table">
+          <thead>
+            <tr>
+              <th>WHEN</th>
+              <th>TYPE</th>
+              <th>ACTOR</th>
+              <th>REMOTE IP</th>
+              <th>REASON</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let a of authEventRows">
+              <td class="mono">{{ a.occurred_at | date:'yyyy-MM-dd HH:mm:ss' }}</td>
+              <td>
+                <span class="pill"
+                      [class.pill--ok]="a.event_type === 'login'"
+                      [class.pill--info]="a.event_type === 'token_mint'"
+                      [class.pill--bad]="a.event_type === 'auth_fail' || a.event_type === 'rate_limit'">
+                  {{ a.event_type }}
+                </span>
+              </td>
+              <td class="mono">{{ a.actor || '—' }}</td>
+              <td class="mono">{{ a.remote_ip || '—' }}</td>
+              <td class="mono">{{ a.reason || '' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
   </div>
 </div>
   `,
@@ -340,6 +416,51 @@ Chart.register(
     .retry-status   { font-size: 14px; font-weight: 700; color: #e8edf2; text-transform: capitalize; }
     .retry-count    { font-size: 11px; color: #8896aa; }
     .retry-duration { font-size: 10px; color: var(--color-muted); }
+
+    /* Feature 28 — compact-table shared by submission-history and
+       auth-events panels. Intentionally lightweight — the panels
+       show at most 50–100 rows so we don't need Material table. */
+    .table-scroll {
+      max-height: 400px;
+      overflow-y: auto;
+      margin-top: 8px;
+      border: 1px solid var(--color-border);
+      border-radius: 4px;
+    }
+    .compact-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .compact-table th {
+      position: sticky; top: 0;
+      background: var(--color-surface);
+      padding: 6px 10px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      color: var(--color-muted);
+      border-bottom: 1px solid var(--color-border);
+    }
+    .compact-table td {
+      padding: 4px 10px;
+      color: #d0dde8;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+    }
+    .compact-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .compact-table .mono { font-family: var(--font-mono, monospace); font-size: 11px; }
+
+    .pill {
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-size: 10px;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+    }
+    .pill--ok   { background: rgba(68, 196, 100, 0.15); color: #4ed884; }
+    .pill--bad  { background: rgba(230, 87, 103, 0.15); color: #ea7888; }
+    .pill--info { background: rgba(100, 170, 240, 0.15); color: #7eb6f0; }
   `]
 })
 export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
@@ -397,6 +518,13 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
 
   // Retry effectiveness
   retryRows: AnalyticsRetryRow[] = [];
+
+  // Feature 28 — unified analytics sink panels. Rows come from the
+  // corresponding REST endpoints; templates render the raw data
+  // directly (no aggregation on the client today — the server
+  // returns already-sorted, limit-capped rows).
+  submissionRows: SubmissionHistoryRow[] = [];
+  authEventRows:  AuthEventRow[]  = [];
 
   // Workflow outcomes
   workflowLabels:    string[] = [];
@@ -520,7 +648,7 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
     const to   = this.rangeToISO   || this.toDate   + 'T23:59:59Z';
     const bucket = this.activeBucket;
 
-    let pending = 5;
+    let pending = 7;
     const done = () => {
       if (--pending === 0) {
         this.loading     = false;
@@ -556,6 +684,17 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
     this.api.getAnalyticsWorkflowOutcomes(from, to).subscribe({
       next: resp => { this.processWorkflowOutcomes(resp.data ?? []); done(); },
       error: fail('workflow outcomes'),
+    });
+
+    // Feature 28 — unified sink panels.
+    this.api.getAnalyticsSubmissionHistory(from, to, { limit: 50 }).subscribe({
+      next: resp => { this.submissionRows = resp.rows ?? []; done(); },
+      error: fail('submission history'),
+    });
+
+    this.api.getAnalyticsAuthEvents(from, to, { limit: 100 }).subscribe({
+      next: resp => { this.authEventRows = resp.rows ?? []; done(); },
+      error: fail('auth events'),
     });
   }
 

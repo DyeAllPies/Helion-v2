@@ -188,6 +188,13 @@ a real submission.
 | `DELETE` | `/admin/tokens/{jti}` | Bearer (admin) | Immediately revoke a token by JTI |
 | `POST` | `/admin/jobs/{id}/reveal-secret` | Bearer (admin) | Feature 26 — read back a declared secret env value `{key, reason}`. Reason is mandatory and audited; every reject is audited too. Rate-limited 1/5s per subject. |
 | `POST` | `/admin/operator-certs` | Bearer (admin) | Feature 27 — mint a browser-import PKCS#12 bundle for a dashboard operator `{common_name, ttl_days, p12_password}`. Returns cert + key + P12 in one shot (not retained server-side). Rate-limited 1/10s per subject; audit-before-response fail-closed. |
+| `GET` | `/api/analytics/submission-history` | Bearer | Feature 28 — per-operator submission history (accepted, rejected, dry-run). Query params: `from`, `to`, `kind`, `actor`, `accepted`, `limit`. |
+| `GET` | `/api/analytics/auth-events` | Bearer | Feature 28 — logins, token mints, auth failures, rate-limits. Query params: `from`, `to`, `event_type`, `limit`. |
+| `GET` | `/api/analytics/unschedulable` | Bearer | Feature 28 — job.unschedulable events (selector-driven capacity gap). |
+| `GET` | `/api/analytics/registry-growth` | Bearer | Feature 28 — dataset + model register/delete counts bucketed by day. |
+| `GET` | `/api/analytics/service-probe` | Bearer | Feature 28 — service readiness transitions (ready ↔ unhealthy ↔ gone). |
+| `GET` | `/api/analytics/artifact-throughput` | Bearer | Feature 28 — upload + download bytes over time. Query params: `from`, `to`, `bucket`. |
+| `GET` | `/api/analytics/job-logs` | Bearer | Feature 28 — PostgreSQL-backed job log lines (operational-window retention). Complement to the BadgerDB-backed `/jobs/{id}/logs`. Query params: `job_id`, `limit`. |
 | `GET` | `/ws/jobs/{id}/logs` | First-message | WebSocket live log stream |
 | `GET` | `/ws/metrics` | First-message | WebSocket live cluster metrics |
 | `GET` | `/ws/events` | First-message | WebSocket event stream (subscribe with topic patterns) |

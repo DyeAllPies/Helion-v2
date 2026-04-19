@@ -44,6 +44,66 @@ const (
 	// the generic job.failed so the dashboard's Pipelines view can
 	// surface ML-specific pipeline breakage at a glance.
 	TopicMLResolveFailed = "ml.resolve_failed"
+
+	// Feature 28 — unified analytics sink. One topic per event family
+	// the coordinator emits for the operational-window (analytics)
+	// store. The audit log keeps its own canonical events; analytics
+	// carries a time-series-shaped mirror.
+
+	// TopicSubmissionRecorded fires on every POST /jobs + POST
+	// /workflows — accepted, rejected, dry-run — so the dashboard
+	// can answer "what did actor X submit in the last week?"
+	// without scanning the audit log. resource_id ties back to the
+	// full audit event when a forensic reviewer needs the body.
+	TopicSubmissionRecorded = "submission.recorded"
+
+	// TopicAuthOK / Fail / RateLimit / TokenMint feed the analytics
+	// auth-events panel. Reason values for fails are one of the
+	// AuthFailReason* constants below.
+	TopicAuthOK         = "auth.ok"
+	TopicAuthFail       = "auth.fail"
+	TopicAuthRateLimit  = "auth.rate_limit"
+	TopicAuthTokenMint  = "auth.token_mint"
+
+	// TopicArtifactUploaded / Downloaded fire at artifact-store call
+	// sites on completion, carrying bytes + duration + SHA-verify
+	// outcome (for downloads that use GetAndVerifyTo). uri is the
+	// canonical reference, never a presigned URL — presigned links
+	// carry capability and must not land in analytics.
+	TopicArtifactUploaded   = "artifact.uploaded"
+	TopicArtifactDownloaded = "artifact.downloaded"
+
+	// TopicServiceProbeTransition mirrors feature 17's edge-triggered
+	// readiness state machine. One event per ready ↔ unhealthy flip;
+	// consecutive_fails carries the streak leading up to the event.
+	TopicServiceProbeTransition = "service.probe_transition"
+
+	// TopicJobLog fires per log chunk captured by the log store. The
+	// analytics sink persists these into job_log_entries (PostgreSQL)
+	// so the operational window can eventually free BadgerDB's log
+	// TTL pressure. See feature 28 for the migration story.
+	TopicJobLog = "job.log"
+)
+
+// Submission sources — string constants kept stable so the analytics
+// table's source column can be compared to enumerated values in
+// queries. 'unknown' is the default when the handler cannot parse a
+// User-Agent.
+const (
+	SubmissionSourceDashboard = "dashboard"
+	SubmissionSourceCLI       = "cli"
+	SubmissionSourceCI        = "ci"
+	SubmissionSourceUnknown   = "unknown"
+)
+
+// AuthFailReason* values carried on TopicAuthFail events. Stable
+// wire strings — the dashboard filters on them verbatim.
+const (
+	AuthFailReasonMissingToken     = "missing_token"
+	AuthFailReasonInvalidSignature = "invalid_signature"
+	AuthFailReasonExpired          = "expired"
+	AuthFailReasonRevoked          = "revoked"
+	AuthFailReasonInvalidFormat    = "invalid_format"
 )
 
 // Reason values attached to the feature-18 JobUnschedulable event so
@@ -294,4 +354,151 @@ func MLResolveFailed(jobID, workflowID, upstream, outputName, reason string) Eve
 		"output_name": outputName,
 		"reason":      reason,
 	})
+}
+
+// ── Feature 28 constructors ──────────────────────────────────────────────────
+
+// SubmissionRecorded describes a POST /jobs or POST /workflows outcome.
+// Every field is present even on rejection so the retention cron can
+// drop mid-request records without keeping orphans.
+//
+//   actor        — JWT subject (stamped by authMiddleware). 'anonymous' in dev.
+//   operatorCN   — feature 27 client-cert CN, empty when mTLS is off.
+//   source       — one of SubmissionSource* constants.
+//   kind         — 'job' or 'workflow'.
+//   resourceID   — job_id / workflow_id. Ties back to the audit record.
+//   dryRun       — true when ?dry_run=true. rejected dry-runs still
+//                  record here; the operator learns what would have
+//                  happened without probing the full submit path.
+//   accepted     — true iff the request would persist on the real path.
+//   rejectReason — short, validator-returned reason string; empty on accept.
+//   userAgent    — truncated by caller to avoid BufferLimit pressure.
+func SubmissionRecorded(actor, operatorCN, source, kind, resourceID string,
+	dryRun, accepted bool, rejectReason, userAgent string) Event {
+	return NewEvent(TopicSubmissionRecorded, map[string]any{
+		"actor":         actor,
+		"operator_cn":   operatorCN,
+		"source":        source,
+		"kind":          kind,
+		"resource_id":   resourceID,
+		"dry_run":       dryRun,
+		"accepted":      accepted,
+		"reject_reason": rejectReason,
+		"user_agent":    userAgent,
+	})
+}
+
+// AuthOK fires when authMiddleware successfully validates a bearer
+// token. actor is the JWT subject; remoteIP is the client's address
+// (may be the loopback proxy in Nginx deployments); userAgent is
+// truncated by the middleware.
+func AuthOK(actor, remoteIP, userAgent string) Event {
+	return NewEvent(TopicAuthOK, map[string]any{
+		"actor":      actor,
+		"remote_ip":  remoteIP,
+		"user_agent": userAgent,
+	})
+}
+
+// AuthFail fires on every auth rejection. reason is one of the
+// AuthFailReason* constants above. actor is empty unless the token
+// parsed far enough to extract a subject.
+func AuthFail(reason, actor, remoteIP, userAgent string) Event {
+	return NewEvent(TopicAuthFail, map[string]any{
+		"reason":     reason,
+		"actor":      actor,
+		"remote_ip":  remoteIP,
+		"user_agent": userAgent,
+	})
+}
+
+// AuthRateLimit fires when a per-subject limiter returns 429. actor
+// is the subject whose bucket emptied; path distinguishes /admin/*
+// limiters from analytics-query limiters when the dashboard panel
+// breaks them out.
+func AuthRateLimit(actor, path, remoteIP string) Event {
+	return NewEvent(TopicAuthRateLimit, map[string]any{
+		"actor":     actor,
+		"path":      path,
+		"remote_ip": remoteIP,
+	})
+}
+
+// AuthTokenMint fires on POST /admin/tokens after the token is
+// issued. issuedBy is the admin's subject; subject + role describe
+// the new token; ttlHours lets the dashboard surface "short-lived
+// token rate" vs "hour-long tokens" over time.
+func AuthTokenMint(issuedBy, subject, role string, ttlHours int) Event {
+	return NewEvent(TopicAuthTokenMint, map[string]any{
+		"actor":     issuedBy,
+		"subject":   subject,
+		"role":      role,
+		"ttl_hours": ttlHours,
+	})
+}
+
+// ArtifactUploaded / Downloaded fire at the artifact store's Put /
+// GetAndVerifyTo call sites on completion. bytes is the transfer
+// size; durationMs is wall-clock from start to completion; sha256OK
+// is nil on upload (no verify performed) and *true/*false on
+// download when GetAndVerifyTo did a hash check.
+//
+// uri is the canonical reference — e.g., "artifacts://<hash>" or
+// "s3://bucket/key" — NOT a presigned URL. See 005_unified_sink.up.sql
+// for the security reasoning.
+func ArtifactUploaded(jobID, uri string, bytes int64, durationMs int) Event {
+	return NewEvent(TopicArtifactUploaded, map[string]any{
+		"job_id":      jobID,
+		"uri":         uri,
+		"bytes":       bytes,
+		"duration_ms": durationMs,
+	})
+}
+
+func ArtifactDownloaded(jobID, uri string, bytes int64, durationMs int, sha256OK *bool) Event {
+	data := map[string]any{
+		"job_id":      jobID,
+		"uri":         uri,
+		"bytes":       bytes,
+		"duration_ms": durationMs,
+	}
+	if sha256OK != nil {
+		data["sha256_ok"] = *sha256OK
+	}
+	return NewEvent(TopicArtifactDownloaded, data)
+}
+
+// ServiceProbeTransition fires on the edge of the feature-17
+// readiness state machine. newState is 'ready' | 'unhealthy' |
+// 'gone'; consecutiveFails carries the streak leading up to the
+// event (0 on ready→unhealthy of a never-seen service; >0 on the
+// back-and-forth flips).
+func ServiceProbeTransition(jobID, newState string, consecutiveFails uint32) Event {
+	return NewEvent(TopicServiceProbeTransition, map[string]any{
+		"job_id":             jobID,
+		"new_state":          newState,
+		"consecutive_fails":  consecutiveFails,
+	})
+}
+
+// JobLog fires per chunk captured by the log store. Emitted by the
+// logstore's Append wrapper (feature 28) so analytics persists a
+// durable-PG copy of job stdout/stderr; the Badger-side copy is
+// still the primary read path until a follow-up slice switches it
+// over. seq is the in-job line number from logstore.LogEntry.
+//
+// data is TEXT-sized by the runtime (stdout/stderr is UTF-8); a
+// large chunk is clamped at the logstore layer, so by the time
+// this constructor fires the string is already bounded.
+func JobLog(jobID string, seq int64, timestamp time.Time, data string) Event {
+	return Event{
+		ID:        uuid.NewString(),
+		Type:      TopicJobLog,
+		Timestamp: timestamp,
+		Data: map[string]any{
+			"job_id": jobID,
+			"seq":    seq,
+			"data":   data,
+		},
+	}
 }

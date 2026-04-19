@@ -526,6 +526,7 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	}
 	// AUDIT C4 / C5: validate command, args, env, and resource limits.
 	if msg := validateSubmitRequest(&req); msg != "" {
+		s.recordSubmission(r, "job", req.ID, dryRun, false, msg) // feature 28
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -671,6 +672,7 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 				logAuditErr(false, "job.dry_run", err)
 			}
 		}
+		s.recordSubmission(r, "job", job.ID, true, true, "") // feature 28
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		writeJSON(w, "handleSubmitJob.dry_run", dryRunResponse(jobToResponse(job)))
@@ -711,6 +713,7 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	s.recordSubmission(r, "job", job.ID, false, true, "") // feature 28
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, "handleSubmitJob", jobToResponse(job))
