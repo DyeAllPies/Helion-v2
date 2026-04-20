@@ -167,6 +167,14 @@ const (
 	EventGroupMemberRemoved   = "group_member_removed"
 	EventResourceShared       = "resource_shared"
 	EventResourceShareRevoked = "resource_share_revoked"
+
+	// Feature 30 — envelope-encryption rotation sweep. Fired
+	// by the admin rotate endpoint both on success and on
+	// failure so a sweep that fell over mid-way still leaves
+	// a paper trail. Details carry active_version,
+	// loaded_versions, rewrapped_envelopes, scanned_records,
+	// and (on failure) error.
+	EventSecretStoreRotate = "secretstore_rotate"
 )
 
 // Event represents a single audit log entry.

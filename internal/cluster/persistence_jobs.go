@@ -18,8 +18,19 @@ import (
 // SaveJob writes a Job record under jobs/{id} in a single read-write
 // transaction. Job entries have no TTL — they are immutable once terminal and
 // are the source of truth for crash recovery.
+//
+// Feature 30: when a keyring is configured, secret env values
+// are moved OUT of Env and INTO EncryptedEnv before JSON
+// marshaling. The in-memory Job j is NOT mutated — the helper
+// returns a shallow copy with the translated envs. An encrypt
+// failure blocks the write; we never fall back to persisting
+// plaintext secrets when envelope encryption was requested.
 func (p *BadgerJSONPersister) SaveJob(_ context.Context, j *cpb.Job) error {
-	data, err := json.Marshal(j)
+	onDisk, err := jobOnDiskCopy(j, p.keyring)
+	if err != nil {
+		return fmt.Errorf("SaveJob encrypt: %w", err)
+	}
+	data, err := json.Marshal(onDisk)
 	if err != nil {
 		return fmt.Errorf("SaveJob marshal: %w", err)
 	}
@@ -60,6 +71,16 @@ func (p *BadgerJSONPersister) LoadAllJobs(_ context.Context) ([]*cpb.Job, error)
 			// existing SaveJob call path.
 			if j.OwnerPrincipal == "" {
 				j.OwnerPrincipal = principal.OwnerFromLegacy(j.SubmittedBy)
+			}
+			// Feature 30 — decrypt secret envelope back into
+			// the plaintext Env map so in-memory readers
+			// (dispatch, reveal-secret, log-scrub, response
+			// redaction) keep working unchanged. A decrypt
+			// failure is fatal: a Job we can't reconstruct
+			// faithfully is worse than one we refuse to
+			// load.
+			if err := jobInMemoryForm(&j, p.keyring); err != nil {
+				return fmt.Errorf("LoadAllJobs decrypt %q: %w", it.Item().Key(), err)
 			}
 			jobs = append(jobs, &j)
 		}

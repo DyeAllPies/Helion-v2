@@ -17,8 +17,17 @@ import (
 
 // SaveWorkflow writes a Workflow record under workflows/{id}.
 // Workflow entries have no TTL — they persist until explicitly deleted.
+//
+// Feature 30: when a keyring is configured, each child
+// WorkflowJob has its secret env values moved OUT of its Env
+// map and INTO its EncryptedEnv map before marshaling. The
+// in-memory Workflow is NOT mutated.
 func (p *BadgerJSONPersister) SaveWorkflow(_ context.Context, w *cpb.Workflow) error {
-	data, err := json.Marshal(w)
+	onDisk, err := workflowOnDiskCopy(w, p.keyring)
+	if err != nil {
+		return fmt.Errorf("SaveWorkflow encrypt: %w", err)
+	}
+	data, err := json.Marshal(onDisk)
 	if err != nil {
 		return fmt.Errorf("SaveWorkflow marshal: %w", err)
 	}
@@ -51,6 +60,13 @@ func (p *BadgerJSONPersister) LoadAllWorkflows(_ context.Context) ([]*cpb.Workfl
 			// the fail-closed LegacyOwnerID sentinel.
 			if w.OwnerPrincipal == "" {
 				w.OwnerPrincipal = principal.OwnerFromLegacy("")
+			}
+			// Feature 30 — decrypt child WorkflowJob secrets.
+			// A decrypt failure is fatal for the same reason
+			// as LoadAllJobs: we prefer surfacing the error
+			// over loading a silently-broken record.
+			if err := workflowInMemoryForm(&w, p.keyring); err != nil {
+				return fmt.Errorf("LoadAllWorkflows decrypt %q: %w", it.Item().Key(), err)
 			}
 			workflows = append(workflows, &w)
 		}

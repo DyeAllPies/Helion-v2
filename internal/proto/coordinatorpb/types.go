@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/authz"
+	"github.com/DyeAllPies/Helion-v2/internal/secretstore"
 )
 
 // ── JobStatus ─────────────────────────────────────────────────────────────────
@@ -306,6 +307,33 @@ type Job struct {
 	// Old BadgerDB entries without this field deserialise to nil, which
 	// yields no redactions (unchanged legacy behaviour).
 	SecretKeys []string `json:"secret_keys,omitempty"`
+
+	// ── Feature 30: encrypted-at-rest secret values ─────────────────────
+	//
+	// EncryptedEnv is the persistence-boundary store for every
+	// value listed in SecretKeys. On disk, the secret values are
+	// moved OUT of Env and INTO this field as AES-256-GCM
+	// envelopes wrapped under a coordinator-held root KEK. In
+	// memory, the persister reverses the transform so Env holds
+	// plaintext — every reader (dispatch, reveal, log-scrub,
+	// response-redaction) keeps working unchanged.
+	//
+	// Nil means "no envelope encryption configured" (legacy
+	// records OR deployments without HELION_SECRETSTORE_KEK);
+	// Env carries the secret value in plaintext on disk in that
+	// case, matching pre-feature-30 behaviour.
+	//
+	// A populated EncryptedEnv alongside an empty Env entry for
+	// the same key is the feature-30 encrypted shape; the load
+	// path decrypts and rehydrates Env before returning the
+	// record to memory.
+	//
+	// Field-set invariant: for each k in SecretKeys, EITHER
+	// EncryptedEnv[k] is set AND Env[k] is absent (encrypted
+	// record) OR Env[k] is set AND EncryptedEnv[k] is absent
+	// (legacy record). A record with both is a bug — the
+	// persister's LoadAllJobs asserts this and fails closed.
+	EncryptedEnv map[string]*secretstore.EncryptedEnvValue `json:"encrypted_env,omitempty"`
 }
 
 // ServiceSpec turns a job into a long-running inference service.
@@ -535,6 +563,14 @@ type WorkflowJob struct {
 	// reveal-secret authorisation carry through the same as a
 	// standalone submit.
 	SecretKeys []string `json:"secret_keys,omitempty"`
+
+	// Feature 30 — encrypted-at-rest secret values. See
+	// Job.EncryptedEnv for the full contract. Same persistence-
+	// boundary translation: plaintext in memory, envelope on disk.
+	// Propagated onto the materialised Job at Start() time after
+	// decryption so the child job picks up plaintext Env just
+	// like a standalone submit.
+	EncryptedEnv map[string]*secretstore.EncryptedEnvValue `json:"encrypted_env,omitempty"`
 }
 
 // ── Workflow ─────────────────────────────────────────────────────────────────

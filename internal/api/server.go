@@ -73,6 +73,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
 	"github.com/DyeAllPies/Helion-v2/internal/registry"
+	"github.com/DyeAllPies/Helion-v2/internal/secretstore"
 )
 
 // ── Server ────────────────────────────────────────────────────────────────────
@@ -171,6 +172,30 @@ type Server struct {
 	// group membership entirely — shares with `group:<name>`
 	// grantees are inert, direct `user:<id>` shares still work.
 	groups groups.Store
+
+	// Feature 30 — secretstore admin surface for the
+	// rotation endpoint. Nil on deployments without envelope
+	// encryption; handlers return 503 when called on a nil
+	// admin so the endpoint is honestly unavailable rather
+	// than silently succeeding with no work done.
+	secretAdmin SecretStoreAdmin
+}
+
+// SecretStoreAdmin is the narrow interface the feature-30
+// rotation endpoint needs from the persister. Implemented by
+// *cluster.BadgerJSONPersister. Split out as an interface so
+// the handler tests can fake rotation without spinning up
+// Badger.
+type SecretStoreAdmin interface {
+	// RewrapAll iterates every persisted Job + WorkflowJob,
+	// rewraps any EncryptedEnv entry whose KEKVersion isn't
+	// the ring's active version, and re-persists. Idempotent.
+	RewrapAll(ctx context.Context) (rewrapped, scanned int, err error)
+	// KeyRing returns the currently-configured keyring or
+	// nil. Used by the handler to expose diagnostic info in
+	// the response body (active version, registered
+	// versions).
+	KeyRing() *secretstore.KeyRing
 }
 
 // DisableAuth turns off authentication for this Server. Intended ONLY for
@@ -179,6 +204,23 @@ type Server struct {
 // compile-time safety that AUDIT H2 restored.
 func (s *Server) DisableAuth() {
 	s.disableAuth = true
+}
+
+// SetSecretStoreAdmin wires the feature-30 rotation endpoint.
+// When non-nil, registers `POST /admin/secretstore/rotate` so
+// admins can trigger a rewrap sweep after advancing the active
+// KEK. Nil (not configured) means the endpoint is not
+// registered — callers get the mux's own 404, matching the
+// pattern used by other optional admin surfaces.
+func (s *Server) SetSecretStoreAdmin(a SecretStoreAdmin) {
+	s.secretAdmin = a
+	if a == nil {
+		return
+	}
+	s.mux.HandleFunc("POST /admin/secretstore/rotate",
+		s.authMiddleware(s.adminMiddleware(s.handleSecretStoreRotate)))
+	s.mux.HandleFunc("GET /admin/secretstore/status",
+		s.authMiddleware(s.adminMiddleware(s.handleSecretStoreStatus)))
 }
 
 // SetLogStore enables job log retrieval via GET /jobs/{id}/logs.

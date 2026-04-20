@@ -1,7 +1,7 @@
 # Feature: Encrypted storage for secret env values
 
 **Priority:** P2
-**Status:** Pending
+**Status:** Implemented (2026-04-20)
 **Affected files:**
 `internal/cluster/persistence_jobs.go` (envelope encryption on write),
 `internal/proto/coordinatorpb/types.go` (new `EncryptedEnv` blob),
@@ -137,5 +137,114 @@ until rewrap completes.
 
 ## Implementation status
 
-_Not started. Promoted from feature 26's "Not attempting" section
-on 2026-04-19 so the gap has a planning target._
+_Implemented 2026-04-20._
+
+### What shipped
+
+- `internal/secretstore/` package — pure AES-256-GCM envelope
+  ops. `KeyRing` holds one active KEK + zero-or-more older
+  versions for rotation. `Encrypt(plaintext)` produces
+  `(ciphertext, nonce, wrapped_DEK, wrapped_DEK_nonce,
+  kek_version)`; `Decrypt(envelope)` reverses it. `Rewrap`
+  re-encrypts under the current active KEK. `ParseKEK`
+  accepts hex OR base64 (with/without padding) from env
+  vars. Defensive guards: zero-length secrets rejected,
+  all-zero KEKs rejected, 0 KEKVersion rejected, active
+  version cannot be removed from the ring.
+- `cpb.Job.EncryptedEnv` and `cpb.WorkflowJob.EncryptedEnv`
+  added as on-disk fields — never populated in memory.
+- `internal/cluster/persistence_encrypt.go` — translation
+  between the in-memory Job shape (plaintext `Env`) and the
+  on-disk form (secret values moved into `EncryptedEnv`,
+  stripped from `Env`). `jobOnDiskCopy` / `jobInMemoryForm`
+  plus workflow counterparts.
+- `SaveJob`, `LoadAllJobs`, `SaveWorkflow`,
+  `LoadAllWorkflows` apply the translation when the
+  persister has a configured keyring. No-keyring deployments
+  fall back to plaintext + log a WARN at boot.
+- `internal/cluster/persistence_rotate.go` — `RewrapAll`
+  iterates every persisted Job + WorkflowJob and rewraps
+  non-active envelopes. Idempotent. Separate read / write
+  phases so a concurrent SaveJob sees linearisable
+  semantics.
+- Coordinator wiring in `cmd/helion-coordinator/main.go` —
+  parses `HELION_SECRETSTORE_KEK` (primary) and up to 16
+  `HELION_SECRETSTORE_KEK_V<N>` additional versions.
+  Wipe-after-parse the intermediate byte slices so the
+  KEK only lives in the keyring after boot.
+- Admin endpoints:
+    - `POST /admin/secretstore/rotate` — fires `RewrapAll`
+      and emits `EventSecretStoreRotate` audit (on both
+      success AND failure paths). Admin-only.
+    - `GET /admin/secretstore/status` — reports the ring's
+      active version + loaded versions. Admin-only.
+  Routes only register when the persister carries a
+  keyring; no-keyring deployments return a plain 404
+  (nothing to rotate).
+
+### Deviations from plan
+
+- **In-memory plaintext stays.** The in-memory Job holds
+  plaintext `Env` because dispatch, reveal-secret, log-scrub,
+  and response-redaction all need plaintext to function. A
+  memory-dump attack leaks everything. The persistence-
+  boundary approach solves the primary threat (disk
+  snapshots, backups, stolen node images) without adding
+  complexity to every reader. A process-level
+  core-dump-proof path (mlock, memfd_secret) is Linux-
+  specific and brittle; deferred.
+- **No KMS integration.** The spec mentioned AWS KMS / GCP
+  KMS / Vault as a production option. The env-var KEK path
+  is MVP; a KMS-backed KeyRing implementation would satisfy
+  the same interface (`Encrypt` / `Decrypt` / `Rewrap`) and
+  can ship as a follow-up without touching the persistence
+  or handler layers. Deferred.
+- **Per-tenant KEKs** deferred per the feature spec.
+- **Background rotation cron.** Spec mentioned a background
+  sweep; we shipped an admin-triggered endpoint instead.
+  Operators know when they're rotating and prefer explicit
+  control over a scheduled sweep that might fire during a
+  backup. A cron wrapper can be added at the deployment
+  layer (`cron → curl POST /admin/secretstore/rotate`).
+
+### Tests added
+
+- `internal/secretstore/secretstore_test.go`:
+  - Round-trip (multiple sizes including empty value).
+  - Distinct nonces + DEKs across encrypts of the same
+    plaintext (guards GCM's load-bearing nonce-reuse
+    safety property).
+  - Tamper detection on every field (ciphertext, nonce,
+    wrapped-DEK, wrapped-DEK nonce, truncation).
+  - Wrong-KEK decrypt fails with `ErrEnvelopeCorrupt`.
+  - Unknown KEKVersion fails with `ErrKEKVersionUnknown`.
+  - Rotation: add+setActive stamps new version; Rewrap
+    advances; RemoveKEK rejects active version + drops
+    old version atomically.
+  - Construction guards: zero version, wrong-length KEK,
+    all-zero KEK, duplicate version, unknown SetActive.
+  - `ParseKEK` hex + base64 (std/raw/url/url-raw),
+    whitespace trim, short / zero rejection.
+- `internal/cluster/persistence_encrypt_test.go`:
+  - `SaveJob` — on-disk Badger record does NOT contain
+    plaintext secret bytes (out-of-band raw-record
+    assertion).
+  - In-memory Job is unchanged after SaveJob (plaintext
+    Env preserved for dispatch).
+  - `LoadAllJobs` — round-trip restores plaintext env for
+    every declared secret.
+  - Legacy plaintext records still load.
+  - Wrong-keyring-at-load fails closed.
+  - No-keyring deployment → plaintext on disk (legacy
+    behaviour).
+  - Workflow counterparts for each child WorkflowJob.
+  - End-to-end rotation: save → add v2 → re-save stamps v2
+    → remove v1 → subsequent loads still work.
+- `internal/api/handlers_secretstore_test.go`:
+  - Rotate happy path returns counts + active version.
+  - Rotate emits `EventSecretStoreRotate` with the
+    expected shape.
+  - Non-admin → 403 (and the sweep is NOT triggered).
+  - Status endpoint reports ring state.
+  - Sweep error → 500.
+  - No SetSecretStoreAdmin → 404 (route not registered).

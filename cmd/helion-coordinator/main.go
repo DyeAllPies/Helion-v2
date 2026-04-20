@@ -51,6 +51,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 	groupspkg "github.com/DyeAllPies/Helion-v2/internal/groups"
 	registrypkg "github.com/DyeAllPies/Helion-v2/internal/registry"
+	"github.com/DyeAllPies/Helion-v2/internal/secretstore"
 	"github.com/DyeAllPies/Helion-v2/internal/grpcserver"
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	"github.com/DyeAllPies/Helion-v2/internal/metrics"
@@ -103,6 +104,82 @@ func main() {
 			log.Error("close BadgerDB", slog.Any("err", err))
 		}
 	}()
+
+	// ── Feature 30 — envelope encryption for secret env values ────────────
+	//
+	// HELION_SECRETSTORE_KEK is the root KEK, hex-encoded 32
+	// bytes (64 chars) or base64. When set, the persister
+	// moves secret env values into on-disk envelopes at
+	// SaveJob/SaveWorkflow and reverses the transform at
+	// load time.
+	//
+	// Unset → legacy behaviour (plaintext on disk). We log a
+	// security-relevant warning so operators see the gap in
+	// deployment logs. Production deployments should always
+	// configure this.
+	//
+	// HELION_SECRETSTORE_KEK_VERSION defaults to 1. Operators
+	// rotating KEKs bump this and keep the old version loaded
+	// via HELION_SECRETSTORE_KEK_V<N>=<hex> env vars until
+	// the rewrap sweep completes. See SECURITY.md for the
+	// operator playbook.
+	if kekStr := os.Getenv("HELION_SECRETSTORE_KEK"); kekStr != "" {
+		kek, err := secretstore.ParseKEK(kekStr)
+		if err != nil {
+			log.Error("HELION_SECRETSTORE_KEK parse failed — refusing to start",
+				slog.Any("err", err))
+			os.Exit(1)
+		}
+		version := uint32(envInt("HELION_SECRETSTORE_KEK_VERSION", 1))
+		if version == 0 {
+			log.Error("HELION_SECRETSTORE_KEK_VERSION must be non-zero")
+			os.Exit(1)
+		}
+		ring, err := secretstore.NewKeyRing(version, kek)
+		if err != nil {
+			log.Error("create secretstore keyring", slog.Any("err", err))
+			os.Exit(1)
+		}
+		// Wipe the parsed KEK bytes from the intermediate
+		// variable now that the keyring owns its own copy.
+		for i := range kek {
+			kek[i] = 0
+		}
+		// Load any additional KEK versions. Supports up to 16
+		// parallel versions during long rotations; anyone
+		// needing more has a bigger problem than a constant.
+		for v := uint32(1); v <= 16; v++ {
+			if v == version {
+				continue
+			}
+			raw := os.Getenv("HELION_SECRETSTORE_KEK_V" + strconv.FormatUint(uint64(v), 10))
+			if raw == "" {
+				continue
+			}
+			extra, err := secretstore.ParseKEK(raw)
+			if err != nil {
+				log.Error("additional KEK parse failed — refusing to start",
+					slog.Uint64("version", uint64(v)),
+					slog.Any("err", err))
+				os.Exit(1)
+			}
+			if err := ring.AddKEK(v, extra); err != nil {
+				log.Error("add KEK to ring",
+					slog.Uint64("version", uint64(v)),
+					slog.Any("err", err))
+				os.Exit(1)
+			}
+			for i := range extra {
+				extra[i] = 0
+			}
+		}
+		persister.SetKeyRing(ring)
+		log.Info("secretstore keyring configured",
+			slog.Uint64("active_version", uint64(ring.ActiveVersion())),
+			slog.Int("loaded_versions", len(ring.Versions())))
+	} else {
+		log.Warn("HELION_SECRETSTORE_KEK not set — secret env values will be persisted in plaintext; set the env var to enable envelope encryption at rest")
+	}
 
 	// ── Business logic ────────────────────────────────────────────────────
 	// ── Job log storage ───────────────────────────────────────────────────
@@ -381,6 +458,16 @@ func main() {
 	// request.
 	groupsStore := groupspkg.NewBadgerStore(persister.DB())
 	apiSrv.SetGroupsStore(groupsStore)
+
+	// Feature 30 — admin rotation endpoint. Only wired when
+	// the persister carries a keyring (i.e.
+	// HELION_SECRETSTORE_KEK was configured at boot); a
+	// deployment without encryption never registers the
+	// route, so callers get a clean 404 instead of a
+	// confusing 503.
+	if persister.KeyRing() != nil {
+		apiSrv.SetSecretStoreAdmin(persister)
+	}
 
 	// Feature 25 — per-node env-denylist overrides. Optional. If set,
 	// must parse cleanly: a malformed rule fails the coordinator to

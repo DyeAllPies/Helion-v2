@@ -55,7 +55,7 @@ operational procedures.
 | Dashboard user / CI read-only token extracts `HF_TOKEN` / `AWS_SECRET_ACCESS_KEY` by calling `GET /jobs/{id}` | **Feature 26.** Submitter flags keys via `secret_keys`; server replaces matching values with `[REDACTED]` on every response path (single/list/dry-run/workflow). Plaintext exists on-disk in the Job record (runtime needs it) but is unreachable via any non-admin endpoint. See §9.3. |
 | Admin operator needs to recover a declared secret value (forgot, debugging, credential rotation) | **Feature 26 reveal-secret endpoint.** `POST /admin/jobs/{id}/reveal-secret` — admin-only, rate-limited (1/5s, burst 3), mandatory audit `reason`, audit-before-response fail-closed, refuses non-declared keys. See §9.4. |
 | Attacker probes "does job X have a secret named Y?" via reveal-secret 404s | Every reject is itself audited as `secret_reveal_reject` with the target job_id + key + reason-for-reject. Enumeration shows up loud in the audit stream. |
-| Attacker with filesystem access reads secret plaintext from BadgerDB | **Acknowledged gap.** Feature 26 redacts in-transit and at-the-API; the underlying Badger record still holds plaintext because the runtime needs it to dispatch. Tracked as [feature 30 — encrypted env storage](planned-features/30-encrypted-env-storage.md). |
+| Attacker with filesystem access reads secret plaintext from BadgerDB | **Feature 30 shipped.** Per-job DEKs wrap each secret value in AES-256-GCM; DEKs are themselves wrapped in AES-256-GCM under a coordinator-held root KEK. Every declared secret is encrypted at the persistence boundary; the Badger record never carries plaintext. Rotation is supported via `/admin/secretstore/rotate`. See §9.6. |
 | Job prints its own `$HELION_TOKEN` to stdout → captured by logstore → visible via `GET /jobs/{id}/logs` | **Feature 29 shipped.** `logstore.ScrubbingStore` decorator substitutes every declared secret VALUE with `[REDACTED]` before chunks land in BadgerDB; response-path redactor on `GET /jobs/{id}/logs` repeats the substitution as belt-and-braces; the feature-28 analytics mirror (PG sink) scrubs the same bytes before publish so PG cannot become a side-channel. Per-job RBAC now gates log reads too. See §9.5. |
 | Admin JWT leaks via clipboard / screenshare / browser extension → remote attacker submits jobs from the internet | **Feature 27 optional.** `HELION_REST_CLIENT_CERT_REQUIRED=on` requires the caller to also present a client certificate verified against the coordinator's CA. Cert-less requests are refused at 401 before auth middleware even runs. Staged rollout via `warn` tier. See §9.6. |
 | Attacker forges `X-SSL-Client-Verify: SUCCESS` to bypass mTLS | Coordinator honours those headers ONLY from loopback (127.0.0.1 / ::1). Any non-loopback peer carrying those headers is treated as if no cert was presented. |
@@ -998,10 +998,13 @@ Safety properties:
   that the reveal was logged; the dashboard renders it alongside
   the value. Belt-and-braces against "I didn't know it was logged"
   post-hoc claims.
-- **Storage still holds plaintext.** A compromised filesystem /
-  backup remains a key-compromise event regardless of this
-  endpoint. [Feature 30](planned-features/30-encrypted-env-storage.md)
-  tracks at-rest encryption.
+- **Storage no longer holds plaintext** (feature 30).
+  Secret values are envelope-encrypted on the way to Badger
+  and decrypted on load — a disk snapshot / backup yields
+  ciphertext that is useless without the coordinator's
+  root KEK. See §9.6 for the crypto + operator playbook.
+  A compromised coordinator process (memory dump while the
+  KEK is loaded) remains a key-compromise event.
 - **stdout leaks are mitigated by feature 29.** If a job prints
   its own `$HELION_TOKEN` to stdout, the coordinator's log
   store substitutes the plaintext value with `[REDACTED]`
@@ -1072,7 +1075,144 @@ Known limitations:
 See [`docs/planned-features/implemented/29-stdout-secret-scrubbing.md`](planned-features/implemented/29-stdout-secret-scrubbing.md)
 for the slice reconciliation and test inventory.
 
-### 9.5 Dry-run preflight (feature 24)
+### 9.6 Encrypted env storage (feature 30)
+
+Feature 26 redacts secret env values on every response path.
+Feature 29 scrubs them from log output. Feature 30 closes the
+last gap: before feature 30, the `cpb.Job.Env` map still
+reached BadgerDB as JSON plaintext, so an attacker with
+filesystem / backup access to the coordinator grepped the
+Badger store for every HF token, AWS key, or API secret the
+coordinator had ever seen.
+
+Feature 30 applies **envelope encryption at the persistence
+boundary**:
+
+  plaintext  ── AES-256-GCM(DEK, nonce_v) ─▶ ciphertext
+  DEK        ── AES-256-GCM(KEK, nonce_d) ─▶ wrapped_DEK
+
+The DEK ("data encryption key") is a fresh 32-byte value per
+encrypt. The KEK ("key encryption key") is a single 32-byte
+secret read from `HELION_SECRETSTORE_KEK` at coordinator boot.
+Both layers use AES-256-GCM with 12-byte random nonces.
+
+### Safety properties
+
+- **Authenticated encryption.** AES-GCM's 16-byte tag detects
+  any bit flip in ciphertext, nonce, wrapped-DEK, or wrapped-
+  DEK nonce. A tampered envelope fails Decrypt with no
+  plaintext byte output.
+- **Fresh DEK per encrypt.** Two encrypts of the same
+  plaintext produce distinct ciphertext. Reusing a DEK across
+  values is never allowed; reusing a nonce under the same key
+  is the one crypto cardinal-sin that GCM cannot recover from.
+- **Nonces from crypto/rand.** 12 random bytes per encrypt.
+  At realistic per-value volumes (<<2^32 encrypts per key)
+  the collision probability is negligible, and the DEK is
+  single-use anyway.
+- **Persistence-boundary only.** Encryption happens in
+  `SaveJob` / `SaveWorkflow`; decryption in `LoadAllJobs` /
+  `LoadAllWorkflows`. Every in-memory reader (dispatch,
+  reveal-secret, log-scrub, response-redaction) keeps
+  working unchanged.
+- **Fail-closed on wrong KEK / tampered bytes.** A Job whose
+  envelope cannot be decrypted blocks the load path: the
+  coordinator refuses to start rather than silently dropping
+  records. An operator who suspects KEK compromise MUST
+  rotate and rewrap, not rewrite code to silently skip.
+- **Legacy records still load.** Pre-feature-30 records
+  with plaintext Env and no EncryptedEnv continue to load
+  unchanged. The next SaveJob (any state transition) rewrites
+  them under envelope encryption.
+- **No-keyring fallback.** Deployments that don't configure
+  `HELION_SECRETSTORE_KEK` still run — secret values persist
+  in plaintext exactly as pre-feature-30. The coordinator
+  logs a `WARN` at boot so operators see the gap in their
+  deploy logs. Production deployments should always configure
+  the KEK.
+- **KEK wipe on drop.** `KeyRing.RemoveKEK` zeros the key
+  bytes before removing them from the map. Best-effort — Go
+  has no guaranteed-non-elided erase — but shortens the
+  window a core dump can capture an unloaded version.
+
+### KEK configuration
+
+The KEK is 32 bytes of key material supplied via env var.
+Accepted encodings:
+
+  - 64-character hex (lowercase or uppercase)
+  - Standard or URL-safe base64 (with or without padding)
+
+Both decode to exactly 32 bytes. Shorter / longer inputs are
+rejected at boot.
+
+```bash
+# Hex.
+export HELION_SECRETSTORE_KEK=$(openssl rand -hex 32)
+
+# Or base64.
+export HELION_SECRETSTORE_KEK=$(openssl rand -base64 32)
+
+# Optional — explicit version. Defaults to 1.
+export HELION_SECRETSTORE_KEK_VERSION=2
+
+# Older versions during a rotation window:
+export HELION_SECRETSTORE_KEK_V1=<prior hex KEK>
+```
+
+Each Version is 1–16 (supports long rotation windows with up
+to 16 concurrent KEKs; realistically a rotation uses 2–3 at a
+time). All-zero keys and keys of wrong length are rejected.
+
+### Rotation
+
+To rotate the KEK:
+
+  1. Generate a new KEK, assign version N+1.
+  2. Keep the old KEK loaded as
+     `HELION_SECRETSTORE_KEK_V<old>` and set the new one as
+     `HELION_SECRETSTORE_KEK` with
+     `HELION_SECRETSTORE_KEK_VERSION=<N+1>`.
+  3. Restart the coordinator. New encrypts use version N+1;
+     existing records still decrypt under their recorded
+     version.
+  4. `curl -X POST /admin/secretstore/rotate` (admin-auth).
+     Sweeps every persisted Job + WorkflowJob, rewrapping
+     every non-active envelope under version N+1. Idempotent
+     — safe to retry if it fails partway.
+  5. Once the sweep reports zero scanned records, the old
+     KEK is no longer referenced. Drop
+     `HELION_SECRETSTORE_KEK_V<old>` from the deploy env and
+     restart.
+
+The `secretstore_rotate` audit event records every sweep
+(success AND failure) with the active + loaded versions and
+the rewrap counts.
+
+### Known limitations
+
+- **In-memory plaintext.** Once a Job is loaded, its
+  `Env[secretKey]` holds plaintext (dispatch needs it). A
+  process memory dump while the coordinator is live leaks
+  every live secret AND the KEK itself. Feature 30's threat
+  model explicitly puts "coordinator core dump" in the
+  key-compromise bucket.
+- **Single coordinator-wide KEK.** Per-tenant KEKs are
+  deferred — a multi-tenant deployment wanting per-tenant
+  blast-radius limiting needs the identity/tenant model
+  which is out of scope for this slice.
+- **No passphrase derivation.** Operators supply a 32-byte
+  key directly. KDF-from-passphrase adds complexity without
+  improving the surface — the env var IS the secret.
+- **No auto-expiry / forward secrecy.** KEKs live as long as
+  the operator leaves them configured. Forward secrecy
+  (ephemeral keys that can be discarded) would add a
+  different threat-model surface area; deferred.
+
+See [`docs/planned-features/implemented/30-encrypted-env-storage.md`](planned-features/implemented/30-encrypted-env-storage.md)
+for the slice reconciliation and test inventory.
+
+### 9.7 Dry-run preflight (feature 24)
 
 `?dry_run=true` is accepted on every submit/register endpoint
 (`POST /jobs`, `POST /workflows`, `POST /api/datasets`,
@@ -1093,7 +1233,7 @@ filter probes from real submissions. Key security properties:
   fallback to the real path would turn a typo into an unintended
   submission.
 
-### 9.6 Optional browser mTLS for dashboard operators (feature 27)
+### 9.8 Optional browser mTLS for dashboard operators (feature 27)
 
 After feature 23 shipped TLS 1.3 with hybrid-PQC on the REST
 listener, the dashboard → coordinator path is protected against
@@ -1168,7 +1308,7 @@ What mTLS does NOT solve:
   per-operator distinguisher. Richer identity → token binding is
   [feature 33](planned-features/33-per-operator-accountability.md).
 
-### 9.7 Job log persistence (feature 28 — PG-authoritative)
+### 9.9 Job log persistence (feature 28 — PG-authoritative)
 
 Per-job stdout/stderr lives in two stores with well-defined
 roles:
