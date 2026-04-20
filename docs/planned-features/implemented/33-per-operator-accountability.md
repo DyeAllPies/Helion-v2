@@ -1,7 +1,7 @@
 # Feature: Per-operator accountability (JWT ↔ cert CN binding)
 
 **Priority:** P2
-**Status:** Pending
+**Status:** Implemented (2026-04-20)
 **Affected files:**
 `internal/auth/token.go` (new claim: `required_cn`),
 `internal/api/middleware.go` (authMiddleware cross-checks the
@@ -170,5 +170,99 @@ Phase in per environment:
 
 ## Implementation status
 
-_Not started. Promoted from feature 22's + feature 27's deferred
-items on 2026-04-19._
+_Implemented 2026-04-20._
+
+### What shipped
+
+- `auth.Claims` gains an optional `RequiredCN string \`json:"required_cn,omitempty"\`` field.
+  Absent / empty ⇒ legacy unbound behaviour.
+- `TokenManager.GenerateToken(subject, role, ttl)` kept
+  unchanged (omits the claim); new
+  `GenerateTokenWithCN(subject, role, requiredCN, ttl)`
+  method stamps the binding when requested. Over 30
+  existing call sites — tests + internal utilities — are
+  untouched, which is important for back-compat and
+  review-simplicity.
+- `authMiddleware` runs a cross-check after signature
+  validation and BEFORE stamping claims or the Principal
+  into context. Non-empty `required_cn` requires a
+  verified operator cert CN equal to the claim; any
+  mismatch (including cert-less request) produces 401
+  with the same body shape as a signature failure ("no
+  information leak about which layer rejected").
+- `POST /admin/tokens` accepts `bind_to_cert_cn` on the
+  request body; trims whitespace at the handler; echoes
+  back `bound_to_cert_cn` on the response. The audit
+  `token.issued` event picks up a `bound_to_cert_cn`
+  detail when set, so reviewers can query "which tokens
+  minted by Alice bind to which cert CNs".
+- `EventTokenCertCNMismatch` audit event fires on every
+  refused request. Detail: subject, required_cn,
+  observed_cn, remote, path, jti.
+- Dashboard `IssueTokenRequest` + `IssueTokenResponse`
+  TypeScript interfaces + `ApiService.issueToken()`
+  method. No token-issuance UI existed pre-feature-33;
+  this wiring gives a future form the wire shape.
+
+### Deviations from plan
+
+- **Dashboard token-issuance form (spec step 4).** The
+  dashboard has no existing token-issuance component; the
+  CLI (`helion-issue-token`) remains the primary
+  workflow. We shipped the TS models + API method so a
+  follow-up feature can build the form without re-doing
+  the plumbing.
+- **Phase-3 gate** (spec step 5) **deferred.** Refusing
+  unbound tokens from the dashboard login when the
+  coordinator is in `HELION_REST_CLIENT_CERT_REQUIRED=on`
+  requires the dashboard to discover the coordinator's
+  tier via a new config endpoint. Out of scope for this
+  slice; natural follow-up once Phase 2 (rotate known
+  admin tokens with bindings) has settled.
+- **Response status code chosen: 401, not 403.** The spec
+  writes 401 and that's what shipped. Rationale: a
+  mismatched binding is authentication-shaped (the
+  caller's identity doesn't match the token's binding) —
+  treating it as 401 also makes it indistinguishable from
+  a failed signature check at the response layer, denying
+  an attacker the ability to probe "which tokens are
+  bound" by comparing status codes.
+
+### Tests added
+
+- `internal/auth/token_manager_test.go`:
+  - `TestGenerateToken_OmitsRequiredCNByDefault` —
+    back-compat guard.
+  - `TestGenerateTokenWithCN_RoundTrip` — claim survives
+    validate.
+  - `TestGenerateTokenWithCN_EmptyCN` — empty CN produces
+    an unbound token.
+  - `TestGenerateTokenWithCN_JWTSignatureProtectsBinding`
+    — tamper with the payload → signature invalid →
+    ValidateToken fails.
+
+- `internal/api/token_cn_binding_test.go`:
+  - `TestAuthMiddleware_RequiredCN_MatchesCertCN_Succeeds`
+    — happy path through a synthesised TLS peer cert.
+  - `TestAuthMiddleware_RequiredCN_MismatchesCertCN_Returns401`
+    — Bob's cert + Alice's bound token → 401 + audit
+    event carrying both CNs.
+  - `TestAuthMiddleware_RequiredCN_NoCert_Returns401` —
+    cert-less bound-token request → 401 + audit event with
+    `observed_cn: ""`.
+  - `TestAuthMiddleware_RequiredCNEmpty_DoesNotEnforceBinding`
+    — unbound tokens continue to pass regardless of cert.
+  - `TestIssueToken_WithBinding_StampsClaim` — handler
+    round-trip + claim decoded via TokenManager.
+  - `TestIssueToken_WithoutBinding_OmitsClaim` — response
+    omits `bound_to_cert_cn`; claim absent.
+  - `TestIssueToken_TrimsWhitespaceFromBinding` —
+    accidental trailing whitespace wouldn't produce a
+    silently-un-matchable binding.
+
+- `dashboard/src/app/core/services/api.service.spec.ts`:
+  - `issueToken() sends POST /admin/tokens with body including binding`.
+  - `issueToken() without bind_to_cert_cn sends legacy shape`.
+
+All 360 dashboard tests pass; Go internal suite green
+aside from pre-existing Windows-flaky `artifacts` tests.

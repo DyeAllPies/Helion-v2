@@ -195,6 +195,29 @@ const (
 	// loaded_versions, rewrapped_envelopes, scanned_records,
 	// and (on failure) error.
 	EventSecretStoreRotate = "secretstore_rotate"
+
+	// Feature 33 — JWT ↔ cert-CN binding enforcement.
+	//
+	//   EventTokenCertCNMismatch fires when a token carrying
+	//   a non-empty `required_cn` claim reaches authMiddleware
+	//   AND the request did not arrive with a verified client
+	//   cert whose CN matches. The middleware refuses the
+	//   request with 401 before any downstream handler runs.
+	//
+	//   Detail shape:
+	//     subject         — JWT subject claim
+	//     required_cn     — the CN the token was bound to
+	//     observed_cn     — the cert CN actually seen (or ""
+	//                       when cert-less)
+	//     remote          — request RemoteAddr
+	//     path            — request URL.Path
+	//     jti             — the token's JWT ID for revocation
+	//                       tracing
+	//
+	//   A sudden spike in this event is a strong signal of a
+	//   leaked admin token being used from an unauthorised
+	//   operator's browser.
+	EventTokenCertCNMismatch = "token_cert_cn_mismatch"
 )
 
 // Event represents a single audit log entry.

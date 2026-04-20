@@ -1307,10 +1307,12 @@ What mTLS does NOT solve:
 - **Cert issuance UX.** CLI is the shipping interface; a dashboard-
   based admin issuance action is tracked as
   [feature 32](planned-features/32-web-cert-issuance-ui.md).
-- **Per-operator accountability.** Every operator cert today
-  carries the same flat JWT role; `operator_cn` is the only
-  per-operator distinguisher. Richer identity → token binding is
-  [feature 33](planned-features/33-per-operator-accountability.md).
+- **Per-operator accountability** — **feature 33 shipped**.
+  Tokens minted with `POST /admin/tokens
+  {"bind_to_cert_cn": "alice@ops"}` carry a `required_cn`
+  JWT claim; `authMiddleware` refuses every request whose
+  verified operator cert CN doesn't match. A stolen bound
+  token is useless in anyone else's browser. See §9.11.
 
 ### 9.9 Job log persistence (feature 28 — PG-authoritative)
 
@@ -1480,6 +1482,119 @@ curl -H "Authorization: Bearer $ADMIN_JWT" \
   revocation store (out of scope until Helion gains HA).
 
 See [`docs/planned-features/implemented/31-cert-revocation-crl-ocsp.md`](planned-features/implemented/31-cert-revocation-crl-ocsp.md)
+for the slice reconciliation and test inventory.
+
+### 9.11 Per-operator token ↔ cert CN binding (feature 33)
+
+Feature 27 ships two layers — mTLS client certs AND JWT
+bearer tokens — but before feature 33 they were
+independent: an admin's leaked JWT used from ANY operator's
+browser (even an operator with a valid but different cert)
+succeeded as long as the JWT signature verified. The cert
+CN landed on audit events but was never enforced against
+the token.
+
+Feature 33 adds an optional binding between the two.
+
+### `required_cn` JWT claim
+
+The JWT payload gains an optional `required_cn` field:
+
+```json
+{
+  "sub": "alice",
+  "role": "admin",
+  "jti": "…",
+  "exp": 1714608000,
+  "required_cn": "alice@ops"
+}
+```
+
+- Empty / absent → unbound, legacy behaviour (token
+  validates anywhere the signature verifies).
+- Non-empty → `authMiddleware` enforces that the request
+  arrived with a verified operator client cert whose
+  `Subject.CommonName` equals the claim exactly.
+
+Any mismatch (different CN OR cert-less request) produces
+a 401 with body `"authentication failed"` — deliberately
+the SAME response shape a signature-validation failure
+produces, so an attacker probing with a stolen token
+cannot distinguish "wrong CN" from "wrong signature" via
+response timing or body.
+
+### Issuing a bound token
+
+```bash
+curl -X POST https://helion.example.com/admin/tokens \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"alice","role":"admin","ttl_hours":8,"bind_to_cert_cn":"alice@ops"}'
+```
+
+The response includes the stored binding:
+
+```json
+{
+  "token": "eyJ…",
+  "subject": "alice",
+  "role": "admin",
+  "ttl_hours": 8,
+  "bound_to_cert_cn": "alice@ops"
+}
+```
+
+Admins rotating known-unbound tokens into the bound shape
+re-issue with `bind_to_cert_cn` set; the old unbound JWT
+remains valid until its JTI is revoked or its TTL expires.
+
+### Safety properties
+
+- **Signature-protected binding.** The `required_cn`
+  claim is part of the signed JWT payload; an attacker
+  cannot flip it to match their own CN without
+  invalidating the signature. The
+  `TestGenerateTokenWithCN_JWTSignatureProtectsBinding`
+  test guards this.
+- **Audit every mismatch.** Every refused request emits
+  `EventTokenCertCNMismatch` with `subject`, `required_cn`,
+  `observed_cn` (empty for cert-less), `remote`, `path`,
+  and `jti`. A spike in this event indicates a leaked
+  token being probed from unauthorised browsers —
+  dashboards should alert on it.
+- **Fail-closed for cert-less requests.** A bound token
+  used against an endpoint reached with NO client cert
+  fails the binding check; `observed_cn` is recorded as
+  `""` so reviewers can distinguish "right cert, wrong
+  CN" from "no cert at all".
+- **Back-compat preserved.** The legacy
+  `GenerateToken(subject, role, ttl)` method still works
+  and produces unbound tokens. Existing callers (30+ test
+  call sites + internal auth utilities) are unchanged.
+- **Admin responsibility.** Setting `bind_to_cert_cn` is
+  opt-in on every mint. An admin who forgets the flag
+  produces an unbound token — the dashboard's future
+  Phase-3 gate (refuse unbound tokens when the coordinator
+  is in `HELION_REST_CLIENT_CERT_REQUIRED=on`) is the
+  natural hardening step once Phase 2 has rotated known
+  admin tokens.
+
+### Known limitations
+
+- **No multi-CN bindings.** Each token binds to at most
+  one CN. An operator accessing from two workstations
+  mints two tokens. Multi-CN is deferred per the spec's
+  YAGNI rationale.
+- **No CN-glob matching.** `alice@*` style matching was
+  considered and rejected — security-via-glob is risky.
+  Operators with ops + dev certs mint per-CN tokens.
+- **Phase 3 dashboard gate is future work.** The
+  dashboard's login component does not yet refuse
+  bearer-only tokens when the coordinator runs in `on`
+  mode. Wiring that requires exposing the tier via a
+  discovery endpoint; out of scope for this slice.
+
+See [`docs/planned-features/implemented/33-per-operator-accountability.md`](planned-features/implemented/33-per-operator-accountability.md)
 for the slice reconciliation and test inventory.
 
 ---

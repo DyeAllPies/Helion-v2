@@ -196,6 +196,15 @@ type IssueTokenRequest struct {
 	Subject  string `json:"subject"`   // required; e.g. "alice"
 	Role     string `json:"role"`      // required; "admin" or "node"
 	TTLHours int    `json:"ttl_hours"` // optional; defaults to 8 h; max 720 h (30 days)
+
+	// Feature 33 — optional binding to a specific operator
+	// cert CN. When set, authMiddleware will refuse every
+	// request that presents this token unless the request
+	// arrived with a verified client cert whose CN matches.
+	// A cert-less request also fails — so a bound token is
+	// useless outside the operator's browser. Empty = legacy
+	// unbound behaviour.
+	BindToCertCN string `json:"bind_to_cert_cn,omitempty"`
 }
 
 // IssueTokenResponse is the response for POST /admin/tokens.
@@ -204,6 +213,12 @@ type IssueTokenResponse struct {
 	Subject  string `json:"subject"`
 	Role     string `json:"role"`
 	TTLHours int    `json:"ttl_hours"`
+
+	// Feature 33 — echoes the CN binding (or omitted when
+	// the token was minted without one). Lets the dashboard
+	// render a "bound to alice@ops" badge without parsing
+	// the JWT payload.
+	BoundToCertCN string `json:"bound_to_cert_cn,omitempty"`
 }
 
 // RevokeTokenRequest is the optional body for DELETE /admin/tokens/{jti}.

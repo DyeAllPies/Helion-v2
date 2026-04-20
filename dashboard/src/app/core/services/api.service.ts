@@ -23,6 +23,7 @@ import {
   IssueOperatorCertRequest, IssueOperatorCertResponse,
   RevokeOperatorCertRequest, RevokeOperatorCertResponse,
   RevocationListResponse,
+  IssueTokenRequest, IssueTokenResponse,
 } from '../../shared/models';
 
 // Raw API response shapes (may differ from dashboard models)
@@ -147,6 +148,23 @@ export class ApiService {
   listRevocations(): Observable<RevocationListResponse> {
     return this.http.get<RevocationListResponse>(
       `${this.base}/admin/operator-certs/revocations`);
+  }
+
+  // ── Feature 33 — token issuance with optional cert-CN binding ──────────────
+
+  /**
+   * POST /admin/tokens — mint a JWT for an operator.
+   *
+   * When `bind_to_cert_cn` is set the server stamps a
+   * `required_cn` claim and enforces it on every
+   * subsequent request: a bound token is useless outside
+   * the operator's browser even if stolen. Leaving the
+   * field empty reproduces legacy bearer-only semantics.
+   *
+   * Admin-only; rate-limited per admin subject.
+   */
+  issueToken(req: IssueTokenRequest): Observable<IssueTokenResponse> {
+    return this.http.post<IssueTokenResponse>(`${this.base}/admin/tokens`, req);
   }
 
   // ── Metrics ──────────────────────────────────────────────────────────────────

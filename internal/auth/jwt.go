@@ -78,7 +78,25 @@ const (
 // Claims represents the JWT claims for Helion tokens.
 type Claims struct {
 	jwt.RegisteredClaims
-	Role string `json:"role"` // "admin" or "node"
+	Role string `json:"role"` // "admin" or "node" or "job" or "user"
+
+	// RequiredCN binds the token to a specific operator cert
+	// CN (feature 33 — per-operator accountability). Empty
+	// = unbound (legacy behaviour: token works anywhere that
+	// validates the signature).
+	//
+	// When non-empty, authMiddleware MUST verify that the
+	// request arrived with a verified client cert whose CN
+	// matches this value. A mismatch OR a cert-less request
+	// produces 401 + an `EventTokenCertCNMismatch` audit
+	// entry — the JWT is treated as if it had failed
+	// signature validation.
+	//
+	// Integrity: JWT signature protects every claim, so a
+	// holder of a token cannot tamper with the binding to
+	// point at their own CN without invalidating the
+	// signature and failing ValidateToken.
+	RequiredCN string `json:"required_cn,omitempty"`
 }
 
 // TokenManager handles JWT creation, validation, and revocation.
@@ -118,7 +136,30 @@ func NewTokenManager(ctx context.Context, store TokenStore) (*TokenManager, erro
 // GenerateToken creates a new JWT with the given subject and role.
 // The token is valid for the given expiry and has a unique JTI.
 // The JTI is stored in BadgerDB with a TTL matching the token expiry.
+//
+// Feature 33: this legacy signature omits the required_cn
+// claim (unbound token). Callers that want to bind a token
+// to an operator cert CN must use GenerateTokenWithCN.
 func (tm *TokenManager) GenerateToken(ctx context.Context, subject, role string, expiry time.Duration) (string, error) {
+	return tm.GenerateTokenWithCN(ctx, subject, role, "", expiry)
+}
+
+// GenerateTokenWithCN is the feature-33 extension of
+// GenerateToken. When requiredCN is non-empty, the resulting
+// token carries a `required_cn` claim that the auth
+// middleware cross-checks against the caller's verified
+// operator cert CN on every request.
+//
+// Empty requiredCN produces a token indistinguishable from
+// one issued by the legacy GenerateToken path — the claim is
+// emitted with `omitempty` so downstream consumers that don't
+// know about the field still parse the payload cleanly.
+//
+// Holder-of-token-cannot-relax-binding property: the JWT
+// signature protects every claim, so an attacker with the
+// raw token cannot flip the required_cn to match their own
+// cert without invalidating the signature.
+func (tm *TokenManager) GenerateTokenWithCN(ctx context.Context, subject, role, requiredCN string, expiry time.Duration) (string, error) {
 	now := time.Now()
 	jti := uuid.New().String()
 
@@ -129,7 +170,8 @@ func (tm *TokenManager) GenerateToken(ctx context.Context, subject, role string,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ID:        jti,
 		},
-		Role: role,
+		Role:       role,
+		RequiredCN: requiredCN,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

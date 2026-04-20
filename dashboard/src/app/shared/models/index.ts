@@ -205,6 +205,40 @@ export interface RevocationListResponse {
   total:       number;
 }
 
+// ── Feature 33 — per-operator accountability ──────────────────────────────────
+
+/**
+ * Request body for POST /admin/tokens.
+ *
+ * `bind_to_cert_cn` (optional): when set, the minted JWT
+ * carries a `required_cn` claim that the coordinator's
+ * auth middleware enforces on every subsequent request —
+ * the token is refused unless the caller presents a
+ * verified operator client cert whose CN matches. A
+ * stolen bound token is useless in any other browser.
+ *
+ * The admin's responsibility: set `bind_to_cert_cn` to
+ * the operator's cert CN when minting for an operator
+ * who will use the dashboard's mTLS flow (feature 27).
+ * Leaving it empty reproduces legacy bearer-only
+ * semantics.
+ */
+export interface IssueTokenRequest {
+  subject:           string;
+  role:              'admin' | 'node' | 'job';
+  ttl_hours?:        number;
+  bind_to_cert_cn?:  string;
+}
+
+export interface IssueTokenResponse {
+  token:              string;
+  subject:            string;
+  role:               string;
+  ttl_hours:          number;
+  /** Echoed when the minted token was bound to a specific cert CN. */
+  bound_to_cert_cn?:  string;
+}
+
 // ── Node ──────────────────────────────────────────────────────────────────────
 
 export interface Node {

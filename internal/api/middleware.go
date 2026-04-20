@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
 	"github.com/DyeAllPies/Helion-v2/internal/authz"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
@@ -180,6 +181,55 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			slog.Error("token validation failed", slog.String("remote", r.RemoteAddr), slog.Any("err", err))
 			writeError(w, http.StatusUnauthorized, "authentication failed")
 			return
+		}
+
+		// Feature 33 — JWT ↔ cert-CN binding enforcement.
+		//
+		// If the token was minted with a non-empty
+		// `required_cn` claim, this request MUST have arrived
+		// with a verified operator client cert whose CN
+		// matches. A cert-less request OR a cert whose CN
+		// differs is refused 401 — same shape the spec
+		// requires, and same HTTP status as a failed
+		// signature-validation so an attacker cannot
+		// distinguish "invalid binding" from "invalid
+		// signature" via the response.
+		//
+		// Order: we check AFTER the signature is validated
+		// (so a token that was never signed by us can't leak
+		// anything about the binding) and BEFORE any
+		// principal-stamping + context plumbing runs (so
+		// downstream handlers never observe a half-bound
+		// request).
+		if claims.RequiredCN != "" {
+			observedCN := OperatorCNFromContext(r.Context())
+			if observedCN != claims.RequiredCN {
+				if s.audit != nil {
+					details := map[string]interface{}{
+						"subject":     claims.Subject,
+						"required_cn": claims.RequiredCN,
+						"observed_cn": observedCN,
+						"remote":      r.RemoteAddr,
+						"path":        r.URL.Path,
+						"jti":         claims.ID,
+					}
+					if aerr := s.audit.Log(r.Context(), audit.EventTokenCertCNMismatch,
+						claims.Subject, details); aerr != nil {
+						// Security-critical — a leaked-token
+						// attempt without a paper trail is
+						// worse than refusing the request.
+						logAuditErr(true, "token_cert_cn_mismatch", aerr)
+					}
+				}
+				s.recordAuthFail(r, events.AuthFailReasonInvalidSignature, claims.Subject)
+				slog.Warn("token cert-CN mismatch — rejecting",
+					slog.String("subject", claims.Subject),
+					slog.String("required_cn", claims.RequiredCN),
+					slog.String("observed_cn", observedCN),
+					slog.String("remote", r.RemoteAddr))
+				writeError(w, http.StatusUnauthorized, "authentication failed")
+				return
+			}
 		}
 
 		// Feature 28 — successful auth goes to analytics too so the

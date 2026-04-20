@@ -245,5 +245,46 @@ From the same **Operator Certs** page:
   see [feature 34](../planned-features/34-webauthn-fido2.md).
 - **Flat authority.** Every operator cert grants the same
   coordinator access; `operator_cn` gives attribution but not
-  permission scoping. Richer identity → token binding is
-  [feature 33](../planned-features/33-per-operator-accountability.md).
+  permission scoping. Richer identity → token binding shipped
+  in [feature 33](../planned-features/implemented/33-per-operator-accountability.md):
+  admins mint a JWT with `bind_to_cert_cn: alice@ops` and the
+  coordinator refuses the token anywhere Alice's cert isn't
+  presenting. A leaked bound JWT is useless outside the
+  operator's browser.
+
+## 7. Binding tokens to operator certs (feature 33)
+
+Once Alice has a cert installed (§2) and the coordinator is
+running with `HELION_REST_CLIENT_CERT_REQUIRED` set to `warn`
+or `on`, admins should mint Alice's JWT with the
+`bind_to_cert_cn` field set:
+
+```bash
+curl -X POST https://helion.example.com/admin/tokens \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subject": "alice",
+    "role": "admin",
+    "ttl_hours": 8,
+    "bind_to_cert_cn": "alice@ops"
+  }'
+```
+
+The response echoes `bound_to_cert_cn: "alice@ops"`. Alice
+pastes the JWT into the dashboard; her browser already has the
+cert imported, so `POST /jobs` succeeds. Bob, with Bob's cert
+imported and Alice's stolen JWT, gets 401 — the middleware
+sees `required_cn: alice@ops` but the cert CN is `bob@ops`.
+
+**Auditing:** every refusal emits `token_cert_cn_mismatch`
+with the subject, required CN, observed CN (or `""` for
+cert-less), remote address, path, and JWT JTI. Dashboards
+should alert on spikes in this event — it's the strongest
+signal a leaked admin token is being probed.
+
+**Rotation playbook:** on the day feature 33 is rolled out,
+admins re-mint every known admin token with
+`bind_to_cert_cn` set, then revoke the older unbound JTIs
+via `DELETE /admin/tokens/{jti}`. The TTL on un-revoked
+unbound tokens bounds the exposure window.

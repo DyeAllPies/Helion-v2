@@ -299,4 +299,43 @@ describe('ApiService', () => {
       }],
     });
   });
+
+  // ── Feature 33 — token issuance with cert-CN binding ───────────────────────
+
+  it('issueToken() sends POST /admin/tokens with body including binding', () => {
+    const body = {
+      subject: 'alice',
+      role: 'admin' as const,
+      ttl_hours: 8,
+      bind_to_cert_cn: 'alice@ops',
+    };
+    service.issueToken(body).subscribe(resp => {
+      expect(resp.bound_to_cert_cn).toBe('alice@ops');
+    });
+    const req = httpMock.expectOne(r =>
+      r.url.endsWith('/admin/tokens') && r.method === 'POST');
+    expect(req.request.body).toEqual(body);
+    req.flush({
+      token: 'jwt-token-blob',
+      subject: 'alice',
+      role: 'admin',
+      ttl_hours: 8,
+      bound_to_cert_cn: 'alice@ops',
+    });
+  });
+
+  it('issueToken() without bind_to_cert_cn sends legacy shape', () => {
+    service.issueToken({ subject: 'alice', role: 'admin' }).subscribe(resp => {
+      expect(resp.bound_to_cert_cn).toBeUndefined();
+    });
+    const req = httpMock.expectOne(r =>
+      r.url.endsWith('/admin/tokens') && r.method === 'POST');
+    expect(req.request.body.bind_to_cert_cn).toBeUndefined();
+    req.flush({
+      token: 'jwt-token-blob',
+      subject: 'alice',
+      role: 'admin',
+      ttl_hours: 8,
+    });
+  });
 });

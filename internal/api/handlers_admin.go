@@ -117,7 +117,22 @@ func (s *Server) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := s.tokenManager.GenerateToken(r.Context(), req.Subject, req.Role, time.Duration(ttl)*time.Hour)
+	// Feature 33 — optional CN binding. When the caller sets
+	// bind_to_cert_cn, the minted token carries a
+	// `required_cn` claim that authMiddleware will enforce on
+	// every subsequent request. A cert-less request OR a cert
+	// whose CN differs is refused 401 + audited.
+	//
+	// We trim the value so accidental trailing whitespace
+	// doesn't silently produce an un-matchable binding. Empty
+	// after trim = unbound (back-compat with the legacy
+	// request body).
+	boundCN := strings.TrimSpace(req.BindToCertCN)
+
+	token, err := s.tokenManager.GenerateTokenWithCN(
+		r.Context(), req.Subject, req.Role, boundCN,
+		time.Duration(ttl)*time.Hour,
+	)
 	if err != nil {
 		slog.Error("issue token failed", slog.String("subject", req.Subject), slog.Any("err", err))
 		writeError(w, http.StatusInternalServerError, "token generation failed")
@@ -129,11 +144,18 @@ func (s *Server) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		actor = claims.Subject
 	}
 	if s.audit != nil {
-		if err := s.audit.Log(r.Context(), "token.issued", actor, map[string]interface{}{
+		details := map[string]interface{}{
 			"subject":   req.Subject,
 			"role":      req.Role,
 			"ttl_hours": ttl,
-		}); err != nil {
+		}
+		// Feature 33 — surface the binding (if any) in the
+		// audit event. Reviewers who want "which admin minted
+		// tokens for which operator" filter on this detail.
+		if boundCN != "" {
+			details["bound_to_cert_cn"] = boundCN
+		}
+		if err := s.audit.Log(r.Context(), "token.issued", actor, details); err != nil {
 			logAuditErr(true, "token.issue", err)
 		}
 	}
@@ -145,10 +167,11 @@ func (s *Server) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, "handleIssueToken", IssueTokenResponse{
-		Token:    token,
-		Subject:  req.Subject,
-		Role:     req.Role,
-		TTLHours: ttl,
+		Token:         token,
+		Subject:       req.Subject,
+		Role:          req.Role,
+		TTLHours:      ttl,
+		BoundToCertCN: boundCN,
 	})
 }
 

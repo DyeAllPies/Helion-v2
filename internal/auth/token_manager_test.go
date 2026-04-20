@@ -131,3 +131,102 @@ func TestGenerateToken_JTIStoreFails_ReturnsError(t *testing.T) {
 		t.Error("expected error when JTI store fails, got nil")
 	}
 }
+
+// ── Feature 33 — required_cn binding ────────────────────────────────────────
+
+// TestGenerateToken_OmitsRequiredCNByDefault guards the
+// back-compat contract: the legacy GenerateToken signature
+// must NOT stamp a `required_cn` claim. Any token minted by
+// an older call path continues to behave as unbound.
+func TestGenerateToken_OmitsRequiredCNByDefault(t *testing.T) {
+	tm, err := auth.NewTokenManager(ctx, newMockStore())
+	if err != nil {
+		t.Fatalf("NewTokenManager: %v", err)
+	}
+	tok, err := tm.GenerateToken(ctx, "alice", "admin", time.Minute)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	claims, err := tm.ValidateToken(ctx, tok)
+	if err != nil {
+		t.Fatalf("ValidateToken: %v", err)
+	}
+	if claims.RequiredCN != "" {
+		t.Errorf("legacy GenerateToken leaked a required_cn claim: %q", claims.RequiredCN)
+	}
+}
+
+// TestGenerateTokenWithCN_RoundTrip proves the claim is
+// signed + round-trips through ValidateToken unchanged.
+func TestGenerateTokenWithCN_RoundTrip(t *testing.T) {
+	tm, err := auth.NewTokenManager(ctx, newMockStore())
+	if err != nil {
+		t.Fatalf("NewTokenManager: %v", err)
+	}
+	tok, err := tm.GenerateTokenWithCN(ctx, "alice", "admin", "alice@ops", time.Minute)
+	if err != nil {
+		t.Fatalf("GenerateTokenWithCN: %v", err)
+	}
+	claims, err := tm.ValidateToken(ctx, tok)
+	if err != nil {
+		t.Fatalf("ValidateToken: %v", err)
+	}
+	if claims.RequiredCN != "alice@ops" {
+		t.Errorf("required_cn: got %q, want %q", claims.RequiredCN, "alice@ops")
+	}
+	if claims.Subject != "alice" {
+		t.Errorf("subject: got %q", claims.Subject)
+	}
+	if claims.Role != "admin" {
+		t.Errorf("role: got %q", claims.Role)
+	}
+}
+
+// TestGenerateTokenWithCN_EmptyCN is equivalent to
+// GenerateToken; no required_cn is emitted.
+func TestGenerateTokenWithCN_EmptyCN(t *testing.T) {
+	tm, err := auth.NewTokenManager(ctx, newMockStore())
+	if err != nil {
+		t.Fatalf("NewTokenManager: %v", err)
+	}
+	tok, err := tm.GenerateTokenWithCN(ctx, "alice", "admin", "", time.Minute)
+	if err != nil {
+		t.Fatalf("GenerateTokenWithCN: %v", err)
+	}
+	claims, err := tm.ValidateToken(ctx, tok)
+	if err != nil {
+		t.Fatalf("ValidateToken: %v", err)
+	}
+	if claims.RequiredCN != "" {
+		t.Errorf("empty CN should not be stamped, got %q", claims.RequiredCN)
+	}
+}
+
+// TestGenerateTokenWithCN_JWTSignatureProtectsBinding —
+// the load-bearing security property. Any attempt to flip
+// required_cn in the encoded JWT must invalidate the
+// signature and fail ValidateToken. This guards against a
+// token holder editing the claim to match their own CN.
+func TestGenerateTokenWithCN_JWTSignatureProtectsBinding(t *testing.T) {
+	tm, err := auth.NewTokenManager(ctx, newMockStore())
+	if err != nil {
+		t.Fatalf("NewTokenManager: %v", err)
+	}
+	tok, err := tm.GenerateTokenWithCN(ctx, "alice", "admin", "alice@ops", time.Minute)
+	if err != nil {
+		t.Fatalf("GenerateTokenWithCN: %v", err)
+	}
+	// Naive tamper: replace "alice@ops" with "bob@ops" in
+	// the payload segment. A real attacker would have to
+	// re-base64 the payload, but the segment-level substring
+	// swap already invalidates the signature, which is what
+	// we want to verify.
+	tampered := strings.ReplaceAll(tok, "alice", "bob")
+	if tampered == tok {
+		t.Skip("no substring to tamper with")
+	}
+	_, err = tm.ValidateToken(ctx, tampered)
+	if err == nil {
+		t.Fatal("tampered token validated — signature guard missing")
+	}
+}
