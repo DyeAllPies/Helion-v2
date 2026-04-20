@@ -98,7 +98,7 @@ bench:
 #   - Go tests with -race (inside Docker so Windows devs don't need a C
 #     compiler). This is critical: data races that pass regular tests
 #     will break CI, and that's exactly what happened once before.
-#   - Go coverage gate (internal/ ≥ 85%, cmd/ ≥ 24%)
+#   - Go coverage gate (internal/ ≥ 85%, cmd/ ≥ 25%)
 #   - Angular lint + tests + coverage gate
 #   - Repo hygiene (go.sum verify, shell-script exec bits)
 #
@@ -154,7 +154,7 @@ build-all: build build-rust
 # Generates three coverage artifacts and enforces the same two-tier
 # threshold CI applies:
 #   - coverage.out / coverage.html — internal/ + tests/integration/ (≥ 85%)
-#   - coverage-cmd.out             — cmd/ binary entry points (≥ 24%)
+#   - coverage-cmd.out             — cmd/ binary entry points (≥ 25%)
 #
 # Two tiers because cmd/ is dominated by main() I/O wiring that is
 # covered end-to-end rather than per-unit. Keeping the same thresholds
@@ -168,10 +168,10 @@ coverage-go:
 	@echo "==> Internal coverage threshold check (≥ 85 %)"
 	@pct=$$($(GO_ENV) go tool cover -func=coverage.out | awk '/^total:/ { gsub(/%/,"",$$3); print $$3 }'); \
 	  awk -v p="$$pct" 'BEGIN { if (p+0 < 85) { print "FAIL: internal/ coverage " p "% < 85%"; exit 1 } print "PASS: internal/ coverage " p "%" }'
-	@echo "==> cmd/ coverage threshold check (≥ 24 %)"
+	@echo "==> cmd/ coverage threshold check (≥ 25 %)"
 	$(GO_ENV) CGO_ENABLED=0 go test -coverprofile=coverage-cmd.out -covermode=atomic ./cmd/... > /dev/null
 	@pct=$$($(GO_ENV) go tool cover -func=coverage-cmd.out | awk '/^total:/ { gsub(/%/,"",$$3); print $$3 }'); \
-	  awk -v p="$$pct" 'BEGIN { if (p+0 < 24) { print "FAIL: cmd/ coverage " p "% < 24%"; exit 1 } print "PASS: cmd/ coverage " p "%" }'
+	  awk -v p="$$pct" 'BEGIN { if (p+0 < 25) { print "FAIL: cmd/ coverage " p "% < 25%"; exit 1 } print "PASS: cmd/ coverage " p "%" }'
 
 test-all: test test-rust test-dashboard test-e2e
 	@echo ""

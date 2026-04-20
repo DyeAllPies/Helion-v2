@@ -381,6 +381,18 @@ func TestLocalStore_Permissions(t *testing.T) {
 // regressed and the feature 11 doc's claim is wrong — either the
 // claim needs updating or the Put path needs a cleanup fix.
 func TestConcurrentPuts_SameKey_NoOrphanTempfile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows rename-while-open is not atomic: a racing goroutine
+		// that opens the destination before another's os.Rename
+		// completes trips MoveFileEx with ERROR_ACCESS_DENIED. The
+		// invariant under test (no orphan tempfiles + exactly one
+		// resolved file + last-writer-wins) is a POSIX-rename
+		// guarantee; on Windows it's a best-effort behavior that
+		// no production Helion deployment relies on (coordinator
+		// and nodes run on Linux). CI is Linux, so this test
+		// exercises the real semantics there.
+		t.Skip("Windows rename-while-open is not atomic; test validates POSIX semantics only")
+	}
 	s := newStore(t)
 	const n = 16
 	const key = "same-key/target.bin"

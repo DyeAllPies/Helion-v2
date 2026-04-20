@@ -86,7 +86,7 @@ jobs:
             print "PASS: internal/ coverage " p "%"
           }'
 
-      - name: go test with coverage (cmd/ — 24% threshold)
+      - name: go test with coverage (cmd/ — 25% threshold)
         run: |
           go test -race -count=1 \
             -coverprofile=coverage-cmd.out -covermode=atomic \
@@ -94,18 +94,19 @@ jobs:
 
       # cmd/ packages are binary entry points: most of `main()` is I/O
       # glue that's exercised by the integration and E2E suites rather
-      # than unit tests. The 24% floor covers the helper functions that
+      # than unit tests. The 25% floor covers the helper functions that
       # ARE unit-testable (envOr, parseNodePins, parseBackfillFlags,
-      # isBackfillSubcommand, …). If this fails, add a test for the
-      # new helper you introduced — don't just lower the threshold.
-      - name: Cmd coverage threshold (≥ 24 %)
+      # isBackfillSubcommand, helion-issue-op-cert run(), …). If this
+      # fails, add a test for the new helper you introduced — don't
+      # just lower the threshold.
+      - name: Cmd coverage threshold (≥ 25 %)
         run: |
           pct=$(go tool cover -func=coverage-cmd.out \
                 | awk '/^total:/ { gsub(/%/,"",$3); print $3 }')
           echo "cmd/ coverage: ${pct}%"
           awk -v p="$pct" 'BEGIN {
-            if (p+0 < 24) {
-              print "FAIL: cmd/ coverage " p "% is below 24% threshold"
+            if (p+0 < 25) {
+              print "FAIL: cmd/ coverage " p "% is below 25% threshold"
               exit 1
             }
             print "PASS: cmd/ coverage " p "%"

@@ -159,28 +159,49 @@ func TestGetAndVerify_CompatWrapperStillWorks(t *testing.T) {
 type slowReadCloser struct {
 	data []byte
 	pos  int
-	hint chan struct{} // closed once we've returned a chunk (signals the test to cancel)
+	hint chan struct{}         // closed once we've returned a chunk (signals the test to cancel)
+	gate chan struct{}         // blocks subsequent reads until the test closes it
+	ctx  func() <-chan struct{} // exposes the test's ctx.Done so Read can bail out promptly
 }
 
 func (r *slowReadCloser) Read(p []byte) (int, error) {
 	if r.pos >= len(r.data) {
 		return 0, io.EOF
 	}
-	// 4 KiB at a time, far smaller than the payload, so io.Copy
-	// iterates many times and ctx cancellation has a clean window.
+	// Must respect len(p) — io.teeReader forwards its own buffer
+	// which may be smaller than 4 KiB, especially on Windows where
+	// bytes.Buffer.ReadFrom starts with a 512-byte probe.
 	chunk := 4096
 	if rem := len(r.data) - r.pos; rem < chunk {
 		chunk = rem
 	}
-	copy(p, r.data[r.pos:r.pos+chunk])
-	r.pos += chunk
-	// Signal the first chunk so the test can cancel mid-stream.
+	if chunk > len(p) {
+		chunk = len(p)
+	}
+
+	// On the very first read, serve the chunk immediately and
+	// signal the test to cancel. On every subsequent read, block
+	// on ctx.Done() so io.Copy sees the cancellation promptly
+	// rather than racing to EOF.
 	select {
 	case <-r.hint:
-		// already closed
+		// already signalled — wait for either the gate (test
+		// driver) or ctx cancellation.
+		if r.ctx != nil {
+			select {
+			case <-r.ctx():
+				return 0, context.Canceled
+			case <-r.gate:
+			}
+		} else {
+			<-r.gate
+		}
 	default:
 		close(r.hint)
 	}
+
+	copy(p, r.data[r.pos:r.pos+chunk])
+	r.pos += chunk
 	return chunk, nil
 }
 
@@ -204,12 +225,17 @@ func TestGetAndVerifyTo_ContextCancelledMidStream(t *testing.T) {
 	// Enough iterations that a cancel issued after the first chunk
 	// lands inside the copy loop, not before or after.
 	payload := bytes.Repeat([]byte("X"), 256*1024)
-	slow := &slowStore{
-		reader: &slowReadCloser{data: payload, hint: make(chan struct{})},
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	slow := &slowStore{
+		reader: &slowReadCloser{
+			data: payload,
+			hint: make(chan struct{}),
+			gate: make(chan struct{}), // never closed — forces block
+			ctx:  func() <-chan struct{} { return ctx.Done() },
+		},
+	}
 
 	// Goroutine: wait for the first chunk to be read, then cancel.
 	// This simulates the operator hitting DELETE /jobs/{id} after

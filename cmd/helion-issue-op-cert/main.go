@@ -85,42 +85,86 @@ type errResp struct {
 	Error string `json:"error"`
 }
 
-func main() {
-	var (
-		cn              = flag.String("operator-cn", "", "Operator CommonName. Required.")
-		ttlDays         = flag.Int("ttl-days", 0, "Certificate lifetime in days. Default 90 (coordinator-side).")
-		p12PW           = flag.String("p12-password", "", "Password protecting the PKCS#12 bundle. Required.")
-		p12PWFile       = flag.String("p12-password-file", "", "Read P12 password from this file (newline-trimmed). Overrides --p12-password.")
-		outPath         = flag.String("out", "", "Path to write the PKCS#12 file. Required.")
-		skipServerVerif = flag.Bool("insecure-skip-verify", false, "Do NOT verify the coordinator's server cert. DEV ONLY.")
-	)
-	flag.Parse()
+// deps groups the process-global side-effects run() depends on.
+// Tests inject fakes; main() wires os.* implementations.
+type deps struct {
+	env       func(string) string
+	readFile  func(string) ([]byte, error)
+	writeFile func(string, []byte, os.FileMode) error
+	stderr    io.Writer
+	// newClient returns the HTTP client run() uses. Tests return a
+	// client pointed at an httptest.Server; main() returns a real
+	// client configured from --insecure-skip-verify / HELION_CA_FILE.
+	newClient func(insecureSkipVerify bool, caPEM []byte) (*http.Client, error)
+}
 
-	coord := strings.TrimRight(os.Getenv("HELION_COORDINATOR"), "/")
-	if coord == "" {
-		fail(1, "HELION_COORDINATOR is required (e.g. https://127.0.0.1:8080)")
+func main() {
+	os.Exit(run(os.Args[1:], deps{
+		env:       os.Getenv,
+		readFile:  os.ReadFile,
+		writeFile: os.WriteFile,
+		stderr:    os.Stderr,
+		newClient: defaultNewClient,
+	}))
+}
+
+func defaultNewClient(insecureSkipVerify bool, caPEM []byte) (*http.Client, error) {
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS13}
+	if insecureSkipVerify {
+		tlsCfg.InsecureSkipVerify = true // #nosec G402 — dev-only opt-in
+	} else if len(caPEM) > 0 {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("no certs parsed from CA PEM")
+		}
+		tlsCfg.RootCAs = pool
 	}
-	tok := os.Getenv("HELION_TOKEN")
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}, nil
+}
+
+// run is the full CLI lifecycle. Returns the process exit code.
+// Split out from main() so tests can drive it without calling
+// os.Exit or touching the real process env.
+func run(args []string, d deps) int {
+	fs := flag.NewFlagSet("helion-issue-op-cert", flag.ContinueOnError)
+	fs.SetOutput(d.stderr)
+	var (
+		cn              = fs.String("operator-cn", "", "Operator CommonName. Required.")
+		ttlDays         = fs.Int("ttl-days", 0, "Certificate lifetime in days. Default 90 (coordinator-side).")
+		p12PW           = fs.String("p12-password", "", "Password protecting the PKCS#12 bundle. Required.")
+		p12PWFile       = fs.String("p12-password-file", "", "Read P12 password from this file (newline-trimmed). Overrides --p12-password.")
+		outPath         = fs.String("out", "", "Path to write the PKCS#12 file. Required.")
+		skipServerVerif = fs.Bool("insecure-skip-verify", false, "Do NOT verify the coordinator's server cert. DEV ONLY.")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	coord := strings.TrimRight(d.env("HELION_COORDINATOR"), "/")
+	if coord == "" {
+		return failf(d.stderr, 1, "HELION_COORDINATOR is required (e.g. https://127.0.0.1:8080)")
+	}
+	tok := d.env("HELION_TOKEN")
 	if tok == "" {
-		fail(1, "HELION_TOKEN is required (admin JWT)")
+		return failf(d.stderr, 1, "HELION_TOKEN is required (admin JWT)")
 	}
 	if *cn == "" {
-		fail(1, "--operator-cn is required")
+		return failf(d.stderr, 1, "--operator-cn is required")
 	}
 	if *outPath == "" {
-		fail(1, "--out is required (path to write .p12 file)")
+		return failf(d.stderr, 1, "--out is required (path to write .p12 file)")
 	}
 
 	password := *p12PW
 	if *p12PWFile != "" {
-		raw, err := os.ReadFile(*p12PWFile)
+		raw, err := d.readFile(*p12PWFile)
 		if err != nil {
-			fail(1, "read p12 password file: %v", err)
+			return failf(d.stderr, 1, "read p12 password file: %v", err)
 		}
 		password = strings.TrimRight(string(raw), "\r\n")
 	}
 	if password == "" {
-		fail(1, "either --p12-password or --p12-password-file is required")
+		return failf(d.stderr, 1, "either --p12-password or --p12-password-file is required")
 	}
 
 	body, err := json.Marshal(issueReq{
@@ -129,37 +173,36 @@ func main() {
 		P12Password: password,
 	})
 	if err != nil {
-		fail(1, "marshal request: %v", err)
+		return failf(d.stderr, 1, "marshal request: %v", err)
 	}
 
-	httpClient := &http.Client{}
-	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS13}
-	if *skipServerVerif {
-		tlsCfg.InsecureSkipVerify = true // #nosec G402 — dev-only opt-in
-		fmt.Fprintln(os.Stderr, "[warn] --insecure-skip-verify: coordinator server cert NOT verified")
-	} else if caPath := os.Getenv("HELION_CA_FILE"); caPath != "" {
-		raw, err := os.ReadFile(caPath)
-		if err != nil {
-			fail(1, "read HELION_CA_FILE: %v", err)
+	var caPEM []byte
+	if !*skipServerVerif {
+		if caPath := d.env("HELION_CA_FILE"); caPath != "" {
+			caPEM, err = d.readFile(caPath)
+			if err != nil {
+				return failf(d.stderr, 1, "read HELION_CA_FILE: %v", err)
+			}
 		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(raw) {
-			fail(1, "HELION_CA_FILE: no certs parsed from %s", caPath)
-		}
-		tlsCfg.RootCAs = pool
+	} else {
+		fmt.Fprintln(d.stderr, "[warn] --insecure-skip-verify: coordinator server cert NOT verified")
 	}
-	httpClient.Transport = &http.Transport{TLSClientConfig: tlsCfg}
+
+	httpClient, err := d.newClient(*skipServerVerif, caPEM)
+	if err != nil {
+		return failf(d.stderr, 1, "HELION_CA_FILE: %v", err)
+	}
 
 	req, err := http.NewRequest(http.MethodPost, coord+"/admin/operator-certs", bytes.NewReader(body))
 	if err != nil {
-		fail(1, "build request: %v", err)
+		return failf(d.stderr, 1, "build request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tok)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		fail(2, "POST /admin/operator-certs: %v", err)
+		return failf(d.stderr, 2, "POST /admin/operator-certs: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -168,38 +211,39 @@ func main() {
 		raw, _ := io.ReadAll(resp.Body)
 		_ = json.Unmarshal(raw, &e)
 		if e.Error != "" {
-			fail(2, "coordinator %d: %s", resp.StatusCode, e.Error)
+			return failf(d.stderr, 2, "coordinator %d: %s", resp.StatusCode, e.Error)
 		}
-		fail(2, "coordinator %d: %s", resp.StatusCode, string(raw))
+		return failf(d.stderr, 2, "coordinator %d: %s", resp.StatusCode, string(raw))
 	}
 
 	var ir issueResp
 	if err := json.NewDecoder(resp.Body).Decode(&ir); err != nil {
-		fail(2, "decode response: %v", err)
+		return failf(d.stderr, 2, "decode response: %v", err)
 	}
 
 	p12, err := base64.StdEncoding.DecodeString(ir.P12Base64)
 	if err != nil {
-		fail(2, "decode p12_base64: %v", err)
+		return failf(d.stderr, 2, "decode p12_base64: %v", err)
 	}
 	// 0600: the P12 is encrypted but the password strength is the
 	// only thing between the file and the private key. World-
 	// readable defeats the point.
-	if err := os.WriteFile(*outPath, p12, 0o600); err != nil {
-		fail(3, "write %s: %v", *outPath, err)
+	if err := d.writeFile(*outPath, p12, 0o600); err != nil {
+		return failf(d.stderr, 3, "write %s: %v", *outPath, err)
 	}
 
-	fmt.Fprintf(os.Stderr, "issued operator cert:\n")
-	fmt.Fprintf(os.Stderr, "  common_name      %s\n", ir.CommonName)
-	fmt.Fprintf(os.Stderr, "  serial_hex       %s\n", ir.SerialHex)
-	fmt.Fprintf(os.Stderr, "  fingerprint_hex  %s\n", ir.FingerprintHex)
-	fmt.Fprintf(os.Stderr, "  not_before       %s\n", ir.NotBefore)
-	fmt.Fprintf(os.Stderr, "  not_after        %s\n", ir.NotAfter)
-	fmt.Fprintf(os.Stderr, "  p12              %s (%d bytes)\n", *outPath, len(p12))
-	fmt.Fprintf(os.Stderr, "\n%s\n", ir.AuditNotice)
+	fmt.Fprintf(d.stderr, "issued operator cert:\n")
+	fmt.Fprintf(d.stderr, "  common_name      %s\n", ir.CommonName)
+	fmt.Fprintf(d.stderr, "  serial_hex       %s\n", ir.SerialHex)
+	fmt.Fprintf(d.stderr, "  fingerprint_hex  %s\n", ir.FingerprintHex)
+	fmt.Fprintf(d.stderr, "  not_before       %s\n", ir.NotBefore)
+	fmt.Fprintf(d.stderr, "  not_after        %s\n", ir.NotAfter)
+	fmt.Fprintf(d.stderr, "  p12              %s (%d bytes)\n", *outPath, len(p12))
+	fmt.Fprintf(d.stderr, "\n%s\n", ir.AuditNotice)
+	return 0
 }
 
-func fail(code int, format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "helion-issue-op-cert: "+format+"\n", args...)
-	os.Exit(code)
+func failf(stderr io.Writer, code int, format string, args ...interface{}) int {
+	fmt.Fprintf(stderr, "helion-issue-op-cert: "+format+"\n", args...)
+	return code
 }
