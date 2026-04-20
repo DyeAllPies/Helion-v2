@@ -18,17 +18,21 @@ test.describe('Sidebar Navigation', () => {
     await expect(page.locator('.brand-version')).toContainText('v2');
   });
 
-  test('all eleven nav items are present', async ({ authedPage: page }) => {
-    // 7 core (Nodes/Jobs/Workflows/Events/Metrics/Audit/Analytics) +
-    // 4 ML (Datasets/Models/Services/Pipelines) added by feature 18.
+  test('all nav items are present for an admin session', async ({ authedPage: page }) => {
+    // Admin sees 13 nav items total:
+    //   8 core (Nodes/Jobs/Submit/Workflows/Events/Metrics/Audit/Analytics)
+    //   4 ML   (Datasets/Models/Services/Pipelines — feature 18)
+    //   1 admin (Operator Certs — feature 32, shown only when isAdmin$)
+    // A non-admin session gets 12 (admin link omitted by *ngIf).
     const navLinks = page.locator('a.nav-link');
-    await expect(navLinks).toHaveCount(11);
+    await expect(navLinks).toHaveCount(13);
 
     const labels = await navLinks.allTextContents();
     const joined = labels.map(l => l.trim().toUpperCase()).join(' ');
     // Core platform views.
     expect(joined).toContain('NODES');
     expect(joined).toContain('JOBS');
+    expect(joined).toContain('SUBMIT');
     expect(joined).toContain('WORKFLOWS');
     expect(joined).toContain('EVENTS');
     expect(joined).toContain('METRICS');
@@ -39,6 +43,8 @@ test.describe('Sidebar Navigation', () => {
     expect(joined).toContain('MODELS');
     expect(joined).toContain('SERVICES');
     expect(joined).toContain('PIPELINES');
+    // Feature-32 admin link (only visible to admins).
+    expect(joined).toContain('OPERATOR CERTS');
   });
 
   test('nodes link is active when on /nodes', async ({ authedPage: page }) => {

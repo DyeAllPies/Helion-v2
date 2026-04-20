@@ -32,18 +32,17 @@ services:
       - HELION_ROTATE_TOKEN=false
       - HELION_TOKEN_FILE=/app/state/root-token
       - HELION_DB_PATH=/app/state/db
-      - HELION_EXTRA_SANS=coordinator
+      - HELION_EXTRA_SANS=coordinator,localhost
       - HELION_CA_FILE=/app/state/ca.pem
-      # Feature 23 — keep REST on plain HTTP in this overlay so the
-      # existing Playwright suite, the python submit.py scripts in
-      # examples/ml-*, and the `curl -sS http://localhost:8080`
-      # smoke checks in the docs all continue to work. The TLS path
-      # is shipped and unit-tested (see tests/integration/security/
-      # rest_tls_test.go); flipping the e2e suite to it is a
-      # follow-up that lands with the batch e2e pass covering
-      # features 22-28. Production coordinators SHOULD leave this
-      # unset — the default-on posture is then active.
-      - HELION_REST_TLS=off
+      # Feature 39 — E2E runs on TLS-on (was: HELION_REST_TLS=off).
+      # HELION_REST_CLIENT_CERT_REQUIRED=warn flips the TLS
+      # ClientAuth setting from RequireAnyClientCert (appropriate
+      # for node↔coordinator mTLS only) to VerifyClientCertIfGiven,
+      # so browsers WITHOUT an operator P12 can still reach the
+      # dashboard. `warn` ALSO registers POST /admin/operator-certs
+      # via SetOperatorCA, so the feature-32 UI round-trip test
+      # exercises the real issuance flow.
+      - HELION_REST_CLIENT_CERT_REQUIRED=warn
       # Analytics pipeline enabled for E2E so the /api/analytics/* endpoints
       # are registered and the dashboard /analytics page has a real backend.
       - HELION_ANALYTICS_DSN=postgres://helion:secret@analytics-db:5432/helion_analytics?sslmode=disable

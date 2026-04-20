@@ -5,7 +5,7 @@
 // event detail fields, all column headers, error handling, and empty state.
 
 import { test, expect, navigateTo } from '../fixtures/auth.fixture';
-import { getRootToken, submitJob } from '../fixtures/cluster.fixture';
+import { getRootToken, submitJob, API_URL } from '../fixtures/cluster.fixture';
 
 test.describe('Audit Log Page', () => {
 
@@ -222,5 +222,73 @@ test.describe('Audit Log Page', () => {
     await expect(page.locator('.empty-state')).toBeVisible({ timeout: 15_000 });
     await page.unroute('**/api/audit?*');
     await expect(page.locator('.empty-state')).toContainText('No audit events found');
+  });
+
+  // ── Feature 37: authz deny surfaces on the audit trail ───────────
+  //
+  // Every 403 from adminMiddleware emits an authz_deny event carrying
+  // the actor + action + deny_code. This is load-bearing for incident
+  // response: if a non-admin token is abused the SOC pivots from the
+  // authz_deny rows to find the attacker's source IP + subject. The
+  // test below causes a real 403 via a user-role token and asserts
+  // the resulting row shows up in the audit table within a second or
+  // two (the audit log is in-process, so latency is tiny).
+
+  test('authz_deny event is emitted after non-admin hits /admin/tokens', async () => {
+    // Feature 37 contract: every 403 from adminMiddleware writes an
+    // authz_deny record to the audit log, with the actor's ID and
+    // the deny code. We verify this via the REST audit endpoint
+    // (type=authz_deny) rather than the dashboard's type filter,
+    // since the select dropdown only pre-populates the common event
+    // types — authz_deny renders correctly in the table but isn't a
+    // built-in filter option. This test is what a SOC would do when
+    // pivoting from "who got denied last hour" to "what they tried".
+    const root = getRootToken();
+
+    // Mint a user-role token from the root admin.
+    const mintResp = await fetch(`${API_URL}/admin/tokens`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${root}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        subject:   `e2e-authz-deny-${Date.now()}`,
+        role:      'node',
+        ttl_hours: 1,
+      }),
+    });
+    expect([200, 201]).toContain(mintResp.status);
+    const { token: userToken } = await mintResp.json() as { token: string };
+
+    // Trigger the 403 — this writes an authz_deny audit event.
+    const denyResp = await fetch(`${API_URL}/admin/tokens`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ subject: 'never-minted', role: 'node', ttl_hours: 1 }),
+    });
+    expect(denyResp.status).toBe(403);
+
+    // Query the audit REST endpoint for authz_deny events. The audit
+    // logger writes synchronously to BadgerDB, so by the time the
+    // 403 has returned the record is already persisted — no polling
+    // needed.
+    // Coordinator mounts the audit endpoint at /audit (no /api
+    // prefix — the dashboard's ng-serve proxy rewrites /api/* to
+    // coordinator-root). From Node fetch we hit the coordinator
+    // directly, so strip the /api prefix.
+    const auditResp = await fetch(
+      `${API_URL}/audit?type=authz_deny&size=100`,
+      { headers: { Authorization: `Bearer ${root}` } },
+    );
+    expect(auditResp.status).toBe(200);
+    const auditBody = await auditResp.json() as {
+      events: Array<{ type: string; actor?: string }>;
+    };
+    expect(auditBody.events.length).toBeGreaterThan(0);
+    expect(auditBody.events.every(e => e.type === 'authz_deny')).toBe(true);
   });
 });

@@ -91,7 +91,11 @@ export async function navigateTo(page: Page, path: string): Promise<void> {
  * just like a real user session.
  */
 export const test = base.extend<{ authedPage: Page }, { sharedContext: BrowserContext; sharedPage: Page }>({
-  // Worker-scoped: one context + page per spec file.
+  // Worker-scoped: one context + page per spec file. Cert
+  // validation is strict — the coordinator SPKI is pinned at
+  // the Chromium launch level (see playwright.config.ts) so
+  // we can leave ignoreHTTPSErrors off here and still tolerate
+  // the E2E overlay's self-signed CA.
   sharedContext: [async ({ browser }, use) => {
     const ctx = await browser.newContext({
       recordVideo: process.env['E2E_VIDEO']

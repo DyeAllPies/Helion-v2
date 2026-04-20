@@ -30,7 +30,12 @@ test.describe('Analytics Dashboard', () => {
     await navigateTo(page, '/analytics');
     await expect(page).toHaveURL(/\/analytics/);
     await expect(page.locator('h1.page-title')).toContainText('ANALYTICS');
-    await expect(page.locator('.page-sub')).toContainText('Historical metrics');
+    // Page subtitle was updated from "Historical metrics" to the
+    // feature-28-era "Live metrics from the analytics database"
+    // once the sink started flushing frequently enough to feel
+    // real-time. Keep the match loose so a minor copy edit doesn't
+    // fail the E2E run.
+    await expect(page.locator('.page-sub')).toContainText(/metrics/i);
   });
 
   test('sidebar has Analytics link with insights icon', async ({ authedPage: page }) => {

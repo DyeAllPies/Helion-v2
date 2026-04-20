@@ -5,14 +5,29 @@
 // coordinator at startup when HELION_TOKEN_FILE is set (see
 // docker-compose.e2e.yml).
 //
+// Feature 39 — the E2E coordinator serves REST over hybrid-PQC TLS
+// (HELION_REST_TLS default-on). Node's global fetch (undici) needs
+// to trust the coordinator's self-signed CA before the fixture's
+// REST helpers or the in-spec fetch() calls will succeed;
+// installCoordinatorCATrust() below wires that up at module import.
+// The Playwright browser context sets `ignoreHTTPSErrors: true`
+// instead — cert-chain validation is unit-tested elsewhere
+// (internal/pqcrypto + tests/integration/security) and we don't
+// need to re-prove it through the UI.
+//
 // Environment variables:
 //   E2E_TOKEN_FILE — path to the root-token file (default: ../state/root-token)
 //   E2E_TOKEN      — override: supply the JWT directly (skips file read)
-//   E2E_API_URL    — coordinator HTTP base URL (default: http://localhost:8080)
+//   E2E_CA_FILE    — coordinator CA PEM path (default: ../state/ca.pem
+//                    or docker exec into the coordinator container)
+//   E2E_CA_PEM     — override: supply the CA PEM directly (skips file read)
+//   E2E_API_URL    — coordinator HTTPS base URL (default:
+//                    https://localhost:8080)
 
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { Agent, setGlobalDispatcher } from 'undici';
 
 /** Root directory of the helion-v2 project (two levels up from this file). */
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -61,7 +76,52 @@ export function getRootToken(): string {
 }
 
 /** Coordinator REST API base URL. */
-export const API_URL = process.env['E2E_API_URL'] || 'http://localhost:8080';
+export const API_URL = process.env['E2E_API_URL'] || 'https://localhost:8080';
+
+/**
+ * Resolve the coordinator's CA PEM via env override, host bind
+ * mount, or `docker exec`. Returns null only when the cluster
+ * genuinely isn't reachable — REST specs that need the CA will
+ * then surface a clean error rather than silently trusting the
+ * wrong cert.
+ */
+function getCoordinatorCAPem(): string | null {
+  if (process.env['E2E_CA_PEM']) return process.env['E2E_CA_PEM'];
+  const caPath = process.env['E2E_CA_FILE']
+    || path.join(PROJECT_ROOT, 'state', 'ca.pem');
+  if (fs.existsSync(caPath)) return fs.readFileSync(caPath, 'utf-8');
+  try {
+    const pem = execSync(
+      'docker exec helion-coordinator cat //app/state/ca.pem',
+      { encoding: 'utf-8', timeout: 5000 },
+    );
+    if (pem.trim()) return pem;
+  } catch {
+    // container not running or command failed
+  }
+  return null;
+}
+
+/**
+ * Pin Node's global fetch dispatcher to the coordinator's CA.
+ * Strict mode: a missing CA throws rather than falling through
+ * to a trust-all agent. This matches the playwright.config.ts
+ * SPKI pinning — both code paths refuse to talk to anything
+ * other than the exact E2E coordinator cert.
+ */
+(function installCoordinatorCATrust() {
+  const ca = getCoordinatorCAPem();
+  if (!ca) {
+    throw new Error(
+      'Coordinator CA not available: start the cluster with\n' +
+      '  docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d\n' +
+      'or set E2E_CA_FILE / E2E_CA_PEM to pin a different trust anchor.\n' +
+      'We refuse to fall back to rejectUnauthorized:false — a broad\n' +
+      'trust-all in tests masks cert regressions.',
+    );
+  }
+  setGlobalDispatcher(new Agent({ connect: { ca } }));
+})();
 
 /**
  * Wait until the coordinator healthz endpoint responds 200.
