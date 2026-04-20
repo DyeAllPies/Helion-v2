@@ -338,4 +338,71 @@ describe('ApiService', () => {
       ttl_hours: 8,
     });
   });
+
+  // ── Feature 34 — WebAuthn lifecycle ────────────────────────────────────────
+
+  it('webauthnRegisterBegin() POSTs the metadata body', () => {
+    service.webauthnRegisterBegin({ label: 'my-yubikey' }).subscribe();
+    const req = httpMock.expectOne(r =>
+      r.url.endsWith('/admin/webauthn/register-begin') && r.method === 'POST');
+    expect(req.request.body).toEqual({ label: 'my-yubikey' });
+    req.flush({ publicKey: { challenge: 'Y2g=', rp: { id: 'localhost' } } });
+  });
+
+  it('webauthnRegisterFinish() POSTs the attestation blob', () => {
+    const body = { id: 'abcd', type: 'public-key', response: { /* browser blob */ } };
+    service.webauthnRegisterFinish(body).subscribe(resp => {
+      expect(resp.credential_id).toBe('abcd');
+    });
+    const req = httpMock.expectOne(r =>
+      r.url.endsWith('/admin/webauthn/register-finish') && r.method === 'POST');
+    expect(req.request.body).toEqual(body);
+    req.flush({ credential_id: 'abcd', label: 'my-yubikey' });
+  });
+
+  it('webauthnLoginBegin() POSTs empty body', () => {
+    service.webauthnLoginBegin().subscribe();
+    const req = httpMock.expectOne(r =>
+      r.url.endsWith('/admin/webauthn/login-begin') && r.method === 'POST');
+    expect(req.request.body).toEqual({});
+    req.flush({ publicKey: { challenge: 'Y2g=' } });
+  });
+
+  it('webauthnLoginFinish() parses the minted token response', () => {
+    const body = { id: 'xyz', type: 'public-key', response: {} };
+    service.webauthnLoginFinish(body).subscribe(resp => {
+      expect(resp.auth_method).toBe('webauthn');
+      expect(resp.token).toBe('new-jwt');
+    });
+    const req = httpMock.expectOne(r =>
+      r.url.endsWith('/admin/webauthn/login-finish') && r.method === 'POST');
+    req.flush({
+      token: 'new-jwt', subject: 'alice', role: 'admin',
+      ttl_seconds: 900, auth_method: 'webauthn', credential_id: 'xyz',
+    });
+  });
+
+  it('listWebAuthnCredentials() issues GET', () => {
+    service.listWebAuthnCredentials().subscribe(resp => {
+      expect(resp.total).toBe(1);
+    });
+    const req = httpMock.expectOne(r => r.url.endsWith('/admin/webauthn/credentials'));
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      total: 1,
+      credentials: [{
+        credential_id: 'abcd', operator_cn: 'alice',
+        registered_at: '', registered_by: '', aaguid_hex: '',
+      }],
+    });
+  });
+
+  it('revokeWebAuthnCredential() DELETEs with URL-encoded id + body', () => {
+    service.revokeWebAuthnCredential('ab/cd+ef', { reason: 'lost it' }).subscribe();
+    const req = httpMock.expectOne(r =>
+      r.url.indexOf('/admin/webauthn/credentials/ab%2Fcd%2Bef') !== -1);
+    expect(req.request.method).toBe('DELETE');
+    expect(req.request.body).toEqual({ reason: 'lost it' });
+    req.flush(null);
+  });
 });

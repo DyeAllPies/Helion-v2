@@ -239,6 +239,63 @@ export interface IssueTokenResponse {
   bound_to_cert_cn?:  string;
 }
 
+// ── Feature 34 — WebAuthn / FIDO2 ─────────────────────────────────────────────
+
+/**
+ * Optional metadata supplied at register-begin. Both fields
+ * flow through to the CredentialRecord unchanged. Browser-
+ * supplied fields (attestation type, transports, public key
+ * algorithm) are populated by navigator.credentials.create.
+ */
+export interface WebAuthnRegisterBeginRequest {
+  label?:         string;
+  bound_cert_cn?: string;
+}
+
+/**
+ * `PublicKey` is the raw `PublicKeyCredentialCreationOptions`
+ * shape the browser's navigator.credentials.create expects.
+ * The backend emits the options verbatim; the dashboard
+ * translates base64url fields (challenge, user.id, etc.)
+ * back to ArrayBuffer before invoking the API.
+ */
+export interface WebAuthnRegisterBeginResponse {
+  publicKey: any;
+}
+
+export interface WebAuthnLoginBeginResponse {
+  publicKey: any;
+}
+
+export interface WebAuthnLoginFinishResponse {
+  token:          string;
+  subject:        string;
+  role:           string;
+  ttl_seconds:    number;
+  auth_method:    string;  // always "webauthn"
+  credential_id:  string;
+}
+
+export interface WebAuthnCredentialItem {
+  credential_id:   string;   // base64url
+  label?:          string;
+  operator_cn:     string;
+  bound_cert_cn?:  string;
+  registered_at:   string;
+  registered_by:   string;
+  last_used_at?:   string;
+  aaguid_hex:      string;
+}
+
+export interface WebAuthnCredentialsListResponse {
+  credentials: WebAuthnCredentialItem[];
+  total:       number;
+}
+
+export interface WebAuthnRevokeRequest {
+  reason: string;
+}
+
 // ── Node ──────────────────────────────────────────────────────────────────────
 
 export interface Node {

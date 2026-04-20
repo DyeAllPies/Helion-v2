@@ -22,6 +22,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/authz"
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/DyeAllPies/Helion-v2/internal/principal"
+	wauthn "github.com/DyeAllPies/Helion-v2/internal/webauthn"
 )
 
 // ── Token admin rate-limit constants ─────────────────────────────────────────
@@ -377,9 +378,71 @@ func (s *Server) adminMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if !s.authzCheck(w, r, authz.ActionAdmin, authz.SystemResource()) {
 			return
 		}
+		// Feature 34 — HELION_AUTH_WEBAUTHN_REQUIRED
+		// enforcement. The webauthn-lifecycle routes
+		// (register-*, login-*) MUST stay callable with a
+		// legacy bearer token — otherwise a fresh operator
+		// could never register their first YubiKey, and
+		// login-begin itself would be blocked by its own
+		// requirement. Every OTHER admin endpoint requires a
+		// WebAuthn-backed JWT in `on` tier (401 with audit)
+		// or at least audits in `warn` tier.
+		if s.webauthnTier != wauthn.TierOff && !isWebAuthnBootstrapPath(r.URL.Path) {
+			claims, _ := r.Context().Value(claimsContextKey).(*auth.Claims)
+			var subject string
+			if claims != nil {
+				subject = claims.Subject
+			}
+			if claims == nil || claims.AuthMethod != "webauthn" {
+				if s.audit != nil {
+					details := map[string]interface{}{
+						"subject": subject,
+						"path":    r.URL.Path,
+						"remote":  r.RemoteAddr,
+					}
+					if s.webauthnTier == wauthn.TierOn {
+						details["enforced"] = true
+					}
+					if err := s.audit.Log(r.Context(), audit.EventWebAuthnRequired, subject, details); err != nil {
+						logAuditErr(true, "webauthn_required", err)
+					}
+				}
+				if s.webauthnTier == wauthn.TierOn {
+					writeError(w, http.StatusUnauthorized,
+						"WebAuthn-backed JWT required (HELION_AUTH_WEBAUTHN_REQUIRED=on)")
+					return
+				}
+				// `warn` tier: fall through to the handler.
+			}
+		}
 		next.ServeHTTP(w, r)
 	}
 }
+
+// isWebAuthnBootstrapPath returns true for routes that must
+// stay callable with a legacy bearer JWT regardless of the
+// HELION_AUTH_WEBAUTHN_REQUIRED tier. These are:
+//
+//   - the register-begin / register-finish ceremony (how an
+//     operator gets their first credential),
+//   - the login-begin / login-finish ceremony (the bearer →
+//     webauthn-backed bridge).
+//
+// Revoke + list are NOT exempt — they're admin-surface
+// actions that require the hardware-bound token when
+// feature 34 is enforced.
+func isWebAuthnBootstrapPath(path string) bool {
+	switch path {
+	case
+		"/admin/webauthn/register-begin",
+		"/admin/webauthn/register-finish",
+		"/admin/webauthn/login-begin",
+		"/admin/webauthn/login-finish":
+		return true
+	}
+	return false
+}
+
 
 // ── tokenIssueAllow ───────────────────────────────────────────────────────────
 

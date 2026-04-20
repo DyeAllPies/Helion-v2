@@ -24,6 +24,9 @@ import {
   RevokeOperatorCertRequest, RevokeOperatorCertResponse,
   RevocationListResponse,
   IssueTokenRequest, IssueTokenResponse,
+  WebAuthnRegisterBeginRequest, WebAuthnRegisterBeginResponse,
+  WebAuthnLoginBeginResponse, WebAuthnLoginFinishResponse,
+  WebAuthnCredentialsListResponse, WebAuthnRevokeRequest,
 } from '../../shared/models';
 
 // Raw API response shapes (may differ from dashboard models)
@@ -165,6 +168,78 @@ export class ApiService {
    */
   issueToken(req: IssueTokenRequest): Observable<IssueTokenResponse> {
     return this.http.post<IssueTokenResponse>(`${this.base}/admin/tokens`, req);
+  }
+
+  // ── Feature 34 — WebAuthn / FIDO2 lifecycle ───────────────────────────────
+
+  /**
+   * POST /admin/webauthn/register-begin — return the
+   * navigator.credentials.create options for registering a
+   * new authenticator. Server returns the raw
+   * PublicKeyCredentialCreationOptions shape under
+   * `publicKey`; the caller is responsible for
+   * base64url→ArrayBuffer conversion before invoking the
+   * browser API.
+   */
+  webauthnRegisterBegin(req: WebAuthnRegisterBeginRequest = {}): Observable<WebAuthnRegisterBeginResponse> {
+    return this.http.post<WebAuthnRegisterBeginResponse>(
+      `${this.base}/admin/webauthn/register-begin`, req);
+  }
+
+  /**
+   * POST /admin/webauthn/register-finish — send the
+   * attestation response from navigator.credentials.create
+   * back for verification. Server stores the credential and
+   * returns `{ credential_id, label }`.
+   */
+  webauthnRegisterFinish(body: any): Observable<{ credential_id: string; label?: string }> {
+    return this.http.post<{ credential_id: string; label?: string }>(
+      `${this.base}/admin/webauthn/register-finish`, body);
+  }
+
+  /**
+   * POST /admin/webauthn/login-begin — return the
+   * navigator.credentials.get options for authenticating
+   * with an already-registered credential.
+   */
+  webauthnLoginBegin(): Observable<WebAuthnLoginBeginResponse> {
+    return this.http.post<WebAuthnLoginBeginResponse>(
+      `${this.base}/admin/webauthn/login-begin`, {});
+  }
+
+  /**
+   * POST /admin/webauthn/login-finish — send the assertion
+   * from navigator.credentials.get back for verification.
+   * On success the server returns a short-lived
+   * (15-minute) JWT whose `auth_method` claim is
+   * `"webauthn"` — the kind of token that satisfies the
+   * `HELION_AUTH_WEBAUTHN_REQUIRED=on` enforcement tier on
+   * admin endpoints.
+   */
+  webauthnLoginFinish(body: any): Observable<WebAuthnLoginFinishResponse> {
+    return this.http.post<WebAuthnLoginFinishResponse>(
+      `${this.base}/admin/webauthn/login-finish`, body);
+  }
+
+  /**
+   * GET /admin/webauthn/credentials — admin list of every
+   * registered credential across operators.
+   */
+  listWebAuthnCredentials(): Observable<WebAuthnCredentialsListResponse> {
+    return this.http.get<WebAuthnCredentialsListResponse>(
+      `${this.base}/admin/webauthn/credentials`);
+  }
+
+  /**
+   * DELETE /admin/webauthn/credentials/{id} — revoke a
+   * registered credential. Idempotent: re-revoking returns
+   * 404 if it was already gone. The reason is stored on the
+   * audit event.
+   */
+  revokeWebAuthnCredential(credentialID: string, req: WebAuthnRevokeRequest): Observable<void> {
+    return this.http.request<void>('DELETE',
+      `${this.base}/admin/webauthn/credentials/${encodeURIComponent(credentialID)}`,
+      { body: req });
   }
 
   // ── Metrics ──────────────────────────────────────────────────────────────────

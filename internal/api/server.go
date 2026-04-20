@@ -75,6 +75,9 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/pqcrypto"
 	"github.com/DyeAllPies/Helion-v2/internal/registry"
 	"github.com/DyeAllPies/Helion-v2/internal/secretstore"
+	wauthn "github.com/DyeAllPies/Helion-v2/internal/webauthn"
+
+	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 )
 
 // ── Server ────────────────────────────────────────────────────────────────────
@@ -194,6 +197,28 @@ type Server struct {
 	// already known at NewServer time (via SetOperatorCA);
 	// the store is added later. Handler consults both.
 	crlSigner CRLSigner
+
+	// Feature 34 — WebAuthn / FIDO2 hardware-bound auth.
+	// All three fields are set together via SetWebAuthn;
+	// handlers check `webauthn != nil` as the enablement
+	// probe.
+	webauthn         *webauthnlib.WebAuthn
+	webauthnStore    wauthn.CredentialStore
+	webauthnSessions *wauthn.SessionStore
+
+	// webauthnTier enforces HELION_AUTH_WEBAUTHN_REQUIRED.
+	// Default TierOff — the middleware does nothing. `warn`
+	// emits EventWebAuthnRequired for admin-surface requests
+	// whose token isn't WebAuthn-backed; `on` additionally
+	// refuses them with 401.
+	webauthnTier wauthn.Tier
+
+	// webauthnRegMeta bridges register-begin's operator-
+	// supplied Label + BoundCertCN to register-finish. Keyed
+	// on JWT subject; single-use with a 5-minute TTL baked
+	// into the entry.
+	webauthnRegMetaMu sync.Mutex
+	webauthnRegMeta   map[string]registerMetadata
 }
 
 // RevocationStoreIface is the narrow read-side interface the
@@ -289,6 +314,57 @@ func (s *Server) SetRevocationStore(rs RevocationStoreIface) {
 // above SetRevocationStore for why.
 func (s *Server) SetCRLSigner(signer CRLSigner) {
 	s.crlSigner = signer
+}
+
+// SetWebAuthn wires the feature-34 WebAuthn plumbing.
+// Routes:
+//
+//   POST   /admin/webauthn/register-begin
+//   POST   /admin/webauthn/register-finish
+//   POST   /admin/webauthn/login-begin
+//   POST   /admin/webauthn/login-finish
+//   GET    /admin/webauthn/credentials
+//   DELETE /admin/webauthn/credentials/{id}
+//
+// All six are admin-gated by adminMiddleware. A nil
+// *WebAuthn OR nil CredentialStore is a no-op — the routes
+// aren't registered, so the mux returns its own 404 for
+// deployments that didn't opt into FIDO2.
+//
+// sessions defaults to a 5-minute TTL SessionStore when
+// nil; callers rarely override.
+func (s *Server) SetWebAuthn(w *webauthnlib.WebAuthn, store wauthn.CredentialStore, sessions *wauthn.SessionStore) {
+	if w == nil || store == nil {
+		return
+	}
+	if sessions == nil {
+		sessions = wauthn.NewSessionStore(0)
+	}
+	s.webauthn = w
+	s.webauthnStore = store
+	s.webauthnSessions = sessions
+
+	s.mux.HandleFunc("POST /admin/webauthn/register-begin",
+		s.authMiddleware(s.adminMiddleware(s.handleWebAuthnRegisterBegin)))
+	s.mux.HandleFunc("POST /admin/webauthn/register-finish",
+		s.authMiddleware(s.adminMiddleware(s.handleWebAuthnRegisterFinish)))
+	s.mux.HandleFunc("POST /admin/webauthn/login-begin",
+		s.authMiddleware(s.adminMiddleware(s.handleWebAuthnLoginBegin)))
+	s.mux.HandleFunc("POST /admin/webauthn/login-finish",
+		s.authMiddleware(s.adminMiddleware(s.handleWebAuthnLoginFinish)))
+	s.mux.HandleFunc("GET /admin/webauthn/credentials",
+		s.authMiddleware(s.adminMiddleware(s.handleWebAuthnListCredentials)))
+	s.mux.HandleFunc("DELETE /admin/webauthn/credentials/{id}",
+		s.authMiddleware(s.adminMiddleware(s.handleWebAuthnRevokeCredential)))
+}
+
+// SetWebAuthnTier installs the HELION_AUTH_WEBAUTHN_REQUIRED
+// enforcement tier. Called separately from SetWebAuthn
+// because the coordinator parses the env var into a Tier
+// value independently of whether the CredentialStore is
+// backed by Badger or MemStore. Defaults to TierOff.
+func (s *Server) SetWebAuthnTier(t wauthn.Tier) {
+	s.webauthnTier = t
 }
 
 // SetSecretStoreAdmin wires the feature-30 rotation endpoint.

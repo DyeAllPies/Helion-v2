@@ -97,6 +97,22 @@ type Claims struct {
 	// point at their own CN without invalidating the
 	// signature and failing ValidateToken.
 	RequiredCN string `json:"required_cn,omitempty"`
+
+	// AuthMethod records how the token was minted. Feature
+	// 34 stamps `"webauthn"` after a successful FIDO2
+	// assertion; the legacy `POST /admin/tokens` path leaves
+	// it empty (which is then treated as `"bearer"` for any
+	// auth-method-required policy). Other intended values:
+	//   "webauthn"  — WebAuthn-backed (hardware-verified)
+	//   ""          — legacy bearer (unspecified method)
+	//
+	// When HELION_AUTH_WEBAUTHN_REQUIRED=on, authMiddleware
+	// refuses any admin-surface request whose token lacks
+	// `auth_method == "webauthn"`. The claim is signature-
+	// protected; a holder cannot upgrade their own token
+	// from "bearer" to "webauthn" without invalidating the
+	// signature.
+	AuthMethod string `json:"auth_method,omitempty"`
 }
 
 // TokenManager handles JWT creation, validation, and revocation.
@@ -160,18 +176,45 @@ func (tm *TokenManager) GenerateToken(ctx context.Context, subject, role string,
 // raw token cannot flip the required_cn to match their own
 // cert without invalidating the signature.
 func (tm *TokenManager) GenerateTokenWithCN(ctx context.Context, subject, role, requiredCN string, expiry time.Duration) (string, error) {
+	return tm.GenerateTokenWithClaims(ctx, TokenClaims{
+		Subject:    subject,
+		Role:       role,
+		RequiredCN: requiredCN,
+		TTL:        expiry,
+	})
+}
+
+// TokenClaims bundles the caller-settable fields on a minted
+// token. Added in feature 34 because the legacy GenerateToken
+// + GenerateTokenWithCN signatures grew to the point where a
+// third parameter (AuthMethod) would make the positional
+// argument list unreadable.
+type TokenClaims struct {
+	Subject    string
+	Role       string
+	RequiredCN string
+	AuthMethod string
+	TTL        time.Duration
+}
+
+// GenerateTokenWithClaims is the feature-34 full-control
+// mint path. Every callable field of Claims that the
+// coordinator owns is settable here. All three existing
+// Generate* methods delegate to this implementation.
+func (tm *TokenManager) GenerateTokenWithClaims(ctx context.Context, c TokenClaims) (string, error) {
 	now := time.Now()
 	jti := uuid.New().String()
 
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   subject,
-			ExpiresAt: jwt.NewNumericDate(now.Add(expiry)),
+			Subject:   c.Subject,
+			ExpiresAt: jwt.NewNumericDate(now.Add(c.TTL)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			ID:        jti,
 		},
-		Role:       role,
-		RequiredCN: requiredCN,
+		Role:       c.Role,
+		RequiredCN: c.RequiredCN,
+		AuthMethod: c.AuthMethod,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -181,7 +224,7 @@ func (tm *TokenManager) GenerateTokenWithCN(ctx context.Context, subject, role, 
 	}
 
 	jtiKey := JTIPrefix + jti
-	if err := tm.store.Put(ctx, jtiKey, []byte(subject), expiry); err != nil {
+	if err := tm.store.Put(ctx, jtiKey, []byte(c.Subject), c.TTL); err != nil {
 		return "", fmt.Errorf("store JTI: %w", err)
 	}
 

@@ -218,6 +218,44 @@ const (
 	//   leaked admin token being used from an unauthorised
 	//   operator's browser.
 	EventTokenCertCNMismatch = "token_cert_cn_mismatch"
+
+	// Feature 34 — WebAuthn / FIDO2 lifecycle events.
+	//
+	//   EventWebAuthnRegistered — an operator completed the
+	//     register-begin + register-finish ceremony and a
+	//     credential landed in the store. Details: subject,
+	//     credential_id, label, bound_cert_cn (if any),
+	//     registered_by (the admin principal).
+	//
+	//   EventWebAuthnRegisterReject — register-begin or
+	//     register-finish was refused (missing / invalid
+	//     JSON, failed attestation verification, duplicate
+	//     credential ID). Details: subject, reason.
+	//
+	//   EventWebAuthnAuthenticated — a login-finish assertion
+	//     verified AND a WebAuthn-backed JWT was minted.
+	//     Details: subject, credential_id, jti (new JWT).
+	//
+	//   EventWebAuthnLoginReject — login-finish failed
+	//     (missing session, replay detected, signature
+	//     invalid, unknown credential ID). Details: subject,
+	//     reason, credential_id (if known).
+	//
+	//   EventWebAuthnRevoked — an admin called
+	//     DELETE /admin/webauthn/credentials/{id}. Details:
+	//     credential_id, operator_cn, revoked_by, reason.
+	//
+	//   EventWebAuthnRequired — fires in `warn` tier on every
+	//     admin-surface request whose token is NOT
+	//     WebAuthn-backed. Details: subject, path, remote.
+	//     `on` tier audits the SAME event (with enforced:
+	//     true) plus refuses the request 401.
+	EventWebAuthnRegistered      = "webauthn_registered"
+	EventWebAuthnRegisterReject  = "webauthn_register_reject"
+	EventWebAuthnAuthenticated   = "webauthn_authenticated"
+	EventWebAuthnLoginReject     = "webauthn_login_reject"
+	EventWebAuthnRevoked         = "webauthn_revoked"
+	EventWebAuthnRequired        = "webauthn_required"
 )
 
 // Event represents a single audit log entry.

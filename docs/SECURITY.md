@@ -60,7 +60,7 @@ operational procedures.
 | Admin JWT leaks via clipboard / screenshare / browser extension → remote attacker submits jobs from the internet | **Feature 27 optional.** `HELION_REST_CLIENT_CERT_REQUIRED=on` requires the caller to also present a client certificate verified against the coordinator's CA. Cert-less requests are refused at 401 before auth middleware even runs. Staged rollout via `warn` tier. See §9.6. |
 | Attacker forges `X-SSL-Client-Verify: SUCCESS` to bypass mTLS | Coordinator honours those headers ONLY from loopback (127.0.0.1 / ::1). Any non-loopback peer carrying those headers is treated as if no cert was presented. |
 | Operator laptop stolen with P12 imported in browser | P12 password at import time + OS keychain user-auth gating; short TTL (90 days default). **Feature 31 shipped**: admin revokes the cert via `POST /admin/operator-certs/{serial}/revoke`; the coordinator rejects the serial at client-cert middleware AND publishes a signed CRL via `GET /admin/ca/crl` for Nginx-terminated deployments. See §9.10. |
-| Compromised browser process uses the installed operator cert | Out of scope for mTLS (a network-boundary control). Tracked as [feature 34 — WebAuthn/FIDO2](planned-features/34-webauthn-fido2.md), which moves the signing key to a hardware device requiring physical touch per auth event. |
+| Compromised browser process uses the installed operator cert | **Feature 34 shipped**. Admins register YubiKeys / platform authenticators via `/admin/webauthn/register-*`; the subsequent `login-*` ceremony requires a hardware touch to mint a short-lived (15-min) JWT with `auth_method: "webauthn"`. With `HELION_AUTH_WEBAUTHN_REQUIRED=on`, the coordinator refuses every non-bootstrap admin endpoint for tokens that lack the claim. A compromised browser can no longer silently authenticate without user touch. See §9.12. |
 | Analytics database compromised; attacker reads JWT subjects (PII) out of a PG dump | **Feature 28 PII mode.** `HELION_ANALYTICS_PII_MODE=hash_actor` writes `sha256(salt \|\| actor)` into every analytics `actor` column instead of the raw subject. Dashboards still group by hash (same actor = same hash); ops learns trends without identity. Audit log remains authoritative for accountability (raw subjects, forever-retained, Badger-backed). |
 | Analytics database fills indefinitely; attacker exploits to DoS / run out of disk | **Feature 28 retention cron — opt-in.** `HELION_ANALYTICS_RETENTION_DAYS` defaults to 0 (disabled) because PG is the intended long-term store. Operators who want retention set a positive value; the cron prunes every feature-28 table EXCEPT `job_log_entries` (PG is the authoritative log home, see §9.7). Audit log in BadgerDB is untouched regardless. |
 | Secret env values sneak into analytics tables | **Feature 28 defence in depth.** `submission_history` stores only `resource_id` (a ULID), never the submit body. The command/args/env live in the audit log under the matching `job_id`. Feature 26's redaction applies to the audit store too. An analytics dump is never a secret-exposure event. |
@@ -1292,11 +1292,12 @@ Safety properties:
 
 What mTLS does NOT solve:
 
-- **In-browser compromise.** An attacker running code inside the
-  operator's browser can use the installed cert directly — it's
-  a network-boundary control, not an in-browser one. Tracked as
-  [feature 34 — WebAuthn/FIDO2](planned-features/34-webauthn-fido2.md),
-  which moves the key to a hardware device requiring physical touch.
+- **In-browser compromise** — **feature 34 shipped**. A
+  malicious extension or compromised dashboard dependency
+  can no longer silently authenticate: WebAuthn moves the
+  signing key to a hardware device (YubiKey / platform
+  authenticator) that requires physical user presence for
+  every signature. See §9.12.
 - **Revocation** — **feature 31 shipped**. Admins revoke a cert
   with `POST /admin/operator-certs/{serial}/revoke`; the
   coordinator refuses the revoked serial at middleware time
@@ -1595,6 +1596,157 @@ remains valid until its JTI is revoked or its TTL expires.
   discovery endpoint; out of scope for this slice.
 
 See [`docs/planned-features/implemented/33-per-operator-accountability.md`](planned-features/implemented/33-per-operator-accountability.md)
+for the slice reconciliation and test inventory.
+
+### 9.12 WebAuthn / FIDO2 hardware-bound auth (feature 34)
+
+Features 27 + 31 + 33 raise authentication to cert-mTLS +
+token-CN binding. The remaining hole: the browser itself
+is still a trusted runtime. A malicious extension, a
+compromised dashboard dependency (supply-chain attack), or
+a remote-code-exec against the browser process can all
+silently authenticate using the operator's imported cert.
+
+Feature 34 closes that hole by moving the signing key off
+the browser and into a hardware authenticator — YubiKey,
+Apple Secure Enclave, Windows Hello TPM — that requires
+physical user interaction (button press, fingerprint,
+face scan) for every signature. Malicious in-browser code
+can ASK for a signature; the hardware refuses without user
+touch.
+
+### Endpoints
+
+```
+POST   /admin/webauthn/register-begin    — start registration
+POST   /admin/webauthn/register-finish   — store attested credential
+POST   /admin/webauthn/login-begin       — start assertion ceremony
+POST   /admin/webauthn/login-finish      — mint WebAuthn-backed JWT
+GET    /admin/webauthn/credentials       — list all registered credentials
+DELETE /admin/webauthn/credentials/{id}  — revoke a credential
+```
+
+All six are admin-only via adminMiddleware. The register-
+and login-ceremony routes are EXEMPT from the
+`HELION_AUTH_WEBAUTHN_REQUIRED=on` enforcement tier —
+otherwise a fresh operator could never register their
+first key and `login-begin` itself would be blocked by
+its own requirement.
+
+### Enforcement tier
+
+`HELION_AUTH_WEBAUTHN_REQUIRED` mirrors the feature-27
+cert-tier shape:
+
+- `off` (default) — admin surface accepts any valid JWT.
+- `warn` — admins requests on non-bootstrap admin
+  endpoints emit `EventWebAuthnRequired` if the token
+  lacks `auth_method: "webauthn"`, but are still served.
+- `on` — those requests are refused 401 with audit event.
+
+Staged rollout: flip to `warn` first, identify operators
+still on bearer-only tokens via the audit log, harden
+them one by one, then flip to `on`.
+
+### Safety properties
+
+- **Hardware-bound signatures.** The private key never
+  leaves the authenticator. Every assertion requires a
+  fresh user-presence signal; a compromised browser
+  cannot forge them.
+- **Replay-resistance.** Authenticators monotonically
+  bump a signCount; `UpdateSignCount` refuses any
+  assertion whose counter doesn't strictly advance (the
+  spec's §7.2 invariant). Authenticators that stay at 0
+  forever (passkeys, some platform authenticators) are
+  accommodated via a zero-stays-zero exception.
+- **Challenge-bound.** Each begin call produces a fresh
+  random challenge; the session is single-use
+  (Pop removes it) with a 5-minute TTL. A replayed
+  finish against a stale challenge always fails.
+- **Audited mutations.** Register success / reject,
+  login success / reject, and revoke each emit a
+  distinct event. A failed verification emits the
+  reject-family event; the success event only fires
+  after the library's signature check passes.
+- **Bootstrap-aware tier gate.** Register + login
+  ceremonies bypass the `on`-tier check because
+  blocking them would make the feature unbootstrappable.
+  Revoke + list do NOT bypass — they're admin-surface
+  actions that require the hardware-bound token when
+  enforced.
+- **Defence-in-depth with feature 33.** When a
+  credential is registered with `bound_cert_cn`, the
+  minted WebAuthn JWT carries `required_cn` too.
+  Attacker needs (1) the cert private key, (2) physical
+  possession of the YubiKey + user touch, (3) a valid
+  bearer JWT — three factors on three different
+  substrates.
+
+### Configuration
+
+```bash
+# Relying Party ID — the effective domain (no scheme/port).
+export HELION_WEBAUTHN_RPID=helion.example.com
+
+# Display name shown in the browser's touch prompt.
+export HELION_WEBAUTHN_DISPLAY="Helion Coordinator"
+
+# Comma-separated list of permitted full-origin URLs.
+export HELION_WEBAUTHN_ORIGINS=https://helion.example.com
+
+# Enforcement tier. Default off.
+export HELION_AUTH_WEBAUTHN_REQUIRED=on
+```
+
+The first three must all be set; omitting any of them
+(including an empty `RPID`) disables the feature
+entirely — the coordinator starts fine but the webauthn
+routes stay unregistered.
+
+### Storage
+
+Credentials live in BadgerDB under:
+
+```
+webauthn/credentials/<b64url_credential_id>          → JSON(CredentialRecord)
+webauthn/by-operator/<b64url_user_handle>/<b64url_credential_id>  → marker
+```
+
+A reverse index by operator user handle makes
+`ListByOperator` O(k) where k is the credential count
+per operator (typically 1–3).
+
+The on-disk CredentialRecord embeds the raw
+`webauthn.Credential` struct — public key, sign count,
+transports, attestation metadata — so future library
+upgrades can re-verify against FIDO MDS without forcing
+re-registration.
+
+### Known limitations
+
+- **Passkeys / cross-device FIDO2 deferred.** Apple +
+  Google passkey sync reintroduces a "compromise the
+  cloud, compromise the credential" story. Revisit when
+  per-tenant passkey-sync controls are deployable.
+- **Attestation MDS verification deferred.** go-webauthn
+  supports FIDO Metadata Service (trust-anchor + model
+  lookup) via its `MDS` config field; integrating it is
+  a follow-up. We accept any well-formed attestation;
+  the hardware-bound-signature property is the
+  load-bearing control.
+- **User-verification enforcement deferred.**
+  `UserVerification: required` (PIN or biometric on the
+  authenticator) is available but not enabled by
+  default; deferred until the operator-guide walk-through
+  is stable.
+- **Dashboard login path.** The register + list + revoke
+  flows ship with this feature; a full dashboard
+  "step-up to WebAuthn at login" UX is a follow-up
+  slice. Operators can drive the flow manually via
+  `curl` or a minimal script today.
+
+See [`docs/planned-features/implemented/34-webauthn-fido2.md`](planned-features/implemented/34-webauthn-fido2.md)
 for the slice reconciliation and test inventory.
 
 ---

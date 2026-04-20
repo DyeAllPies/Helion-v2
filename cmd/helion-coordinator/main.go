@@ -53,6 +53,9 @@ import (
 	registrypkg "github.com/DyeAllPies/Helion-v2/internal/registry"
 	"github.com/DyeAllPies/Helion-v2/internal/pqcrypto"
 	"github.com/DyeAllPies/Helion-v2/internal/secretstore"
+	webauthnpkg "github.com/DyeAllPies/Helion-v2/internal/webauthn"
+
+	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/DyeAllPies/Helion-v2/internal/grpcserver"
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	"github.com/DyeAllPies/Helion-v2/internal/metrics"
@@ -486,6 +489,70 @@ func main() {
 		apiSrv.SetCRLSigner(bundle.CA)
 		apiSrv.SetRevocationStore(revStore)
 		log.Info("operator-cert revocation store loaded")
+	}
+
+	// Feature 34 — WebAuthn / FIDO2 for admin operators.
+	// Three env knobs:
+	//
+	//   HELION_WEBAUTHN_RPID       — relying-party ID (e.g.
+	//                                helion.example.com). Skip
+	//                                to disable the feature.
+	//   HELION_WEBAUTHN_DISPLAY    — RP display name. Defaults
+	//                                to "Helion Coordinator".
+	//   HELION_WEBAUTHN_ORIGINS    — comma-separated list of
+	//                                permitted origins (must
+	//                                match the dashboard URL).
+	//
+	// Plus HELION_AUTH_WEBAUTHN_REQUIRED (off/warn/on) — the
+	// middleware enforcement tier.
+	if rpID := strings.TrimSpace(os.Getenv("HELION_WEBAUTHN_RPID")); rpID != "" {
+		origins := []string{}
+		for _, o := range strings.Split(os.Getenv("HELION_WEBAUTHN_ORIGINS"), ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				origins = append(origins, o)
+			}
+		}
+		if len(origins) == 0 {
+			log.Error("HELION_WEBAUTHN_RPID set but HELION_WEBAUTHN_ORIGINS empty — refusing to start")
+			os.Exit(1)
+		}
+		displayName := strings.TrimSpace(os.Getenv("HELION_WEBAUTHN_DISPLAY"))
+		if displayName == "" {
+			displayName = "Helion Coordinator"
+		}
+		waCfg := &webauthnlib.Config{
+			RPID:          rpID,
+			RPDisplayName: displayName,
+			RPOrigins:     origins,
+		}
+		waLib, err := webauthnlib.New(waCfg)
+		if err != nil {
+			log.Error("HELION_WEBAUTHN config invalid — refusing to start",
+				slog.Any("err", err))
+			os.Exit(1)
+		}
+		waStore := webauthnpkg.NewBadgerStore(persister.DB())
+		apiSrv.SetWebAuthn(waLib, waStore, webauthnpkg.NewSessionStore(5*time.Minute))
+		log.Info("WebAuthn configured",
+			slog.String("rpid", rpID),
+			slog.String("display_name", displayName),
+			slog.Int("origins", len(origins)))
+
+		tier, err := webauthnpkg.ParseTier(os.Getenv("HELION_AUTH_WEBAUTHN_REQUIRED"))
+		if err != nil {
+			log.Error("HELION_AUTH_WEBAUTHN_REQUIRED invalid — refusing to start",
+				slog.Any("err", err))
+			os.Exit(1)
+		}
+		apiSrv.SetWebAuthnTier(tier)
+		if tier != webauthnpkg.TierOff {
+			log.Warn("WebAuthn enforcement active",
+				slog.String("tier", tier.String()),
+				slog.String("hint", "admin-surface endpoints require auth_method=webauthn tokens"))
+		}
+	} else {
+		log.Info("WebAuthn not configured — set HELION_WEBAUTHN_RPID + HELION_WEBAUTHN_ORIGINS to enable")
 	}
 
 	// Feature 25 — per-node env-denylist overrides. Optional. If set,
