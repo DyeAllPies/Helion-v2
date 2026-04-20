@@ -59,7 +59,7 @@ operational procedures.
 | Job prints its own `$HELION_TOKEN` to stdout → captured by logstore → visible via `GET /jobs/{id}/logs` | **Feature 29 shipped.** `logstore.ScrubbingStore` decorator substitutes every declared secret VALUE with `[REDACTED]` before chunks land in BadgerDB; response-path redactor on `GET /jobs/{id}/logs` repeats the substitution as belt-and-braces; the feature-28 analytics mirror (PG sink) scrubs the same bytes before publish so PG cannot become a side-channel. Per-job RBAC now gates log reads too. See §9.5. |
 | Admin JWT leaks via clipboard / screenshare / browser extension → remote attacker submits jobs from the internet | **Feature 27 optional.** `HELION_REST_CLIENT_CERT_REQUIRED=on` requires the caller to also present a client certificate verified against the coordinator's CA. Cert-less requests are refused at 401 before auth middleware even runs. Staged rollout via `warn` tier. See §9.6. |
 | Attacker forges `X-SSL-Client-Verify: SUCCESS` to bypass mTLS | Coordinator honours those headers ONLY from loopback (127.0.0.1 / ::1). Any non-loopback peer carrying those headers is treated as if no cert was presented. |
-| Operator laptop stolen with P12 imported in browser | P12 password at import time + OS keychain user-auth gating. Not iron-clad; mitigation is short TTL (90 days default) and revocation follow-up [feature 31](planned-features/31-cert-revocation-crl-ocsp.md). |
+| Operator laptop stolen with P12 imported in browser | P12 password at import time + OS keychain user-auth gating; short TTL (90 days default). **Feature 31 shipped**: admin revokes the cert via `POST /admin/operator-certs/{serial}/revoke`; the coordinator rejects the serial at client-cert middleware AND publishes a signed CRL via `GET /admin/ca/crl` for Nginx-terminated deployments. See §9.10. |
 | Compromised browser process uses the installed operator cert | Out of scope for mTLS (a network-boundary control). Tracked as [feature 34 — WebAuthn/FIDO2](planned-features/34-webauthn-fido2.md), which moves the signing key to a hardware device requiring physical touch per auth event. |
 | Analytics database compromised; attacker reads JWT subjects (PII) out of a PG dump | **Feature 28 PII mode.** `HELION_ANALYTICS_PII_MODE=hash_actor` writes `sha256(salt \|\| actor)` into every analytics `actor` column instead of the raw subject. Dashboards still group by hash (same actor = same hash); ops learns trends without identity. Audit log remains authoritative for accountability (raw subjects, forever-retained, Badger-backed). |
 | Analytics database fills indefinitely; attacker exploits to DoS / run out of disk | **Feature 28 retention cron — opt-in.** `HELION_ANALYTICS_RETENTION_DAYS` defaults to 0 (disabled) because PG is the intended long-term store. Operators who want retention set a positive value; the cron prunes every feature-28 table EXCEPT `job_log_entries` (PG is the authoritative log home, see §9.7). Audit log in BadgerDB is untouched regardless. |
@@ -1297,9 +1297,13 @@ What mTLS does NOT solve:
   a network-boundary control, not an in-browser one. Tracked as
   [feature 34 — WebAuthn/FIDO2](planned-features/34-webauthn-fido2.md),
   which moves the key to a hardware device requiring physical touch.
-- **Revocation.** Cert rotation is TTL-based today (90 days by
-  default). Explicit revocation (CRL or OCSP) is tracked as
-  [feature 31](planned-features/31-cert-revocation-crl-ocsp.md).
+- **Revocation** — **feature 31 shipped**. Admins revoke a cert
+  with `POST /admin/operator-certs/{serial}/revoke`; the
+  coordinator refuses the revoked serial at middleware time
+  (401 in `on` tier, allowed-but-audited in `warn`) AND
+  publishes a signed CRL at `GET /admin/ca/crl` for
+  Nginx-terminated deployments. See §9.10 for the full
+  playbook.
 - **Cert issuance UX.** CLI is the shipping interface; a dashboard-
   based admin issuance action is tracked as
   [feature 32](planned-features/32-web-cert-issuance-ui.md).
@@ -1355,6 +1359,128 @@ roles:
   fires first, those chunks are lost — same as today. An
   operator running a cluster without durable PG is opting into
   Badger's TTL as the retention ceiling.
+
+### 9.10 Operator-cert revocation (feature 31)
+
+Feature 27 ships TTL-based operator certs (default 90 days).
+Without revocation, a leaked PKCS#12 file is usable until
+expiry. Feature 31 closes that gap with an append-only
+revocation set + admin endpoint + signed CRL.
+
+### Endpoints
+
+```
+POST /admin/operator-certs/{serial}/revoke
+  body: {"reason": "<required>", "common_name": "<optional>"}
+  → 201 Created (new) | 200 OK (idempotent repeat)
+
+GET  /admin/operator-certs/revocations
+  → {"revocations": [...], "total": N}
+
+GET  /admin/ca/crl
+  → PEM-encoded X.509 CRL, signed by the CA
+```
+
+All three routes are admin-only (feature 37 ActionAdmin). The
+CRL export sets `Content-Type: application/x-pem-file` so
+browser fetches save it verbatim.
+
+### Verification hook
+
+After the TLS handshake verifies the chain,
+`clientCertMiddleware` extracts the peer's serial and queries
+the revocation set (O(1) in-memory lookup). A revoked cert:
+
+- **`on` tier**: request is rejected 401 with body
+  `"client certificate is revoked"`. `EventOperatorCertRevokedUsed`
+  audit event records the serial, CN, remote addr, and
+  `"enforced": true`.
+- **`warn` tier**: request proceeds WITHOUT a stamped
+  Operator principal — the request is treated as cert-less,
+  so feature 37 authz refuses any operator-scoped action. The
+  event is still recorded (no `enforced` flag) plus a second
+  `EventOperatorCertMissing` with `reason: "revoked_cert_treated_as_certless"`.
+
+### Safety properties
+
+- **Append-only.** The store exposes no Delete primitive. An
+  "unrevoke" is a NEW cert issuance, not a deletion of the
+  revocation record. Revocation records persist forever
+  (TTL 0) — they're part of the cluster's audit history.
+- **Idempotent revoke.** Re-posting the same serial returns
+  the ORIGINAL record (with whatever reason the first call
+  supplied) + `"idempotent": true`. A panicked operator
+  double-clicking the button doesn't produce duplicate audit
+  entries, and the reason string stays stable for post-
+  incident review.
+- **Audit-before-response.** The admin endpoint writes the
+  audit event BEFORE sending the response body. A downed
+  audit sink fails the request with 500 — we fail closed on
+  accountability, not on confidentiality.
+- **O(1) hot-path lookup.** `IsRevoked` is called on every
+  authenticated request in `warn`/`on` tiers. The in-memory
+  cache guarantees a map-lookup under RWMutex without a
+  Badger round-trip.
+- **Persistent truth.** Every revoke writes through Badger
+  first; the in-memory cache is rebuilt from Badger at
+  coordinator startup. No revocation is RAM-only.
+- **Defensive serial normalisation.** `abcd`, `ABCD`,
+  `0xabcd`, and `  AbCd\n` all address the same record.
+  Case / prefix / whitespace mismatches between issuance
+  audit lines and admin revoke requests don't cause missed
+  enforcement.
+- **Nginx-terminated deployments.** The CRL export is
+  designed for Nginx's `ssl_crl` directive. The coordinator
+  signs + publishes; operators point Nginx at the file (or
+  reload via a cron that fetches the endpoint). Nginx
+  rejects revoked certs at the TLS handshake — requests with
+  revoked certs never reach the coordinator. As belt-and-
+  braces, the coordinator ALSO accepts
+  `X-SSL-Client-Serial` from loopback peers and applies the
+  same revocation check when that header is present.
+
+### Operator playbook
+
+```bash
+# Revoke a leaked cert.
+curl -X POST https://helion.example.com/admin/operator-certs/deadbeef/revoke \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "laptop stolen 2026-04-20", "common_name": "alice@ops"}'
+
+# Export CRL for Nginx.
+curl -H "Authorization: Bearer $ADMIN_JWT" \
+     https://helion.example.com/admin/ca/crl \
+     -o /etc/nginx/helion-ca.crl
+nginx -s reload
+
+# List current revocations.
+curl -H "Authorization: Bearer $ADMIN_JWT" \
+     https://helion.example.com/admin/operator-certs/revocations | jq
+```
+
+### Known limitations
+
+- **Accidental self-revoke lockout.** An admin who revokes
+  their OWN current cert in `on` tier cannot then reach the
+  admin endpoint to fix it. Recovery path: use the
+  JWT-only admin auth via a coordinator-console container
+  (no client cert presented, so revocation doesn't apply).
+  Document in the operator-cert-guide.
+- **Nginx CRL staleness.** Nginx reloads `ssl_crl` on file
+  change. A revocation pushed to Nginx via cron has up to
+  `cron_interval` of delay. The coordinator-side check
+  (direct TLS or loopback `X-SSL-Client-Serial`) closes
+  this window for requests that reach the coordinator.
+- **No OCSP.** Full RFC 6960 OCSP responder is explicitly
+  out of scope — the CRL path covers 95% of operator needs.
+  Deferred.
+- **No cross-coordinator sync.** Helion is single-coordinator
+  today; a multi-coordinator deployment would need a shared
+  revocation store (out of scope until Helion gains HA).
+
+See [`docs/planned-features/implemented/31-cert-revocation-crl-ocsp.md`](planned-features/implemented/31-cert-revocation-crl-ocsp.md)
+for the slice reconciliation and test inventory.
 
 ---
 

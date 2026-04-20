@@ -72,6 +72,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/groups"
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
 	"github.com/DyeAllPies/Helion-v2/internal/ratelimit"
+	"github.com/DyeAllPies/Helion-v2/internal/pqcrypto"
 	"github.com/DyeAllPies/Helion-v2/internal/registry"
 	"github.com/DyeAllPies/Helion-v2/internal/secretstore"
 )
@@ -179,6 +180,39 @@ type Server struct {
 	// admin so the endpoint is honestly unavailable rather
 	// than silently succeeding with no work done.
 	secretAdmin SecretStoreAdmin
+
+	// Feature 31 — operator-cert revocation store. Nil when
+	// the coordinator wasn't given a Badger-backed store
+	// (dev deployments without the persister). Populated via
+	// SetRevocationStore; also registers the admin endpoints
+	// POST /admin/operator-certs/{serial}/revoke and
+	// GET /admin/operator-certs/revocations.
+	revocationStore RevocationStoreIface
+
+	// Feature 31 — CRL signer (implemented by *pqcrypto.CA).
+	// Separate from revocationStore because the CA handle is
+	// already known at NewServer time (via SetOperatorCA);
+	// the store is added later. Handler consults both.
+	crlSigner CRLSigner
+}
+
+// RevocationStoreIface is the narrow read-side interface the
+// revocation handlers need. Implemented by
+// *pqcrypto.BadgerRevocationStore. Declared in the api
+// package so tests can plug in a fake without pulling the
+// full Badger type.
+type RevocationStoreIface interface {
+	Revoke(ctx context.Context, rec pqcrypto.RevocationRecord) (*pqcrypto.RevocationRecord, bool, error)
+	IsRevoked(serialHex string) bool
+	Get(ctx context.Context, serialHex string) (*pqcrypto.RevocationRecord, error)
+	List(ctx context.Context) ([]pqcrypto.RevocationRecord, error)
+}
+
+// CRLSigner is the subset of *pqcrypto.CA the CRL-export
+// endpoint needs. Keeps the dependency narrow so tests can
+// fake the sign step.
+type CRLSigner interface {
+	CreateCRLPEM(recs []pqcrypto.RevocationRecord, nextUpdate time.Time) ([]byte, error)
 }
 
 // SecretStoreAdmin is the narrow interface the feature-30
@@ -204,6 +238,57 @@ type SecretStoreAdmin interface {
 // compile-time safety that AUDIT H2 restored.
 func (s *Server) DisableAuth() {
 	s.disableAuth = true
+}
+
+// SetRevocationStore wires the feature-31 operator-cert
+// revocation store. Routes:
+//
+//   POST /admin/operator-certs/{serial}/revoke — admin only
+//   GET  /admin/operator-certs/revocations     — admin only
+//   GET  /admin/ca/crl                         — admin only
+//
+// The CRL export additionally requires a CRLSigner (injected
+// via SetCRLSigner); the /crl route is only registered when
+// both the store AND the signer are present so a
+// misconfigured deployment returns a clean 404 instead of a
+// 503 on every CRL fetch.
+//
+// Clientside: when a revocation store is wired, the
+// clientCertMiddleware consults IsRevoked(serial) on every
+// cert-presenting request and treats revoked certs as cert-
+// less (403 in `on` tier, allowed-but-audited in `warn`).
+// The middleware does this lookup even when no rotate routes
+// were registered — the store reference alone is enough.
+// Call order invariant: SetCRLSigner must run BEFORE
+// SetRevocationStore. Otherwise the CRL route never registers
+// (we can't re-register a pattern on net/http.ServeMux
+// without a panic). The coordinator's main.go matches this
+// order; documenting here so refactors don't break it.
+func (s *Server) SetRevocationStore(rs RevocationStoreIface) {
+	s.revocationStore = rs
+	if rs == nil {
+		return
+	}
+	s.mux.HandleFunc("POST /admin/operator-certs/{serial}/revoke",
+		s.authMiddleware(s.adminMiddleware(s.handleRevokeOperatorCert)))
+	s.mux.HandleFunc("GET /admin/operator-certs/revocations",
+		s.authMiddleware(s.adminMiddleware(s.handleListRevocations)))
+	if s.crlSigner != nil {
+		s.mux.HandleFunc("GET /admin/ca/crl",
+			s.authMiddleware(s.adminMiddleware(s.handleGetCRL)))
+	}
+}
+
+// SetCRLSigner wires the CA-backed CRL signer used by the
+// /admin/ca/crl export endpoint. Separate setter from
+// SetOperatorCA because the CA happens to satisfy both the
+// issuer and signer interfaces; callers who already have a
+// *pqcrypto.CA call both setters with the same value.
+//
+// MUST be called BEFORE SetRevocationStore — see the comment
+// above SetRevocationStore for why.
+func (s *Server) SetCRLSigner(signer CRLSigner) {
+	s.crlSigner = signer
 }
 
 // SetSecretStoreAdmin wires the feature-30 rotation endpoint.

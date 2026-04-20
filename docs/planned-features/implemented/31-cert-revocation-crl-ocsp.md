@@ -1,7 +1,7 @@
 # Feature: Cert revocation via CRL or OCSP
 
 **Priority:** P2
-**Status:** Pending
+**Status:** Implemented (2026-04-20)
 **Affected files:**
 `internal/pqcrypto/ca.go` (new `RevokeOperatorCert` +
 persistence of revoked-serial set),
@@ -160,5 +160,118 @@ tolerance.
 
 ## Implementation status
 
-_Not started. Promoted from feature 27's "Deferred / out of scope"
-on 2026-04-19._
+_Implemented 2026-04-20._
+
+### What shipped
+
+- `internal/pqcrypto/revocation.go`:
+  - `RevocationRecord` (SerialHex, CommonName, RevokedAt,
+    RevokedBy, Reason).
+  - `RevocationStore` interface + `BadgerRevocationStore`
+    implementation backed by the shared coordinator Badger
+    DB under `crypto/revoked/` prefix. O(1) in-memory
+    cache rebuilt from Badger at boot; every Revoke writes
+    through.
+  - Append-only semantics (no Delete primitive); idempotent
+    Revoke returns the original record with isNew=false.
+  - Defensive serial normalisation
+    (`NormalizeSerialHex` — trim, strip `0x`, lowercase,
+    hex-digit validate, 64-char cap).
+  - Reason trimming + 512-byte cap at write time.
+  - `CA.CreateCRLPEM` — signs a PEM-encoded X.509 CRL using
+    the CA's ecdsa private key + cert. Populates both the
+    modern `RevocationListEntry` and the legacy
+    `RevokedCertificate` fields. Empty-list CRL still signs
+    cleanly so consumers fetching before the first revoke
+    don't error.
+
+- `internal/audit/logger.go`:
+  - `EventOperatorCertRevoked` — admin used the revoke
+    endpoint; carries serial_hex, common_name, revoked_by,
+    reason, idempotent.
+  - `EventOperatorCertRevokedUsed` — a revoked cert was
+    presented at the TLS verification hook; carries
+    serial_hex, common_name, remote, path, enforced
+    (bool, true only in `on` tier).
+
+- `internal/api/handlers_revocation.go` — three admin
+  endpoints:
+    - `POST /admin/operator-certs/{serial}/revoke` (201 on
+      new, 200 on idempotent, 400 on invalid serial or
+      missing reason, 403 on non-admin).
+    - `GET /admin/operator-certs/revocations` (list).
+    - `GET /admin/ca/crl` (signed PEM, 503 if no signer
+      wired). Audit-before-response on the write endpoint.
+
+- `internal/api/operator_cert.go` — `extractVerifiedCN`
+  renamed to `extractVerifiedPeer` and extended to return
+  the serial hex. The direct-TLS path reads the leaf's
+  `SerialNumber`; the Nginx loopback-proxy path honours an
+  optional `X-SSL-Client-Serial` header for belt-and-braces
+  enforcement. `clientCertMiddleware` consults
+  `revocationStore.IsRevoked(serial)` after the chain-verify
+  step. `on` tier → 401 + `EventOperatorCertRevokedUsed`;
+  `warn` tier → proceed WITHOUT stamping the Operator
+  principal + double-audit (revoked-used AND cert-missing).
+
+- `internal/api/server.go`:
+  - `RevocationStoreIface` + `CRLSigner` interfaces.
+  - `SetRevocationStore(iface)` registers POST revoke +
+    GET list + (if signer wired) GET CRL.
+  - `SetCRLSigner(signer)` — MUST be called before
+    SetRevocationStore (net/http.ServeMux panics on
+    duplicate-pattern registration).
+
+- `cmd/helion-coordinator/main.go` — constructs the
+  Badger-backed revocation store, wires it as both CRL
+  signer (`bundle.CA`) and revocation store.
+  Failure to load the store logs at Error but doesn't block
+  coordinator boot; the endpoints simply remain
+  unregistered in that case.
+
+### Deviations from plan
+
+- **OCSP responder** deferred. The spec explicitly listed it
+  as optional; 95% of operator needs are covered by CRL.
+  A future slice can add `/ocsp` without touching the
+  revocation store.
+- **X-SSL-Client-Serial** from loopback proxy — the spec's
+  Nginx-terminated scenario assumes Nginx does CRL
+  enforcement via `ssl_crl`. We added optional serial
+  forwarding as defence-in-depth: operators who configure
+  Nginx to send `ssl_client_serial` into a loopback-only
+  header get a second revocation check at the coordinator.
+  Not required; Nginx's `ssl_crl` alone is sufficient.
+
+### Tests added
+
+- `internal/pqcrypto/revocation_test.go`:
+  - Round-trip (Revoke + IsRevoked + Get).
+  - Idempotent Revoke preserves the original record's
+    RevokedBy + Reason.
+  - Reload from disk (simulated restart).
+  - Reject bad serials (empty, non-hex, over-length).
+  - Missing Get returns ErrRevocationNotFound.
+  - List ordering (newest first).
+  - NormalizeSerialHex table test (hex, 0x prefix, mixed
+    case, whitespace, invalid).
+  - Reason capped at 512 bytes.
+  - CreateCRLPEM verifies against the CA cert.
+  - CreateCRLPEM rejects backwards nextUpdate.
+  - Empty-list CRL still signs cleanly.
+  - SerialHexFromBigInt round-trip with NormalizeSerialHex.
+
+- `internal/api/handlers_revocation_test.go`:
+  - Revoke happy path (201 on new, 200 on idempotent).
+  - Non-admin → 403.
+  - Reason required → 400.
+  - Invalid serial → 400.
+  - EventOperatorCertRevoked audit emission.
+  - List endpoint admin-only.
+  - CRL export returns signed PEM that verifies against
+    the real CA.
+  - CRL export non-admin → 403.
+  - clientCertMiddleware rejects revoked serial in `on`
+    tier + emits EventOperatorCertRevokedUsed.
+  - clientCertMiddleware passes valid (non-revoked) cert
+    through.

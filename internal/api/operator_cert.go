@@ -47,6 +47,7 @@ import (
 
 	"github.com/DyeAllPies/Helion-v2/internal/audit"
 	"github.com/DyeAllPies/Helion-v2/internal/auth"
+	"github.com/DyeAllPies/Helion-v2/internal/pqcrypto"
 	"github.com/DyeAllPies/Helion-v2/internal/principal"
 
 	pkcs12 "software.sslmate.com/src/go-pkcs12"
@@ -237,8 +238,54 @@ func (s *Server) clientCertMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		cn, verified := s.extractVerifiedCN(r)
+		cn, serialHex, verified := s.extractVerifiedPeer(r)
 		if verified {
+			// Feature 31 — reject revoked certs. The
+			// verification chain trusted the cert (signed by
+			// our CA, in-date); revocation is a separate
+			// post-handshake gate. Serial-less paths (the
+			// Nginx loopback-proxy flow) skip this check;
+			// Nginx itself is expected to consult `ssl_crl`.
+			if serialHex != "" && s.revocationStore != nil && s.revocationStore.IsRevoked(serialHex) {
+				if s.audit != nil {
+					details := map[string]interface{}{
+						"serial_hex":  serialHex,
+						"common_name": cn,
+						"remote":      r.RemoteAddr,
+						"path":        r.URL.Path,
+					}
+					if s.clientCertTier == clientCertOn {
+						details["enforced"] = true
+					}
+					if err := s.audit.Log(r.Context(), audit.EventOperatorCertRevokedUsed, actorFromContext(r.Context()), details); err != nil {
+						// Security-critical — elevate.
+						logAuditErr(true, "operator_cert_revoked_used", err)
+					}
+				}
+				if s.clientCertTier == clientCertOn {
+					writeError(w, http.StatusUnauthorized,
+						"client certificate is revoked")
+					return
+				}
+				// `warn` tier: fall through WITHOUT stamping
+				// the Operator principal. The request proceeds
+				// as if cert-less so downstream authz refuses
+				// whatever operator actions the cert would
+				// have unlocked. We also emit the standard
+				// cert-missing event so dashboards see the
+				// degraded posture.
+				if s.audit != nil {
+					if err := s.audit.Log(r.Context(), audit.EventOperatorCertMissing, actorFromContext(r.Context()), map[string]interface{}{
+						"path":        r.URL.Path,
+						"remote_addr": r.RemoteAddr,
+						"reason":      "revoked_cert_treated_as_certless",
+					}); err != nil {
+						logAuditErr(false, "operator_cert_missing", err)
+					}
+				}
+				next(w, r)
+				return
+			}
 			ctx := context.WithValue(r.Context(), operatorCNKey, cn)
 			// Feature 35 — stamp a typed Operator principal into
 			// the context. authMiddleware runs AFTER this and
@@ -285,17 +332,29 @@ func (s *Server) clientCertMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// extractVerifiedCN returns (cn, true) when the caller presented a
-// verified client cert via either direct TLS (r.TLS) or
-// loopback-only Nginx proxy headers. Returns ("", false) otherwise.
-func (s *Server) extractVerifiedCN(r *http.Request) (string, bool) {
+// extractVerifiedPeer returns (cn, serialHex, true) when the
+// caller presented a verified client cert via either direct
+// TLS (r.TLS) or loopback-only Nginx proxy headers. Returns
+// ("", "", false) otherwise.
+//
+// serialHex is populated only on the direct-TLS path (where
+// the leaf cert is available and carries the SerialNumber).
+// Under the Nginx proxy flow the header set doesn't include
+// a serial today — the proxy's own `ssl_crl` enforcement is
+// the revocation gate in that deployment shape; an operator
+// can additionally set `ssl_client_serial` into a trusted
+// `X-SSL-Client-Serial` header to enable the coordinator-
+// side check, but we don't require it.
+func (s *Server) extractVerifiedPeer(r *http.Request) (cn, serialHex string, ok bool) {
 	// Direct TLS path. crypto/tls populates PeerCertificates only
 	// when ClientAuth was VerifyClientCertIfGiven /
 	// RequireAndVerifyClientCert AND a cert actually verified.
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		leaf := r.TLS.PeerCertificates[0]
 		if leaf.Subject.CommonName != "" {
-			return leaf.Subject.CommonName, true
+			return leaf.Subject.CommonName,
+				pqcrypto.SerialHexFromBigInt(leaf.SerialNumber),
+				true
 		}
 	}
 	// Proxy path. Only trust X-SSL-Client-* when the immediate peer
@@ -307,11 +366,23 @@ func (s *Server) extractVerifiedCN(r *http.Request) (string, bool) {
 			// (Nginx's own formatting). Extract the CN portion.
 			dn := r.Header.Get("X-SSL-Client-S-DN")
 			if cn := cnFromDN(dn); cn != "" {
-				return cn, true
+				// X-SSL-Client-Serial is optional defence in
+				// depth over the proxy's own `ssl_crl`. When
+				// present, the coordinator enforces its
+				// revocation set too. Serial is normalised
+				// into the lowercase-hex form the store keys
+				// on.
+				rawSerial := strings.TrimSpace(r.Header.Get("X-SSL-Client-Serial"))
+				if rawSerial != "" {
+					if norm, err := pqcrypto.NormalizeSerialHex(rawSerial); err == nil {
+						return cn, norm, true
+					}
+				}
+				return cn, "", true
 			}
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // isLoopbackRemote reports whether the request.RemoteAddr parses to

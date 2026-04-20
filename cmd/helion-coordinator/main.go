@@ -51,6 +51,7 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 	groupspkg "github.com/DyeAllPies/Helion-v2/internal/groups"
 	registrypkg "github.com/DyeAllPies/Helion-v2/internal/registry"
+	"github.com/DyeAllPies/Helion-v2/internal/pqcrypto"
 	"github.com/DyeAllPies/Helion-v2/internal/secretstore"
 	"github.com/DyeAllPies/Helion-v2/internal/grpcserver"
 	"github.com/DyeAllPies/Helion-v2/internal/logstore"
@@ -467,6 +468,24 @@ func main() {
 	// confusing 503.
 	if persister.KeyRing() != nil {
 		apiSrv.SetSecretStoreAdmin(persister)
+	}
+
+	// Feature 31 — operator-cert revocation. Backed by the
+	// shared BadgerDB; CRL signer is the same CA used to
+	// issue operator certs. CRL signer MUST be set BEFORE
+	// the revocation store so the /admin/ca/crl route
+	// registers (see SetRevocationStore comment). A nil
+	// store (rare — initial Scan failed) is logged and the
+	// coordinator keeps booting; revocation endpoints are
+	// simply absent in that mode.
+	revStore, err := pqcrypto.NewBadgerRevocationStore(ctx, persister)
+	if err != nil {
+		log.Error("failed to load operator-cert revocation store — revocation endpoints will be disabled",
+			slog.Any("err", err))
+	} else {
+		apiSrv.SetCRLSigner(bundle.CA)
+		apiSrv.SetRevocationStore(revStore)
+		log.Info("operator-cert revocation store loaded")
 	}
 
 	// Feature 25 — per-node env-denylist overrides. Optional. If set,

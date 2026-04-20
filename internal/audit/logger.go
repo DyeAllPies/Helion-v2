@@ -124,6 +124,26 @@ const (
 	EventOperatorCertReject  = "operator_cert_reject"
 	EventOperatorCertMissing = "operator_cert_missing"
 
+	// Feature 31 — operator-cert revocation.
+	//
+	//   EventOperatorCertRevoked fires when an admin invalidates
+	//   a specific operator-cert serial via
+	//   POST /admin/operator-certs/{serial}/revoke. Detail
+	//   carries serial_hex, common_name (at revocation time),
+	//   revoked_by (Principal ID), reason, idempotent (bool —
+	//   true when the same serial was revoked previously and
+	//   the endpoint is returning the existing record).
+	//
+	//   EventOperatorCertRevokedUsed fires when a client cert
+	//   that chains to the CA is presented AND its serial is
+	//   in the revocation set. In `warn` tier the request is
+	//   allowed but the event is recorded; in `on` tier the
+	//   request is refused 401 and the event still lands.
+	//   Detail carries serial_hex, common_name (from the cert
+	//   subject), remote (peer address), enforced (bool).
+	EventOperatorCertRevoked     = "operator_cert_revoked"
+	EventOperatorCertRevokedUsed = "operator_cert_revoked_used"
+
 	// Feature 37 — authorization-policy denials.
 	//
 	//   EventAuthzDeny — fires on every 403 emitted by the
