@@ -56,7 +56,7 @@ operational procedures.
 | Admin operator needs to recover a declared secret value (forgot, debugging, credential rotation) | **Feature 26 reveal-secret endpoint.** `POST /admin/jobs/{id}/reveal-secret` — admin-only, rate-limited (1/5s, burst 3), mandatory audit `reason`, audit-before-response fail-closed, refuses non-declared keys. See §9.4. |
 | Attacker probes "does job X have a secret named Y?" via reveal-secret 404s | Every reject is itself audited as `secret_reveal_reject` with the target job_id + key + reason-for-reject. Enumeration shows up loud in the audit stream. |
 | Attacker with filesystem access reads secret plaintext from BadgerDB | **Acknowledged gap.** Feature 26 redacts in-transit and at-the-API; the underlying Badger record still holds plaintext because the runtime needs it to dispatch. Tracked as [feature 30 — encrypted env storage](planned-features/30-encrypted-env-storage.md). |
-| Job prints its own `$HELION_TOKEN` to stdout → captured by logstore → visible via `GET /jobs/{id}/logs` | **Acknowledged gap.** Tracked as [feature 29 — stdout secret scrubbing](planned-features/29-stdout-secret-scrubbing.md). Write-path scrubber that replaces declared secret VALUES with `[REDACTED]` as chunks land. |
+| Job prints its own `$HELION_TOKEN` to stdout → captured by logstore → visible via `GET /jobs/{id}/logs` | **Feature 29 shipped.** `logstore.ScrubbingStore` decorator substitutes every declared secret VALUE with `[REDACTED]` before chunks land in BadgerDB; response-path redactor on `GET /jobs/{id}/logs` repeats the substitution as belt-and-braces; the feature-28 analytics mirror (PG sink) scrubs the same bytes before publish so PG cannot become a side-channel. Per-job RBAC now gates log reads too. See §9.5. |
 | Admin JWT leaks via clipboard / screenshare / browser extension → remote attacker submits jobs from the internet | **Feature 27 optional.** `HELION_REST_CLIENT_CERT_REQUIRED=on` requires the caller to also present a client certificate verified against the coordinator's CA. Cert-less requests are refused at 401 before auth middleware even runs. Staged rollout via `warn` tier. See §9.6. |
 | Attacker forges `X-SSL-Client-Verify: SUCCESS` to bypass mTLS | Coordinator honours those headers ONLY from loopback (127.0.0.1 / ::1). Any non-loopback peer carrying those headers is treated as if no cert was presented. |
 | Operator laptop stolen with P12 imported in browser | P12 password at import time + OS keychain user-auth gating. Not iron-clad; mitigation is short TTL (90 days default) and revocation follow-up [feature 31](planned-features/31-cert-revocation-crl-ocsp.md). |
@@ -1002,10 +1002,75 @@ Safety properties:
   backup remains a key-compromise event regardless of this
   endpoint. [Feature 30](planned-features/30-encrypted-env-storage.md)
   tracks at-rest encryption.
-- **stdout leaks are out of scope.** If a job prints its own
-  `$HELION_TOKEN` to stdout, the coordinator's logstore captures
-  it. [Feature 29](planned-features/29-stdout-secret-scrubbing.md)
-  tracks the write-path scrubber.
+- **stdout leaks are mitigated by feature 29.** If a job prints
+  its own `$HELION_TOKEN` to stdout, the coordinator's log
+  store substitutes the plaintext value with `[REDACTED]`
+  before persisting. See §9.5.
+
+### 9.5 Log scrubbing on the write path (feature 29)
+
+Feature 26 closes "operator reads env via GET /jobs/{id}". It
+does not close "operator reads the job's stdout/stderr and
+finds the plaintext there because the job printed it":
+
+```python
+print(f"Auth: Bearer {os.environ['HF_TOKEN']}")  # common debug
+```
+
+Feature 29 wraps the log store in a substitution decorator
+(`logstore.ScrubbingStore`) that replaces every occurrence of
+every declared secret VALUE with the literal `[REDACTED]`
+before the chunk lands in BadgerDB. A second pass runs at
+response-build time on `GET /jobs/{id}/logs` as belt-and-braces
+against chunks that landed before the decorator was wired
+(rolling deploy edge case).
+
+Safety properties:
+
+- **Same substitution at both sinks.** The Badger append path
+  is decorated; the feature-28 analytics mirror (`events.Bus`
+  → PG) is scrubbed in the gRPC `StreamLogs` handler before
+  publish. PG cannot become a side-channel around the
+  decorator — both sinks see the same redacted bytes.
+- **Empty-value DoS guard.** A secret declared with an empty
+  value would otherwise match every byte position
+  (`bytes.ReplaceAll` semantics) and inflate the chunk
+  unboundedly. The scrubber skips zero-length secrets.
+- **Idempotent.** Running the scrubber twice produces the
+  same output, so layering the decorator AND the response-
+  path redactor does not double-redact.
+- **Fail-open on store lookup.** A secrets-lookup error (job
+  terminal + evicted) returns `(nil, false)` — no scrubbing,
+  but the chunk still persists. We prefer "not dropping logs"
+  over a perfect redact; the response-path pass gives a
+  second chance.
+- **Per-job RBAC on `GET /jobs/{id}/logs`.** Feature 37's
+  authz check now gates log reads the same as job reads.
+  Pre-feature-29 this endpoint had no per-job RBAC; any
+  authenticated caller could fetch any job's log chunks.
+
+Known limitations:
+
+- **Chunk-boundary miss.** If a secret value lands split
+  across two write chunks (rare; node runtimes flush
+  line-buffered), neither chunk matches on its own. The
+  response-path redactor catches this at GET time if it
+  concatenates entries first — current implementation
+  scrubs per-chunk, so the boundary case remains. Operators
+  worried about this should use structured JSON env delivery
+  (the split-point is stable).
+- **Malicious transform.** A script that base64-encodes or
+  xors its own token before printing is not caught; that
+  falls under "operator chose to run a malicious job", which
+  the coordinator does not claim to sandbox against.
+- **Regex-based detection of undeclared secrets** (e.g. AWS
+  access key IDs by shape) is explicitly out of scope — fancy
+  regexes false-positive on legitimate output and drag
+  operator trust down. Declare the secret at submit time; the
+  scrubber takes it from there.
+
+See [`docs/planned-features/implemented/29-stdout-secret-scrubbing.md`](planned-features/implemented/29-stdout-secret-scrubbing.md)
+for the slice reconciliation and test inventory.
 
 ### 9.5 Dry-run preflight (feature 24)
 

@@ -106,7 +106,7 @@ func main() {
 
 	// ── Business logic ────────────────────────────────────────────────────
 	// ── Job log storage ───────────────────────────────────────────────────
-	logStore := logstore.NewBadgerLogStore(persister, 7*24*time.Hour)
+	rawLogStore := logstore.NewBadgerLogStore(persister, 7*24*time.Hour)
 	log.Info("job log store initialized", slog.Duration("retention", 7*24*time.Hour))
 
 	// ── Event bus ─────────────────────────────────────────────────────────
@@ -116,6 +116,39 @@ func main() {
 	registry := cluster.NewRegistry(persister, heartbeatInterval, log)
 	jobs := cluster.NewJobStore(persister, log)
 	jobs.SetEventBus(eventBus)
+
+	// Feature 29 — wrap the raw log store in a ScrubbingStore
+	// that consults the JobStore for each incoming chunk's
+	// declared SecretKeys and replaces every occurrence of
+	// their plaintext values with "[REDACTED]" before the
+	// chunk lands in BadgerDB. A job prints its own
+	// $HELION_TOKEN to stdout → the operator viewing the
+	// log never sees the plaintext.
+	//
+	// The same SecretsLookup is also handed to the gRPC
+	// server so the feature-28 analytics mirror (events.Bus
+	// → PG) sees the redacted bytes — PG must not become a
+	// side-channel around the Badger scrubbing.
+	secretsLookup := func(jobID string) ([]string, bool) {
+		j, err := jobs.Get(jobID)
+		if err != nil {
+			return nil, false
+		}
+		if len(j.SecretKeys) == 0 {
+			return nil, false
+		}
+		out := make([]string, 0, len(j.SecretKeys))
+		for _, k := range j.SecretKeys {
+			if v, ok := j.Env[k]; ok && v != "" {
+				out = append(out, v)
+			}
+		}
+		if len(out) == 0 {
+			return nil, false
+		}
+		return out, true
+	}
+	logStore := logstore.NewScrubbingStore(rawLogStore, secretsLookup)
 	workflows := cluster.NewWorkflowStore(persister, log)
 	workflows.SetEventBus(eventBus)
 
@@ -268,7 +301,8 @@ func main() {
 		grpcserver.WithRetryChecker(jobs),
 		grpcserver.WithLogStore(logStore),
 		grpcserver.WithServiceRegistry(serviceRegistry),
-		grpcserver.WithEventBus(eventBus), // feature 28
+		grpcserver.WithEventBus(eventBus),            // feature 28
+		grpcserver.WithSecretsLookup(secretsLookup), // feature 29
 	)
 	if err != nil {
 		log.Error("create gRPC server", slog.Any("err", err))

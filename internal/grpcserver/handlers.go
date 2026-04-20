@@ -622,10 +622,27 @@ func (s *Server) StreamLogs(stream grpc.ClientStreamingServer[pb.LogChunk, pb.Ac
 		}
 
 		if s.logStore != nil && len(chunk.Data) > 0 {
+			// Feature 29 — scrub secret values BEFORE both
+			// sinks see the chunk. The logstore is decorated
+			// with ScrubbingStore, so Append would scrub on
+			// its own, but the eventBus.Publish path is a
+			// second sink (feeds PG via feature 28's
+			// analytics pipeline) that bypasses the
+			// decorator. Scrubbing here once, then feeding
+			// the scrubbed bytes to both, keeps the two
+			// sinks in sync. The decorator's Append remains
+			// a defence-in-depth pass (idempotent against
+			// already-redacted content).
+			data := chunk.Data
+			if s.secretsLookup != nil {
+				if secrets, ok := s.secretsLookup(chunk.JobId); ok && len(secrets) > 0 {
+					data = logstore.Scrub(chunk.Data, secrets)
+				}
+			}
 			entry := logstore.LogEntry{
 				JobID: chunk.JobId,
 				Seq:   chunk.Seq,
-				Data:  string(chunk.Data),
+				Data:  string(data),
 			}
 			if err := s.logStore.Append(stream.Context(), entry); err != nil {
 				s.log.Warn("failed to store log chunk",

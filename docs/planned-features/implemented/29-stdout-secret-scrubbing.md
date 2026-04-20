@@ -1,7 +1,7 @@
 # Feature: Job stdout/stderr secret scrubbing
 
 **Priority:** P2
-**Status:** Pending
+**Status:** Implemented (2026-04-20)
 **Affected files:**
 `internal/logstore/` (new scrubber layer on the write path),
 `internal/nodeserver/` (optional: reject submissions that wire
@@ -139,5 +139,80 @@ cheap and defence-in-depth.
 
 ## Implementation status
 
-_Not started. Promoted from feature 26's "Not attempting" section
-on 2026-04-19 so the gap has a planning target._
+_Implemented 2026-04-20._
+
+### What shipped
+
+- `internal/logstore/scrub.go` — pure `Scrub(chunk, secrets)`
+  helper + `ScrubbingStore` decorator + `SecretsLookup`
+  function type. Empty-value DoS guard, zero-allocation
+  fast path when no secret occurs in the chunk, idempotent
+  double-scrub.
+- Coordinator wiring (`cmd/helion-coordinator/main.go`):
+  the raw `BadgerLogStore` is wrapped in `ScrubbingStore`
+  with a JobStore-backed `SecretsLookup`. Same lookup is
+  plumbed into `grpcserver.WithSecretsLookup` so the
+  feature-28 `events.Bus → PG` mirror publishes redacted
+  bytes too — PG cannot become a side-channel around the
+  Badger scrub.
+- `internal/api/handlers_logs.go` — response-path
+  redactor on `GET /jobs/{id}/logs`. Applied as a second
+  pass against chunks that landed before the decorator was
+  wired (rolling-deploy edge case). Idempotent against
+  already-scrubbed content.
+- `internal/api/handlers_logs.go` also closes a
+  feature-37 regression: `GET /jobs/{id}/logs` now gates
+  on `authz.Allow(ActionRead, jobResource)`. Pre-29 the
+  endpoint had no per-job RBAC and any authenticated
+  caller could read any job's logs — a pre-existing gap
+  from before features 36/37, not a new weakness, but the
+  log-read path was the one remaining unchecked leaf now
+  that features 36/37 had closed the rest of the
+  per-resource surface.
+- `internal/grpcserver/handlers.go` — `StreamLogs` scrubs
+  once at handler-ingress, feeds the redacted bytes to
+  both the Badger append and the bus publish. The
+  `ScrubbingStore` decorator on the Badger side remains as
+  defence-in-depth (idempotent re-scrub).
+
+### Deviations from plan
+
+- **WebSocket `/ws/jobs/{id}/logs` redaction was not wired.**
+  The WS stream handler is a stub that returns
+  `"not yet implemented"` with close code 1001 — there is no
+  live byte path to redact. A future slice that implements
+  real-time streaming will need to call the same
+  `logstore.Scrub` on every frame before fan-out; the helper
+  is already public.
+
+### Tests added
+
+- `internal/logstore/scrub_test.go`:
+  - `TestScrub_SingleValue_ReplacedOnce`
+  - `TestScrub_MultipleValues_AllReplaced`
+  - `TestScrub_ValueNotPresent_NoMutation` — zero-allocation
+    guard on the hot path.
+  - `TestScrub_EmptyValue_Ignored` — empty-value DoS guard.
+  - `TestScrub_EmptyChunk_NoPanic`
+  - `TestScrub_EmptySecrets_PassThrough`
+  - `TestScrub_Idempotent`
+  - `TestScrub_OverlappingValues_DeterministicWinner`
+  - `TestScrubbingStore_Append_UsesLookup` — decorator
+    consults the JobStore-backed lookup and scrubs iff the
+    job declares secrets.
+  - `TestScrubbingStore_NilLookup_Passthrough` — dev-mode
+    wiring without a JobStore does not panic.
+  - `TestScrubbingStore_Get_PassesThrough` — read-side
+    scrubbing is the response-layer's job.
+- `internal/api/handlers_logs_test.go`:
+  - `TestLogs_ScrubbingStore_RedactsSecretOnAppend` — end-
+    to-end write path through the decorator.
+  - `TestLogs_ResponsePath_RedactsLegacyChunks` — response-
+    path pass catches entries written directly to the raw
+    store.
+  - `TestLogs_EndToEnd_SubmitChunkGet` — submit +
+    append + GET: secret never appears in the response.
+  - `TestLogs_NoSecrets_PassesThroughVerbatim` — regular
+    jobs are unaffected.
+  - `TestLogs_RBAC_NonOwnerForbidden` — feature-37
+    regression guard: non-owner 403.

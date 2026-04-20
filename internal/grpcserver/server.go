@@ -118,6 +118,16 @@ type Server struct {
 	// chunks. Set via WithEventBus.
 	eventBus *events.Bus
 
+	// Feature 29 — resolver for per-job secret VALUES. Injected
+	// via WithSecretsLookup; nil means the analytics-mirror
+	// path publishes raw log bytes. Production wires this to
+	// the JobStore-backed resolver so EventBus.Publish carries
+	// the same redacted bytes the Badger logstore persists.
+	// The ScrubbingStore decorator on logStore handles the
+	// Badger append path; this field exists because the bus
+	// publish is a second sink that bypasses the decorator.
+	secretsLookup logstore.SecretsLookup
+
 	log               *slog.Logger
 
 	// Active heartbeat streams: nodeID → done channel.
@@ -192,6 +202,16 @@ func WithServiceRegistry(sr *cluster.ServiceRegistry) Option {
 // gRPC-arriving data into the analytics pipeline.
 func WithEventBus(bus *events.Bus) Option {
 	return func(s *Server) { s.eventBus = bus }
+}
+
+// WithSecretsLookup injects the feature-29 resolver for
+// per-job secret VALUES. StreamLogs uses it to scrub log
+// chunks before publishing them onto the analytics event
+// bus (which ends up in PG). The Badger logstore path is
+// separately decorated with logstore.ScrubbingStore — this
+// option is only for the bus-publish leg.
+func WithSecretsLookup(lookup logstore.SecretsLookup) Option {
+	return func(s *Server) { s.secretsLookup = lookup }
 }
 
 // WithLogger injects a structured logger.
