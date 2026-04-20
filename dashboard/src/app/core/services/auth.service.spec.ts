@@ -4,9 +4,11 @@ import { Router } from '@angular/router';
 import { AuthService } from './auth.service';
 
 /** Build a JWT with a given expiry (unix seconds). Signature is fake — browser doesn't verify. */
-function makeJwt(expSec: number): string {
+function makeJwt(expSec: number, role?: string): string {
   const header  = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).replace(/=/g,'');
-  const payload = btoa(JSON.stringify({ sub: 'root', exp: expSec })).replace(/=/g,'');
+  const payloadObj: { sub: string; exp: number; role?: string } = { sub: 'root', exp: expSec };
+  if (role !== undefined) payloadObj.role = role;
+  const payload = btoa(JSON.stringify(payloadObj)).replace(/=/g,'');
   return `${header}.${payload}.fakesig`;
 }
 
@@ -109,5 +111,59 @@ describe('AuthService', () => {
       const k = localStorage.key(i)!;
       expect(localStorage.getItem(k)).not.toContain(jwt);
     }
+  });
+
+  // ── Feature 32 — role / isAdmin observables ─────────────
+
+  it('userRole$ emits the decoded role claim after login', (done) => {
+    service.login(makeJwt(Math.floor(Date.now() / 1000) + 3600, 'admin'));
+    service.userRole$.subscribe(r => {
+      expect(r).toBe('admin');
+      done();
+    });
+  });
+
+  it('isAdmin$ emits true only when role is "admin"', (done) => {
+    service.login(makeJwt(Math.floor(Date.now() / 1000) + 3600, 'admin'));
+    service.isAdmin$.subscribe(ok => {
+      expect(ok).toBeTrue();
+      done();
+    });
+  });
+
+  it('isAdmin$ emits false when role is "user"', (done) => {
+    service.login(makeJwt(Math.floor(Date.now() / 1000) + 3600, 'user'));
+    service.isAdmin$.subscribe(ok => {
+      expect(ok).toBeFalse();
+      done();
+    });
+  });
+
+  it('isAdmin$ emits false when role claim is missing', (done) => {
+    // Pre-feature-32 JWTs have no `role` claim — non-admin safe default.
+    service.login(makeJwt(Math.floor(Date.now() / 1000) + 3600));
+    service.isAdmin$.subscribe(ok => {
+      expect(ok).toBeFalse();
+      done();
+    });
+  });
+
+  it('isAdmin$ emits false before any login', (done) => {
+    service.isAdmin$.subscribe(ok => {
+      expect(ok).toBeFalse();
+      done();
+    });
+  });
+
+  it('_decodePayload rejects non-string role without crashing', () => {
+    // Forged JWT with role: 123 (number). Decoder must
+    // discard the role, not throw, not leak the number.
+    const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).replace(/=/g,'');
+    const payload = btoa(JSON.stringify({
+      sub: 'x', exp: Math.floor(Date.now()/1000) + 3600, role: 123,
+    })).replace(/=/g,'');
+    const jwt = `${header}.${payload}.fake`;
+    expect(service.login(jwt)).toBeTrue(); // still valid (exp is fine)
+    service.isAdmin$.subscribe(ok => expect(ok).toBeFalse()).unsubscribe();
   });
 });

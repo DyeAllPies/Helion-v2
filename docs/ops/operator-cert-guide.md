@@ -146,8 +146,90 @@ Operator certs default to a 90-day TTL. There's no auto-rotation
 today — mint a new P12 ahead of expiry and have the operator
 import it. The old cert keeps working until it expires.
 
-Full revocation (before expiry) is tracked as
-[feature 31 — CRL/OCSP](../planned-features/31-cert-revocation-crl-ocsp.md).
+Full revocation (before expiry) shipped in [feature 31](../planned-features/implemented/31-cert-revocation-crl-ocsp.md).
+Use `POST /admin/operator-certs/{serial}/revoke` via the CLI or
+the dashboard (feature 32).
+
+## 5a. Dashboard issuance flow (feature 32)
+
+Admins who prefer a browser flow over the CLI can issue operator
+certs from the dashboard.
+
+**Prerequisites**
+
+- An admin JWT stored in the dashboard session (not a node/job
+  token — the UI hides admin links for non-admin roles, and the
+  server refuses non-admin requests at 403 regardless).
+- The coordinator must have wired feature-27 issuance
+  (`SetOperatorCA(bundle.CA)`) so `POST /admin/operator-certs`
+  exists.
+
+**Steps**
+
+1. Sign in to the dashboard as an admin. A new **Operator
+   Certs** link appears in the sidebar (purple
+   `verified_user` icon). Non-admin users do not see it.
+2. Fill the issue form:
+   - **Common Name** — the operator's human identifier
+     (`alice@ops` is the convention). 1–256 bytes, no NUL,
+     no `=`.
+   - **TTL (days)** — default 90, hard cap 365.
+   - **PKCS#12 Password** — click the **GEN** button for a
+     24-char CSPRNG password (uses `crypto.getRandomValues`,
+     not `Math.random`), or type your own ≥8 chars.
+3. Click **Issue cert**. The server mints the cert + P12,
+   audits `operator_cert_issued` before returning, and the
+   response renders:
+   - **Cert metadata** — CN, serial, fingerprint, validity
+     window.
+   - **PKCS#12 password** — shown ONCE. A "Copy to clipboard"
+     button is provided alongside.
+   - **Download P12** button — DISABLED until you tick
+     **I have saved the password somewhere safe**.
+4. Save the password to your operator's credential manager
+   channel (password manager, sealed envelope, whatever your
+   org uses). Tick the confirmation. The password field
+   clears and goes read-only — you cannot copy it again.
+5. Click **Download P12**. The browser downloads
+   `<common_name>.p12`; the dashboard immediately revokes the
+   blob URL so the browser cache doesn't hang onto it.
+6. Hand the P12 + password to the operator through whatever
+   channel you already use. Import steps from §2 of this
+   guide apply verbatim.
+
+**Defensive guarantees the dashboard provides**
+
+- Neither the password nor the P12 bytes are written to
+  `localStorage`, `sessionStorage`, `IndexedDB`, or cookies.
+- `ngOnDestroy` zeroes the in-memory password + P12 state when
+  the route changes, so navigating away before clicking
+  **Clear** still drops the cached bytes.
+- The blob URL is revoked immediately after the download
+  triggers — the browser's blob cache window is seconds, not
+  the rest of the session.
+- Browser autofill is discouraged via
+  `autocomplete="one-time-code"` on the password input.
+
+**Known limitation — screenshots**
+
+Nothing the UI does stops an admin from screenshotting the
+one-time password. Operational procedure is the mitigation:
+run dashboard issuance on a locked-screen workstation, not a
+shared one.
+
+## 5b. Dashboard revocation flow (feature 32)
+
+From the same **Operator Certs** page:
+
+- **Revoke a cert** — paste the hex serial (accepted with or
+  without `0x` prefix, case-insensitive), enter a required
+  reason, click **Revoke**. Idempotent — revoking an already-
+  revoked serial returns the original record with an
+  "was already revoked" note.
+- **Revoked certs** table — live list of every revoked cert
+  with its CN, reason, timestamp, and the admin Principal who
+  revoked it. Refreshes automatically after each revoke and
+  via an explicit **Refresh** button.
 
 ## 6. Known limitations
 

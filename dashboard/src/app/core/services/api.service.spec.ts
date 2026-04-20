@@ -237,4 +237,66 @@ describe('ApiService', () => {
     expect(req.request.method).toBe('GET');
     req.flush({ from: 'a', to: 'b', data: [] });
   });
+
+  // ── Feature 32 — operator-cert lifecycle ──────────────────────────────────
+
+  it('issueOperatorCert() sends POST /admin/operator-certs with body', () => {
+    const body = { common_name: 'alice@ops', ttl_days: 90, p12_password: 'sekret!!' };
+    service.issueOperatorCert(body).subscribe();
+    const req = httpMock.expectOne(r => r.url.endsWith('/admin/operator-certs') && r.method === 'POST');
+    expect(req.request.body).toEqual(body);
+    req.flush({
+      common_name: 'alice@ops',
+      serial_hex: 'abcd',
+      fingerprint_hex: 'beef',
+      not_before: '2026-04-20T00:00:00Z',
+      not_after: '2026-07-19T00:00:00Z',
+      cert_pem: '---',
+      key_pem: '---',
+      p12_base64: 'AAA=',
+      audit_notice: 'logged',
+    });
+  });
+
+  it('revokeOperatorCert() sends POST /admin/operator-certs/{serial}/revoke', () => {
+    service.revokeOperatorCert('abcd', { reason: 'laptop stolen' }).subscribe();
+    const req = httpMock.expectOne(r =>
+      r.url.endsWith('/admin/operator-certs/abcd/revoke') && r.method === 'POST');
+    expect(req.request.body).toEqual({ reason: 'laptop stolen' });
+    req.flush({
+      serial_hex: 'abcd',
+      revoked_at: '2026-04-20T00:00:00Z',
+      revoked_by: 'user:root',
+      reason: 'laptop stolen',
+      idempotent: false,
+    });
+  });
+
+  it('revokeOperatorCert() URL-encodes the serial', () => {
+    service.revokeOperatorCert('ab/cd', { reason: 'x' }).subscribe();
+    const req = httpMock.expectOne(r => r.url.indexOf('/admin/operator-certs/ab%2Fcd/revoke') !== -1);
+    expect(req.request.method).toBe('POST');
+    req.flush({
+      serial_hex: 'ab/cd', revoked_at: '', revoked_by: '', idempotent: false,
+    });
+  });
+
+  it('listRevocations() sends GET /admin/operator-certs/revocations', () => {
+    service.listRevocations().subscribe(resp => {
+      expect(resp.total).toBe(1);
+      expect(resp.revocations[0].serial_hex).toBe('abcd');
+    });
+    const req = httpMock.expectOne(r => r.url.endsWith('/admin/operator-certs/revocations'));
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      total: 1,
+      revocations: [{
+        serial_hex: 'abcd',
+        common_name: 'alice@ops',
+        revoked_at: '2026-04-20T00:00:00Z',
+        revoked_by: 'user:root',
+        reason: 'test',
+      }],
+    });
+  });
 });

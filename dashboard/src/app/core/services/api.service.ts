@@ -20,6 +20,9 @@ import {
   ServiceEndpoint, ServiceListResponse,
   WorkflowLineage,
   RevealSecretRequest, RevealSecretResponse,
+  IssueOperatorCertRequest, IssueOperatorCertResponse,
+  RevokeOperatorCertRequest, RevokeOperatorCertResponse,
+  RevocationListResponse,
 } from '../../shared/models';
 
 // Raw API response shapes (may differ from dashboard models)
@@ -108,6 +111,42 @@ export class ApiService {
   revealSecret(jobId: string, req: RevealSecretRequest): Observable<RevealSecretResponse> {
     return this.http.post<RevealSecretResponse>(
       `${this.base}/admin/jobs/${encodeURIComponent(jobId)}/reveal-secret`, req);
+  }
+
+  // ── Feature 27 / 31 / 32 — operator-cert lifecycle ────────────────────────
+
+  /**
+   * POST /admin/operator-certs — mint a new operator client
+   * cert + PKCS#12 bundle. Admin-only, rate-limited, audited.
+   * Response is returned ONCE; the server does not persist
+   * the private key. The caller (feature 32 UI) surfaces the
+   * download and on-screen password exactly once.
+   */
+  issueOperatorCert(req: IssueOperatorCertRequest): Observable<IssueOperatorCertResponse> {
+    return this.http.post<IssueOperatorCertResponse>(
+      `${this.base}/admin/operator-certs`, req);
+  }
+
+  /**
+   * POST /admin/operator-certs/{serial}/revoke — invalidate a
+   * previously-issued operator cert (feature 31). Idempotent:
+   * re-posting the same serial returns 200 with the original
+   * record and `idempotent: true` in the body.
+   */
+  revokeOperatorCert(serialHex: string, req: RevokeOperatorCertRequest): Observable<RevokeOperatorCertResponse> {
+    return this.http.post<RevokeOperatorCertResponse>(
+      `${this.base}/admin/operator-certs/${encodeURIComponent(serialHex)}/revoke`, req);
+  }
+
+  /**
+   * GET /admin/operator-certs/revocations — list every
+   * revoked cert. Feature 31 admin surface; the dashboard
+   * (feature 32) renders this in a table alongside the issue
+   * form.
+   */
+  listRevocations(): Observable<RevocationListResponse> {
+    return this.http.get<RevocationListResponse>(
+      `${this.base}/admin/operator-certs/revocations`);
   }
 
   // ── Metrics ──────────────────────────────────────────────────────────────────

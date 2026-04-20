@@ -27,6 +27,28 @@ export class AuthService implements OnDestroy {
     map(t => t !== null)
   );
 
+  /**
+   * Feature 32 — emits the JWT `role` claim (or null when no
+   * token is held). Components that gate UI on admin role
+   * (e.g. the operator-cert issuance panel) read from here
+   * instead of calling the endpoint and checking for 403.
+   *
+   * The JWT payload is parsed without signature verification
+   * — the browser is consuming claims the SERVER stamped and
+   * signed; an attacker who can forge a JWT already bypassed
+   * everything else. Role shown in the UI is purely for
+   * guarding render + navigation; every privileged endpoint
+   * is still server-gated (feature 37 authz).
+   */
+  readonly userRole$: Observable<string | null> = this._token$.pipe(
+    map(t => (t ? this._decodePayload(t)?.role ?? null : null))
+  );
+
+  /** Emits true when the held JWT carries role=admin. */
+  readonly isAdmin$: Observable<boolean> = this.userRole$.pipe(
+    map(r => r === 'admin')
+  );
+
   private _expiryTimer?: Subscription;
 
   constructor(private router: Router) {}
@@ -68,14 +90,29 @@ export class AuthService implements OnDestroy {
 
   // ── Private helpers ───────────────────────────────────────────────────────────
 
-  /** Decode a JWT payload without verifying the signature (browser-only read). */
-  private _decodePayload(jwt: string): { exp: number } | null {
+  /**
+   * Decode a JWT payload without verifying the signature
+   * (browser-only read). The `role` claim is optional — some
+   * feature-19 scoped tokens carry `role: "job"`, others
+   * `role: "admin"`, and older tokens minted before feature
+   * 27 may omit it entirely. Callers treat an absent role
+   * as "non-admin" (safe default).
+   */
+  private _decodePayload(jwt: string): { exp: number; role?: string } | null {
     try {
       const parts = jwt.split('.');
       if (parts.length !== 3) return null;
       const padded = parts[1].replace(/-/g, '+').replace(/_/g, '/');
       const json = atob(padded.padEnd(padded.length + (4 - padded.length % 4) % 4, '='));
-      return JSON.parse(json) as { exp: number };
+      const parsed = JSON.parse(json);
+      if (typeof parsed !== 'object' || parsed === null) return null;
+      const exp = (parsed as { exp?: unknown }).exp;
+      if (typeof exp !== 'number') return null;
+      const role = (parsed as { role?: unknown }).role;
+      return {
+        exp,
+        role: typeof role === 'string' ? role : undefined,
+      };
     } catch {
       return null;
     }

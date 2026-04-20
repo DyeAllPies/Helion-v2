@@ -39,6 +39,23 @@ interface NavItem {
           <span class="nav-link__label">{{ item.label }}</span>
         </a>
       </li>
+      <!-- Feature 32 — admin-only links. Hidden for
+           non-admins; the server-side authz is authoritative,
+           this is UX only. -->
+      <ng-container *ngIf="isAdmin$ | async">
+        <li *ngFor="let item of adminNavItems">
+          <a
+            class="nav-link nav-link--admin"
+            [routerLink]="item.path"
+            routerLinkActive="nav-link--active"
+            [matTooltip]="item.label + ' (admin)'"
+            matTooltipPosition="right"
+          >
+            <span class="nav-link__icon material-icons">{{ item.icon }}</span>
+            <span class="nav-link__label">{{ item.label }}</span>
+          </a>
+        </li>
+      </ng-container>
     </ul>
 
     <div class="sidebar__footer">
@@ -203,7 +220,17 @@ export class ShellComponent {
     { path: '/ml/pipelines', label: 'Pipelines', icon: 'account_tree' },
   ];
 
-  constructor(private auth: AuthService, private router: Router) {}
+  // Feature 32 — admin-only links. Rendered conditionally via
+  // isAdmin$ in the template. Non-admins never see them.
+  readonly adminNavItems: NavItem[] = [
+    { path: '/admin/operator-certs', label: 'Operator Certs', icon: 'verified_user' },
+  ];
+
+  readonly isAdmin$;
+
+  constructor(private auth: AuthService, private router: Router) {
+    this.isAdmin$ = this.auth.isAdmin$;
+  }
 
   logout(): void {
     this.auth.logout();

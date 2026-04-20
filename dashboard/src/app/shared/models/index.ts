@@ -144,6 +144,67 @@ export interface RevealSecretResponse {
   audit_notice: string;
 }
 
+// ── Feature 27 — operator cert issuance ──────────────────────────────────────
+
+/**
+ * Body for POST /admin/operator-certs. Server validates:
+ *   - common_name non-empty, ≤256 bytes, no NUL / '='.
+ *   - ttl_days 0..365 (0 = default 90).
+ *   - p12_password ≥8 chars.
+ *
+ * Returned ONCE — the server does not store the private key.
+ * If the operator loses the response they must request a
+ * fresh issuance (new serial, old one implicitly orphaned
+ * until an admin revokes it via feature 31).
+ */
+export interface IssueOperatorCertRequest {
+  common_name:  string;
+  ttl_days?:    number;
+  p12_password: string;
+}
+
+export interface IssueOperatorCertResponse {
+  common_name:      string;
+  serial_hex:       string;
+  fingerprint_hex:  string;
+  not_before:       string;
+  not_after:        string;
+  cert_pem:         string;
+  key_pem:          string;
+  p12_base64:       string;
+  audit_notice:     string;
+}
+
+// ── Feature 31 — operator cert revocation ─────────────────────────────────────
+
+export interface RevokeOperatorCertRequest {
+  reason:       string;
+  common_name?: string;
+}
+
+export interface RevokeOperatorCertResponse {
+  serial_hex:   string;
+  common_name?: string;
+  revoked_at:   string;
+  revoked_by:   string;
+  reason?:      string;
+  /** True when the serial was already revoked; the server returned the existing record. */
+  idempotent:   boolean;
+}
+
+export interface RevocationItem {
+  serial_hex:   string;
+  common_name?: string;
+  revoked_at:   string;
+  revoked_by:   string;
+  reason?:      string;
+}
+
+export interface RevocationListResponse {
+  revocations: RevocationItem[];
+  total:       number;
+}
+
 // ── Node ──────────────────────────────────────────────────────────────────────
 
 export interface Node {

@@ -1,7 +1,7 @@
 # Feature: Web-based operator cert issuance UI
 
 **Priority:** P3
-**Status:** Pending
+**Status:** Implemented (2026-04-20)
 **Affected files:**
 `dashboard/src/app/features/admin/operator-certs.component.*` (new),
 `dashboard/src/app/core/services/api.service.ts` (new
@@ -141,5 +141,115 @@ hits the feature-31 revoke endpoint with a mandatory "reason".
 
 ## Implementation status
 
-_Not started. Promoted from feature 27's "Deferred / out of scope"
-on 2026-04-19._
+_Implemented 2026-04-20._
+
+### What shipped
+
+- `dashboard/src/app/features/admin/operator-certs.component.ts`
+  — single-page admin UI combining three flows:
+    - **Issue** — reactive form with client-side CN / TTL /
+      password validation mirroring the server rules. A
+      "GEN" button fills a 24-char CSPRNG password using
+      `crypto.getRandomValues` (not `Math.random`) from a
+      32-char alphabet (~144 bits entropy).
+    - **One-time download** — on success the component
+      renders the cert metadata + password in a dedicated
+      "result" panel. The P12 download button is gated
+      behind an explicit "I have saved the password
+      somewhere safe" checkbox; ticking it clears the
+      password from view AND locks the input field.
+    - **Revoke** — separate form posts to the feature-31
+      revoke endpoint; idempotent repeats surface a "was
+      already revoked" note. Refreshes the revocations
+      table automatically on success.
+    - **Revocations list** — renders feature-31's
+      `/admin/operator-certs/revocations` as a table with
+      serial, CN, timestamp, revoker, reason. Manual
+      **Refresh** button.
+
+- `AuthService` extended (`dashboard/src/app/core/services/auth.service.ts`):
+  - `_decodePayload` now returns `{ exp, role? }` with
+    role-type validation (non-string role → undefined).
+  - `userRole$` and `isAdmin$` observables feed the guard +
+    the sidebar nav visibility gate.
+
+- `dashboard/src/app/core/guards/admin.guard.ts` — new
+  role-gated `CanActivateFn`. Unauthenticated → `/login`;
+  authenticated non-admin → `/` with `?forbidden=admin-required`.
+  Documented as UX-only (server feature-37 authz is the
+  authoritative gate).
+
+- `ApiService` additions:
+  - `issueOperatorCert(req)` → `POST /admin/operator-certs`.
+  - `revokeOperatorCert(serial, req)` → feature-31 endpoint
+    with URL-encoded serial.
+  - `listRevocations()` → feature-31 list endpoint.
+
+- `ShellComponent` sidebar shows **Operator Certs** only
+  when `isAdmin$` is true. Non-admin operators see exactly
+  the same shell as before.
+
+- Route `/admin/operator-certs` registered under the
+  protected shell with `canActivate: [adminGuard]`.
+
+### Deviations from plan
+
+- **Listing issued certs** (as opposed to revocations) was
+  NOT implemented. The feature-31 data model persists
+  revocations but not issuances — the audit log carries
+  `operator_cert_issued` events but reconstructing "which
+  certs are currently valid" would require a side-scan of
+  audit events minus revocations, which is out of scope.
+  Operators who need this can query
+  `GET /audit?type=operator_cert_issued` and filter out
+  revoked serials manually. A dedicated issued-certs store
+  is a follow-up.
+
+- **Dashboard unit test for the `autocomplete="one-time-code"`
+  attribute** — we rely on the template literal carrying
+  the attribute verbatim; testing it via the DOM would be
+  brittle in Karma/jsdom. The attribute is visible via
+  code review.
+
+### Tests added
+
+- `dashboard/src/app/core/services/auth.service.spec.ts`:
+  - role claim decoded + exposed via `userRole$`.
+  - `isAdmin$` emits true only for `role: "admin"`.
+  - `isAdmin$` emits false for user/node/job roles + missing role.
+  - `isAdmin$` emits false before any login.
+  - Forged non-string role doesn't crash the decoder.
+
+- `dashboard/src/app/core/guards/admin.guard.spec.ts`:
+  - Unauthenticated → redirects to `/login`.
+  - Authenticated non-admin → redirects to `/`
+    with `?forbidden=admin-required`.
+  - Authenticated admin → allows route.
+  - `take(1)` semantics — guard resolves on first emit,
+    not re-evaluated on later stream changes.
+
+- `dashboard/src/app/core/services/api.service.spec.ts`:
+  - `issueOperatorCert` posts the form body.
+  - `revokeOperatorCert` posts to the serialised path +
+    URL-encodes the serial.
+  - `listRevocations` issues a GET on the right path.
+
+- `dashboard/src/app/features/admin/operator-certs.component.spec.ts`:
+  - Form validation: empty CN, short password, "=" in CN,
+    TTL > 365 all fail validation.
+  - `generatePassword` produces a 24-char password without
+    ambiguous chars (`0`, `O`, `I`).
+  - `issue()` posts the exact form body and builds the blob
+    URL on success; form password is cleared after issuance.
+  - 403 surfaces as "admin role required" banner text.
+  - Server 400 body is echoed verbatim.
+  - `onPasswordSaved()` clears password + locks input.
+  - `ngOnDestroy` revokes blob URL + zeroes password / issued
+    state.
+  - `clearIssued()` drops all issued state.
+  - `downloadP12()` triggers an anchor click and revokes
+    the blob URL; download filename is `<cn>.p12`.
+  - `revoke()` posts to the serialised path, strips `0x`,
+    and reloads the revocations list on success.
+  - Revoke form requires hex serial + non-empty reason.
+  - List endpoint surfaces a 403 as "admin role required".

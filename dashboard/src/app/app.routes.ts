@@ -1,6 +1,7 @@
 // src/app/app.routes.ts
 import { Routes } from '@angular/router';
 import { authGuard } from './core/guards/auth.guard';
+import { adminGuard } from './core/guards/admin.guard';
 
 export const routes: Routes = [
   {
@@ -59,6 +60,18 @@ export const routes: Routes = [
         path: 'analytics',
         loadComponent: () =>
           import('./features/analytics/analytics-dashboard.component').then(m => m.AnalyticsDashboardComponent),
+      },
+      // Feature 32 — admin-only operator-cert dashboard.
+      // adminGuard is a UX-only check (server-side
+      // feature-37 authz is authoritative); blocks non-admins
+      // from loading the component so they don't see a
+      // confusing "Admin role required" toast after every
+      // button click.
+      {
+        path: 'admin/operator-certs',
+        canActivate: [adminGuard],
+        loadComponent: () =>
+          import('./features/admin/operator-certs.component').then(m => m.OperatorCertsComponent),
       },
       // Feature 18 — ML module. Three lazy-loaded views; `ml` alone
       // redirects to the Datasets view so sidebar clicks land on a
