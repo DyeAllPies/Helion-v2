@@ -355,11 +355,33 @@ jobs:
 
           docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d
 
+      - name: Export coordinator CA to host
+        # Feature 39 — the coordinator listens on HTTPS (port 8080).
+        # Every host-side curl below pins this CA via --cacert; without
+        # it we'd be sending plain HTTP to a TLS listener and the
+        # coordinator logs "client sent an HTTP request to an HTTPS
+        # server" every 2s while the wait loop spins out its 60s.
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec helion-coordinator cat /app/state/ca.pem > state/ca.pem 2>/dev/null; then
+              if [ -s state/ca.pem ]; then
+                echo "Coordinator CA exported ($(wc -c < state/ca.pem) bytes)."
+                break
+              fi
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "FAIL: coordinator CA not written after 60s"
+              docker compose -f docker-compose.yml -f docker-compose.e2e.yml logs
+              exit 1
+            fi
+            sleep 2
+          done
+
       - name: Wait for coordinator healthy
         run: |
           echo "Waiting for coordinator healthz..."
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8080/healthz > /dev/null 2>&1; then
+            if curl -sf --cacert state/ca.pem https://127.0.0.1:8080/healthz > /dev/null 2>&1; then
               echo "Coordinator is healthy."
               break
             fi
@@ -381,8 +403,8 @@ jobs:
         run: |
           echo "Waiting for at least 1 healthy node..."
           for i in $(seq 1 20); do
-            HEALTHY=$(curl -sf -H "Authorization: Bearer $E2E_TOKEN" \
-              http://127.0.0.1:8080/nodes 2>/dev/null \
+            HEALTHY=$(curl -sf --cacert state/ca.pem -H "Authorization: Bearer $E2E_TOKEN" \
+              https://127.0.0.1:8080/nodes 2>/dev/null \
               | python3 -c "
           import sys,json
           d=json.load(sys.stdin)
@@ -619,22 +641,28 @@ jobs:
           chmod 777 state logs
           docker compose -f docker-compose.yml -f docker-compose.e2e.yml -f docker-compose.iris.yml up -d --build
 
-      - name: Wait for all four containers healthy
+      - name: Wait for nodes healthy
+        # The coordinator's healthcheck is disabled in the e2e
+        # overlay (feature 39 — plain-HTTP HEALTHCHECK incompatible
+        # with TLS-on REST). So we gate on the THREE node containers
+        # reporting 'healthy' instead. Nodes only become healthy
+        # after they register with the coordinator over gRPC+mTLS,
+        # so node-healthy implies coordinator-reachable.
         run: |
           for i in $(seq 1 60); do
             HEALTHY=$(docker compose -p helion-v2-e2e ps --format json 2>/dev/null \
               | python3 -c "
           import json, sys
           rows=[json.loads(l) for l in sys.stdin if l.strip()]
-          want={'helion-coordinator','helion-node-1','helion-node-2','helion-node-rust'}
+          want={'helion-node-1','helion-node-2','helion-node-rust'}
           n=sum(1 for r in rows if r['Name'] in want and 'healthy' in r.get('Status',''))
           print(n)" 2>/dev/null || echo 0)
-            if [ "$HEALTHY" -ge 4 ]; then
-              echo "4/4 essential containers healthy."
+            if [ "$HEALTHY" -ge 3 ]; then
+              echo "3/3 node containers healthy (coordinator reachable via mTLS)."
               break
             fi
             if [ "$i" -eq 60 ]; then
-              echo "FAIL: only $HEALTHY/4 containers healthy after 120s"
+              echo "FAIL: only $HEALTHY/3 nodes healthy after 120s"
               docker compose -f docker-compose.yml -f docker-compose.e2e.yml -f docker-compose.iris.yml logs --tail 200
               exit 1
             fi
