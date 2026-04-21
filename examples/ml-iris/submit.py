@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import ssl
 import sys
 import time
 import urllib.error
@@ -47,6 +48,26 @@ SERVE_JOB_ID = "iris-serve-1"
 SERVE_PORT = 8000
 
 
+def _ssl_context() -> ssl.SSLContext | None:
+    """Build a strict SSL context pinned to HELION_CA_FILE.
+
+    Feature 39 flipped the coordinator REST listener to TLS-on;
+    submit.py now runs against an HTTPS URL in the E2E and CI
+    setups. HELION_CA_FILE points at the coordinator's self-signed
+    CA (typically state/ca.pem exported from the coordinator
+    container). Returning None when HELION_CA_FILE is unset leaves
+    urllib with the system trust store — appropriate for local dev
+    against a publicly trusted CA, or for the legacy plain-HTTP
+    escape hatch (HELION_REST_TLS=off).
+    """
+    ca_file = os.environ.get("HELION_CA_FILE", "").strip()
+    if not ca_file or not os.path.exists(ca_file):
+        return None
+    ctx = ssl.create_default_context(cafile=ca_file)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
+
+
 def _auth_headers(token: str) -> dict:
     return {
         "Content-Type": "application/json",
@@ -59,7 +80,7 @@ def _post(base: str, path: str, token: str, body: "dict[str, Any]") -> "dict[str
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers=_auth_headers(token))
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
         return json.loads(resp.read())
 
 
@@ -67,7 +88,7 @@ def _get(base: str, path: str, token: str) -> "dict[str, Any]":
     url = base.rstrip("/") + path
     req = urllib.request.Request(url, method="GET",
                                  headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
         return json.loads(resp.read())
 
 
@@ -123,11 +144,19 @@ def _mint_workflow_token(api_url: str, admin_token: str, wf_id: str,
 
 
 def _inject_api_env(spec: dict, api_url: str, token: str) -> None:
-    """Inject HELION_API_URL + HELION_TOKEN into every workflow job's
-    env block so in-workflow scripts (register.py) can POST back to
-    the coordinator. The Go runtime does not forward node-agent env
-    to subprocess jobs — only the job spec's declared env reaches
-    them — so the submitter owns credential plumbing.
+    """Inject HELION_API_URL + HELION_TOKEN + HELION_CA_FILE into
+    every workflow job's env block so in-workflow scripts
+    (register.py) can POST back to the coordinator over TLS. The
+    Go runtime does not forward node-agent env to subprocess jobs —
+    only the job spec's declared env reaches them — so the
+    submitter owns credential plumbing.
+
+    HELION_CA_FILE is stamped to `/app/state/ca.pem` unconditionally:
+    the e2e + iris overlays mount the state volume across
+    coordinator + nodes so that path is valid inside every job
+    container. On local dev with a publicly trusted CA the file
+    doesn't exist and register.py's `_ssl_context()` gracefully
+    falls back to the system trust store.
 
     The injected token is typically a workflow-scoped `job`-role
     token minted via _mint_workflow_token, NOT the operator's root
@@ -149,6 +178,7 @@ def _inject_api_env(spec: dict, api_url: str, token: str) -> None:
         env = job.setdefault("env", {})
         env.setdefault("HELION_API_URL", api_url)
         env.setdefault("HELION_TOKEN", token)
+        env.setdefault("HELION_CA_FILE", "/app/state/ca.pem")
 
 
 def _poll_until_terminal(base: str, token: str, wf_id: str, timeout_s: int = 600) -> str:

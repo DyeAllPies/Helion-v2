@@ -40,6 +40,16 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE_FILES="-f $ROOT_DIR/docker-compose.yml -f $ROOT_DIR/docker-compose.e2e.yml -f $ROOT_DIR/docker-compose.iris.yml"
 EXIT_CODE=0
 
+# Feature 39 — the E2E coordinator listens on HTTPS. Every curl
+# pins the self-signed CA exported to $CA_PEM (copied out of the
+# coordinator container below). submit.py also reads it through
+# HELION_CA_FILE. Using ${API_URL} instead of a hardcoded
+# `$API_URL` keeps the script host-only; all REST
+# traffic goes through TLS + CA validation with no
+# --insecure / -k escape.
+API_URL="$API_URL"
+CA_PEM="$ROOT_DIR/state/ca.pem"
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 log()  { echo "==> $*"; }
@@ -70,9 +80,17 @@ rm -rf "$ROOT_DIR/state" "$ROOT_DIR/logs"
 mkdir -p "$ROOT_DIR/state" "$ROOT_DIR/logs"
 COMPOSE_PROFILES=analytics,ml docker compose $COMPOSE_FILES up -d --build >/dev/null 2>&1
 
+log "    exporting coordinator CA to $CA_PEM..."
+# The coordinator writes its self-signed CA to
+# /app/state/ca.pem inside the container (HELION_CA_FILE env in
+# docker-compose.e2e.yml). Copy it out to the host so curl +
+# submit.py can pin it without skipping TLS verification.
+MSYS_NO_PATHCONV=1 docker exec helion-coordinator cat /app/state/ca.pem > "$CA_PEM" 2>/dev/null || true
+if [ ! -s "$CA_PEM" ]; then fail "could not export coordinator CA"; exit; fi
+
 log "    waiting for coordinator /healthz (max 60s)..."
 for i in $(seq 1 30); do
-  if curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+  if curl -sf --cacert "$CA_PEM" "$API_URL/healthz" >/dev/null 2>&1; then
     ok "coordinator healthy"
     break
   fi
@@ -87,7 +105,7 @@ if [ -z "$TOKEN" ]; then fail "empty root token"; exit; fi
 
 log "    waiting for both nodes to register as healthy (max 30s)..."
 for i in $(seq 1 15); do
-  HEALTHY=$(curl -sf -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/nodes 2>/dev/null \
+  HEALTHY=$(curl -sf --cacert "$CA_PEM" -H "Authorization: Bearer $TOKEN" "$API_URL/nodes" 2>/dev/null \
     | python -c "import sys,json; d=json.load(sys.stdin); print(sum(1 for n in d.get('nodes',[]) if n.get('health')=='healthy'))" 2>/dev/null || echo 0)
   if [ "$HEALTHY" -ge 2 ]; then
     ok "$HEALTHY healthy nodes registered"
@@ -101,8 +119,9 @@ done
 
 log "[2/6] Submitting iris workflow..."
 SUBMIT_OUTPUT=$(cd "$ROOT_DIR/examples/ml-iris" && \
-  HELION_API_URL=http://127.0.0.1:8080 \
-  HELION_JOB_API_URL=http://coordinator:8080 \
+  HELION_API_URL="$API_URL" \
+  HELION_CA_FILE="$CA_PEM" \
+  HELION_JOB_API_URL=https://coordinator:8080 \
   HELION_TOKEN="$TOKEN" \
   python submit.py workflow.yaml 2>&1 || true)
 if echo "$SUBMIT_OUTPUT" | grep -q "submitted: id=iris-wf-1"; then
@@ -117,8 +136,8 @@ fi
 
 log "[3/6] Polling workflow status (max 180s)..."
 for i in $(seq 1 60); do
-  STATUS=$(curl -sf -H "Authorization: Bearer $TOKEN" \
-    "http://127.0.0.1:8080/workflows/iris-wf-1" 2>/dev/null \
+  STATUS=$(curl -sf --cacert "$CA_PEM" -H "Authorization: Bearer $TOKEN" \
+    "$API_URL/workflows/iris-wf-1" 2>/dev/null \
     | python -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
   case "$STATUS" in
     completed) ok "workflow reached completed after ~$((i*3))s"; break ;;
@@ -128,8 +147,8 @@ for i in $(seq 1 60); do
   sleep 3
 done
 
-RESOLVE_FAILED=$(curl -sf -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8080/api/analytics/events?limit=500" 2>/dev/null \
+RESOLVE_FAILED=$(curl -sf --cacert "$CA_PEM" -H "Authorization: Bearer $TOKEN" \
+  "$API_URL/api/analytics/events?limit=500" 2>/dev/null \
   | python -c "
 import sys, json
 try:
@@ -149,7 +168,7 @@ fi
 # ── Checkpoint 4: registry has iris/v1 + iris-logreg/v1 with lineage ────────
 
 log "[4/6] Checking /api/datasets + /api/models..."
-DATASET_OK=$(curl -sf -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/datasets \
+DATASET_OK=$(curl -sf --cacert "$CA_PEM" -H "Authorization: Bearer $TOKEN" $API_URL/api/datasets \
   | python -c "
 import sys, json
 d = json.load(sys.stdin)
@@ -161,7 +180,7 @@ print('missing')
 if [ "$DATASET_OK" != "ok" ]; then fail "iris/v1 not found in /api/datasets"; exit; fi
 ok "iris/v1 registered"
 
-MODEL_INFO=$(curl -sf -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/models \
+MODEL_INFO=$(curl -sf --cacert "$CA_PEM" -H "Authorization: Bearer $TOKEN" $API_URL/api/models \
   | python -c "
 import sys, json
 d = json.load(sys.stdin)
@@ -185,8 +204,8 @@ ok "iris-logreg/v1 registered (accuracy=$ACC, source_job_id=$SRC)"
 # ── Checkpoint 5: lineage endpoint returns DAG with s3:// edges ──────────────
 
 log "[5/6] Checking /workflows/iris-wf-1/lineage..."
-MODEL_URI=$(curl -sf -H "Authorization: Bearer $TOKEN" \
-  http://127.0.0.1:8080/workflows/iris-wf-1/lineage \
+MODEL_URI=$(curl -sf --cacert "$CA_PEM" -H "Authorization: Bearer $TOKEN" \
+  $API_URL/workflows/iris-wf-1/lineage \
   | python -c "
 import sys, json
 d = json.load(sys.stdin)
@@ -211,8 +230,8 @@ esac
 # ── Checkpoint 6: serve submit → ready → /predict correct ────────────────────
 
 log "[6/6] Submitting serve job + testing /predict..."
-SERVE_RESP=$(cat <<JSON | curl -sf -X POST -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" http://127.0.0.1:8080/jobs -d @-
+SERVE_RESP=$(cat <<JSON | curl -sf --cacert "$CA_PEM" -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" $API_URL/jobs -d @-
 {
   "id": "iris-serve-1",
   "command": "uvicorn",
@@ -232,7 +251,7 @@ ok "serve job submitted"
 log "    waiting for /api/services to report iris-serve-1 ready (max 30s)..."
 NODE_ADDR=""
 for i in $(seq 1 15); do
-  READY=$(curl -sf -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/services \
+  READY=$(curl -sf --cacert "$CA_PEM" -H "Authorization: Bearer $TOKEN" $API_URL/api/services \
     | python -c "
 import sys, json
 d = json.load(sys.stdin)

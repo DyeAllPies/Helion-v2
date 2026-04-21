@@ -12,6 +12,26 @@
 // "can a normal person run an ML pipeline on Helion." A normal
 // person uses the dashboard.
 //
+// Optimised for CI time: no waitForTimeout pacing, no video, no
+// DAG-builder click-throughs. The MNIST walkthrough is the
+// human-eye version; this one is the fast regression gate.
+//
+// Coverage expanded in 2026-04-21 to pick up what MNIST now proves
+// (features 40, 42, 43) so the same regressions don't ride past CI:
+//   - Feature 40  — workflow_outcomes row populated in analytics
+//                   (job_count / success_count / duration_ms /
+//                   started_at) surfaced via /api/analytics/ml-runs.
+//   - Feature 40b — workflow-level `tags` round-trip: the iris
+//                   submission stamps {team, task, env}; the row
+//                   in ml-runs echoes them verbatim.
+//   - Feature 42  — parallel-dispatch overlap. A new `baseline`
+//                   sibling depends only on preprocess (same as
+//                   `train`), so dispatch fires them concurrently.
+//                   The spec asserts their
+//                   [dispatched_at, finished_at] intervals overlap
+//                   on the wall clock, mirroring the MNIST
+//                   train_light ‖ train_heavy assertion.
+//
 // Required cluster:
 //   docker-compose.yml + docker-compose.e2e.yml + docker-compose.iris.yml
 //     with COMPOSE_PROFILES=analytics,ml
@@ -29,11 +49,13 @@
 // Covered UI:
 //   1. /ml/pipelines                 — iris-wf-1 row appears
 //   2. /ml/pipelines/iris-wf-1       — DAG panel renders + job cards
-//                                      show ingest/preprocess/train/register
+//                                      show ingest/preprocess/train/baseline/register
 //                                      with completed status
 //   3. /ml/datasets                  — iris/v1 row visible with s3:// URI
 //   4. /ml/models                    — iris-logreg/v1 with lineage + metrics
 //   5. /ml/services                  — iris-serve-1 ready with upstream URL
+//   6. REST /api/analytics/ml-runs  — workflow_outcomes row with tags + timing
+//   7. REST /jobs                    — per-job dispatched_at intervals overlap
 
 import { test, expect, navigateTo } from '../fixtures/auth.fixture';
 import { API_URL, getRootToken } from '../fixtures/cluster.fixture';
@@ -54,6 +76,42 @@ interface ServiceResp {
   services?: Array<{ job_id: string; ready: boolean }>;
 }
 
+// Feature 40 / 40b / 40c — workflow_outcomes rollup shape. Kept
+// aligned with internal/api/handlers_analytics_unified.go#MLRunRow.
+interface MLRunsResp {
+  rows: Array<{
+    workflow_id:    string;
+    status:         string;
+    job_count:      number;
+    success_count:  number;
+    failed_count:   number;
+    started_at?:    string;
+    duration_ms?:   number;
+    tags?:          Record<string, string>;
+  }>;
+  total: number;
+}
+
+// Feature 42 — per-job run-interval fields on JobResponse. Both
+// dispatched_at and finished_at are non-null for any job that
+// reached a terminal state via a node pickup.
+interface JobTimingRow {
+  id:             string;
+  status:         string;
+  dispatched_at?: string;
+  finished_at?:   string;
+}
+interface JobListResp { jobs: JobTimingRow[]; total: number }
+
+// Tags the submission stamps. The analytics row must echo these
+// exactly; the unit test under internal/api/handlers_workflows_test.go
+// covers the per-entry validation separately.
+const WF_TAGS: Record<string, string> = {
+  team: 'ml',
+  task: 'iris-classification',
+  env:  'ci',
+};
+
 /** Fetch the iris workflow. Returns null on 404 (not yet submitted). */
 async function getWorkflow(token: string): Promise<WorkflowResp | null> {
   const res = await fetch(`${API_URL}/workflows/${WF_ID}`, {
@@ -71,14 +129,24 @@ async function getWorkflow(token: string): Promise<WorkflowResp | null> {
  * that file changes, re-sync this fixture.
  */
 async function submitIrisWorkflow(token: string): Promise<void> {
+  // Feature 39 — the coordinator REST listener is TLS-on in the
+  // E2E overlay. register.py and any future in-cluster HTTPS
+  // caller pin the self-signed CA via HELION_CA_FILE (mirrors
+  // examples/ml-mnist/register.py).
   const jobEnv = {
-    HELION_API_URL: 'http://coordinator:8080',
+    HELION_API_URL: 'https://coordinator:8080',
+    HELION_CA_FILE: '/app/state/ca.pem',
     HELION_TOKEN: token,
   };
   const body = {
     id: WF_ID,
     name: 'iris-end-to-end',
     priority: 60,
+    // Feature 40b — stamped here and re-read from the ml-runs
+    // analytics row at the tail of this spec. Kept aligned with
+    // examples/ml-iris/workflow.yaml's `tags:` block so both entry
+    // points (CLI submit.py + this E2E) produce the same row.
+    tags: WF_TAGS,
     jobs: [
       {
         name: 'ingest',
@@ -86,6 +154,7 @@ async function submitIrisWorkflow(token: string): Promise<void> {
         args: ['/app/ml-iris/ingest.py'],
         env: jobEnv,
         timeout_seconds: 60,
+        node_selector: { runtime: 'go' },
         outputs: [{ name: 'RAW_CSV', local_path: 'raw.csv' }],
       },
       {
@@ -95,12 +164,26 @@ async function submitIrisWorkflow(token: string): Promise<void> {
         env: jobEnv,
         timeout_seconds: 60,
         depends_on: ['ingest'],
+        node_selector: { runtime: 'go' },
         inputs: [{ name: 'RAW_CSV', from: 'ingest.RAW_CSV', local_path: 'raw.csv' }],
         outputs: [
           { name: 'TRAIN_PARQUET', local_path: 'train.parquet' },
           { name: 'TEST_PARQUET',  local_path: 'test.parquet'  },
         ],
       },
+      // ── Parallel fork (feature 42) ──────────────────────────
+      // `train` and `baseline` both depend only on preprocess, so
+      // the dispatcher fires them concurrently (goroutine-per-job
+      // fix in internal/cluster/dispatch.go). Both jobs load the
+      // same train/test parquets; `train` fits a real
+      // LogisticRegression, `baseline` fits a stratified
+      // DummyClassifier — the overlap is observable in their
+      // [dispatched_at, finished_at] intervals even though both
+      // complete in well under a second.
+      //
+      // runtime=go pins both to the Go-runtime Python nodes
+      // (iris overlay also ships a Rust node for MNIST that
+      // can't run iris's python-based jobs without PATH in env).
       {
         name: 'train',
         command: 'python',
@@ -108,12 +191,29 @@ async function submitIrisWorkflow(token: string): Promise<void> {
         env: jobEnv,
         timeout_seconds: 120,
         depends_on: ['preprocess'],
+        node_selector: { runtime: 'go' },
         inputs: [
           { name: 'TRAIN_PARQUET', from: 'preprocess.TRAIN_PARQUET', local_path: 'train.parquet' },
           { name: 'TEST_PARQUET',  from: 'preprocess.TEST_PARQUET',  local_path: 'test.parquet'  },
         ],
         outputs: [
           { name: 'MODEL',   local_path: 'model.joblib' },
+          { name: 'METRICS', local_path: 'metrics.json' },
+        ],
+      },
+      {
+        name: 'baseline',
+        command: 'python',
+        args: ['/app/ml-iris/baseline.py'],
+        env: jobEnv,
+        timeout_seconds: 60,
+        depends_on: ['preprocess'],
+        node_selector: { runtime: 'go' },
+        inputs: [
+          { name: 'TRAIN_PARQUET', from: 'preprocess.TRAIN_PARQUET', local_path: 'train.parquet' },
+          { name: 'TEST_PARQUET',  from: 'preprocess.TEST_PARQUET',  local_path: 'test.parquet'  },
+        ],
+        outputs: [
           { name: 'METRICS', local_path: 'metrics.json' },
         ],
       },
@@ -127,7 +227,13 @@ async function submitIrisWorkflow(token: string): Promise<void> {
           HELION_TRAIN_JOB_NAME: 'train',
         },
         timeout_seconds: 60,
+        // Register still depends only on train — baseline is a
+        // diagnostic sibling, not part of the registered-model
+        // lineage. The REST harness (scripts/run-iris-e2e.sh)
+        // still finds iris-logreg/v1 with source_job_id from the
+        // `train` job.
         depends_on: ['train'],
+        node_selector: { runtime: 'go' },
         inputs: [
           { name: 'RAW_CSV', from: 'ingest.RAW_CSV', local_path: 'raw.csv' },
           { name: 'MODEL',   from: 'train.MODEL',   local_path: 'model.joblib' },
@@ -270,7 +376,7 @@ test.describe('Feature 19 — iris pipeline through the dashboard', () => {
     // monospaced header span and a status chip. Filter by the header
     // span exact-match so `ingest` doesn't match the preprocess card
     // (which contains "deps: ingest" in its body).
-    for (const jobName of ['ingest', 'preprocess', 'train', 'register']) {
+    for (const jobName of ['ingest', 'preprocess', 'train', 'baseline', 'register']) {
       const card = page.locator('.job-card').filter({
         has: page.locator('.job-card__header span.mono', {
           hasText: new RegExp(`^${jobName}$`),
@@ -340,5 +446,84 @@ test.describe('Feature 19 — iris pipeline through the dashboard', () => {
     // gRPC port); matching on :8000 proves the Port field survived
     // the buildUpstreamURL plumbing.
     await expect(row).toContainText(/:8000/);
+  });
+
+  // ── Feature 40 / 40b / 40c — workflow analytics ──────────────
+
+  test('ml-runs analytics row carries job counts, timing and tags', async () => {
+    // The analytics sink flushes every 200 ms; workflow.completed
+    // fires once compare/register terminate. Short poll keeps the
+    // test resilient to the flush cadence without baking in a
+    // waitForTimeout.
+    const token = getRootToken();
+    let row: MLRunsResp['rows'][number] | undefined;
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline && !row) {
+      const r = await fetch(`${API_URL}/api/analytics/ml-runs?limit=20`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.ok) {
+        const b: MLRunsResp = await r.json();
+        row = b.rows.find(x => x.workflow_id === WF_ID);
+      }
+      if (!row) await new Promise(x => setTimeout(x, 500));
+    }
+    expect(row, 'iris-wf-1 missing from /api/analytics/ml-runs').toBeDefined();
+    expect(row!.status).toBe('completed');
+    // 5 jobs: ingest, preprocess, train, baseline, register.
+    expect(row!.job_count).toBe(5);
+    expect(row!.success_count).toBe(5);
+    expect(row!.failed_count).toBe(0);
+
+    // Feature 40c — timing populated.
+    expect(row!.started_at, 'started_at missing').toBeDefined();
+    expect(row!.duration_ms, 'duration_ms missing').toBeDefined();
+    expect(row!.duration_ms!).toBeGreaterThan(0);
+
+    // Feature 40b — tag round-trip. Every key submitted must land
+    // on the row with the same value; the endpoint MAY add
+    // system.* keys in the future, so we do subset-match instead
+    // of equality.
+    expect(row!.tags, 'tags missing on ml-runs row').toBeDefined();
+    for (const [k, v] of Object.entries(WF_TAGS)) {
+      expect(row!.tags![k], `tag ${k} lost round-trip`).toBe(v);
+    }
+  });
+
+  // ── Feature 42 — parallel-dispatch overlap ──────────────────
+
+  test('train and baseline dispatch windows overlap on the wall clock', async () => {
+    // Intervals [a,b] and [c,d] overlap iff a < d && c < b. Both
+    // jobs depend only on preprocess, so a regressed serialised
+    // dispatcher (pre-goroutine-per-job) would leave a gap — the
+    // MNIST walkthrough saw a 0.77ms miss before the fix landed.
+    const token = getRootToken();
+    const r = await fetch(`${API_URL}/jobs?size=100&status=COMPLETED`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(r.ok).toBeTruthy();
+    const body: JobListResp = await r.json();
+    const train    = body.jobs.find(j => j.id === `${WF_ID}/train`);
+    const baseline = body.jobs.find(j => j.id === `${WF_ID}/baseline`);
+    expect(train, `${WF_ID}/train missing`).toBeDefined();
+    expect(baseline, `${WF_ID}/baseline missing`).toBeDefined();
+    expect(train!.dispatched_at, 'train.dispatched_at missing').toBeDefined();
+    expect(train!.finished_at,   'train.finished_at missing').toBeDefined();
+    expect(baseline!.dispatched_at, 'baseline.dispatched_at missing').toBeDefined();
+    expect(baseline!.finished_at,   'baseline.finished_at missing').toBeDefined();
+
+    const tStart = Date.parse(train!.dispatched_at!);
+    const tEnd   = Date.parse(train!.finished_at!);
+    const bStart = Date.parse(baseline!.dispatched_at!);
+    const bEnd   = Date.parse(baseline!.finished_at!);
+
+    expect(
+      tStart,
+      `train dispatched at ${train!.dispatched_at} but baseline finished before (${baseline!.finished_at}) — intervals do not overlap`,
+    ).toBeLessThan(bEnd);
+    expect(
+      bStart,
+      `baseline dispatched at ${baseline!.dispatched_at} but train finished before (${train!.finished_at}) — intervals do not overlap`,
+    ).toBeLessThan(tEnd);
   });
 });

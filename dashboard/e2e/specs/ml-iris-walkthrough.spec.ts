@@ -49,25 +49,42 @@ async function ensureWorkflow(token: string): Promise<void> {
   }
   // Otherwise: submit the minimal workflow shape (mirrors
   // ml-iris.spec.ts's helper but inlined here to keep this file
-  // standalone since it runs off the main CI path).
-  const jobEnv = { HELION_API_URL: 'http://coordinator:8080', HELION_TOKEN: token };
+  // standalone since it runs off the main CI path). Kept aligned
+  // with examples/ml-iris/workflow.yaml — 5 jobs with a parallel
+  // train ‖ baseline fork (feature 42) and workflow-level tags
+  // (feature 40b).
+  const jobEnv = {
+    HELION_API_URL: 'https://coordinator:8080',
+    HELION_CA_FILE: '/app/state/ca.pem',
+    HELION_TOKEN:   token,
+  };
   const body = {
     id: WF_ID, name: 'iris-end-to-end', priority: 60,
+    tags: { team: 'ml', task: 'iris-classification', env: 'ci' },
     jobs: [
       { name: 'ingest',     command: 'python', args: ['/app/ml-iris/ingest.py'],     env: jobEnv, timeout_seconds: 60,
+        node_selector: { runtime: 'go' },
         outputs: [{ name: 'RAW_CSV', local_path: 'raw.csv' }] },
       { name: 'preprocess', command: 'python', args: ['/app/ml-iris/preprocess.py'], env: jobEnv, timeout_seconds: 60, depends_on: ['ingest'],
+        node_selector: { runtime: 'go' },
         inputs:  [{ name: 'RAW_CSV', from: 'ingest.RAW_CSV', local_path: 'raw.csv' }],
         outputs: [{ name: 'TRAIN_PARQUET', local_path: 'train.parquet' },
                   { name: 'TEST_PARQUET',  local_path: 'test.parquet'  }] },
       { name: 'train',      command: 'python', args: ['/app/ml-iris/train.py'],      env: jobEnv, timeout_seconds: 120, depends_on: ['preprocess'],
+        node_selector: { runtime: 'go' },
         inputs:  [{ name: 'TRAIN_PARQUET', from: 'preprocess.TRAIN_PARQUET', local_path: 'train.parquet' },
                   { name: 'TEST_PARQUET',  from: 'preprocess.TEST_PARQUET',  local_path: 'test.parquet'  }],
         outputs: [{ name: 'MODEL',   local_path: 'model.joblib' },
                   { name: 'METRICS', local_path: 'metrics.json' }] },
+      { name: 'baseline',   command: 'python', args: ['/app/ml-iris/baseline.py'],   env: jobEnv, timeout_seconds: 60, depends_on: ['preprocess'],
+        node_selector: { runtime: 'go' },
+        inputs:  [{ name: 'TRAIN_PARQUET', from: 'preprocess.TRAIN_PARQUET', local_path: 'train.parquet' },
+                  { name: 'TEST_PARQUET',  from: 'preprocess.TEST_PARQUET',  local_path: 'test.parquet'  }],
+        outputs: [{ name: 'METRICS', local_path: 'metrics.json' }] },
       { name: 'register',   command: 'python', args: ['/app/ml-iris/register.py'],
         env: { ...jobEnv, HELION_WORKFLOW_ID: WF_ID, HELION_TRAIN_JOB_NAME: 'train' },
         timeout_seconds: 60, depends_on: ['train'],
+        node_selector: { runtime: 'go' },
         inputs: [{ name: 'RAW_CSV', from: 'ingest.RAW_CSV', local_path: 'raw.csv' },
                  { name: 'MODEL',   from: 'train.MODEL',   local_path: 'model.joblib' },
                  { name: 'METRICS', from: 'train.METRICS', local_path: 'metrics.json' }] },

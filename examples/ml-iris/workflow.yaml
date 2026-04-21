@@ -1,4 +1,8 @@
-# iris end-to-end workflow — ingest → preprocess → train → register.
+# iris end-to-end workflow — parallel training + registration.
+#
+#   ingest → preprocess ─┬→ train    (LogisticRegression) ─→ register
+#                        └→ baseline (DummyClassifier,
+#                                     parallel sibling of train)
 #
 # `serve.py` is submitted separately (see README § Serving) because
 # a service job never reaches a terminal state and would block the
@@ -6,10 +10,28 @@
 #
 # Artifact flow:
 #   ingest     outputs RAW_CSV          -> preprocess inputs RAW_CSV
-#   preprocess outputs TRAIN_PARQUET,   -> train      inputs TRAIN_PARQUET,
-#                      TEST_PARQUET                           TEST_PARQUET
-#   train      outputs MODEL, METRICS   -> register   inputs RAW_CSV (from ingest),
-#                                                              MODEL, METRICS
+#   preprocess outputs TRAIN_PARQUET,   -> train, baseline
+#                      TEST_PARQUET
+#   train      outputs MODEL, METRICS   -> register inputs RAW_CSV +
+#                                                          MODEL, METRICS
+#   baseline   outputs METRICS only; serves as a dispatch-parallel
+#                                    sibling of train so the iris CI
+#                                    path exercises feature-42's
+#                                    goroutine-per-job dispatch (both
+#                                    jobs enter DispatchToNode
+#                                    concurrently).
+#
+# Tags: the workflow-level `tags` map rides feature 40b through to
+# the workflow_outcomes row in PostgreSQL analytics. The CI E2E
+# spec asserts the tags round-trip.
+#
+# Every job pins node_selector: { runtime: go } because the iris
+# demo is single-runtime (see docker-compose.iris.yml line 11).
+# The iris overlay adds a Rust-runtime node for the MNIST walk-
+# through; without this selector the scheduler's round-robin could
+# land an iris job on the Rust node, where env_clear() strips PATH
+# and `python` exec fails. The node_selector makes the
+# single-runtime invariant load-bearing.
 #
 # The coordinator's dispatch-time resolver rewrites each
 # `from: <upstream>.<NAME>` reference into a concrete artifact URI
@@ -20,12 +42,18 @@
 id: iris-wf-1
 name: iris-end-to-end
 priority: 60
+tags:
+  team: ml
+  task: iris-classification
+  env: ci
 
 jobs:
   - name: ingest
     command: python
     args: [/app/ml-iris/ingest.py]
     timeout_seconds: 60
+    node_selector:
+      runtime: go
     outputs:
       - name: RAW_CSV
         local_path: raw.csv
@@ -35,6 +63,8 @@ jobs:
     args: [/app/ml-iris/preprocess.py]
     timeout_seconds: 60
     depends_on: [ingest]
+    node_selector:
+      runtime: go
     inputs:
       - name: RAW_CSV
         from: ingest.RAW_CSV
@@ -50,6 +80,8 @@ jobs:
     args: [/app/ml-iris/train.py]
     timeout_seconds: 120
     depends_on: [preprocess]
+    node_selector:
+      runtime: go
     inputs:
       - name: TRAIN_PARQUET
         from: preprocess.TRAIN_PARQUET
@@ -63,11 +95,40 @@ jobs:
       - name: METRICS
         local_path: metrics.json
 
+  # Parallel sibling of train — also depends only on preprocess so
+  # the dispatcher dispatches both at the same tick (feature 42
+  # goroutine-per-job). Produces metrics only; no MODEL artifact
+  # since register.py still owns the iris-logreg/v1 entry. The CI
+  # spec asserts train and baseline have overlapping
+  # [dispatched_at, finished_at] intervals to prove parallel
+  # dispatch works end-to-end. Lands on a DIFFERENT Go node than
+  # `train` via round-robin (there are two Go nodes in the iris
+  # overlay) so the overlap is genuinely parallel per-node too.
+  - name: baseline
+    command: python
+    args: [/app/ml-iris/baseline.py]
+    timeout_seconds: 60
+    depends_on: [preprocess]
+    node_selector:
+      runtime: go
+    inputs:
+      - name: TRAIN_PARQUET
+        from: preprocess.TRAIN_PARQUET
+        local_path: train.parquet
+      - name: TEST_PARQUET
+        from: preprocess.TEST_PARQUET
+        local_path: test.parquet
+    outputs:
+      - name: METRICS
+        local_path: metrics.json
+
   - name: register
     command: python
     args: [/app/ml-iris/register.py]
     timeout_seconds: 60
     depends_on: [train]
+    node_selector:
+      runtime: go
     # register.py needs the coordinator URL + token to POST to the
     # registry API, plus the workflow ID so it can look up the
     # training job's runtime job_id (for the model's lineage

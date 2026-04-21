@@ -1,7 +1,7 @@
 # Feature: Verify + enforce parallel `train_light` ‖ `train_heavy` execution
 
 **Priority:** P2
-**Status:** Pending
+**Status:** Implemented (2026-04-21) — the E2E overlap assertion surfaced a real dispatcher serialisation bug; fixed by goroutine-per-job in `internal/cluster/dispatch.go`.
 **Affected files:**
 `internal/cluster/workflow_dispatch_test.go` (new or appended —
 parallel-siblings unit test),
@@ -33,10 +33,10 @@ A silent serialisation would:
 
 ## Current state
 
-- [`examples/ml-mnist/workflow.yaml`](../../examples/ml-mnist/workflow.yaml)
+- [`examples/ml-mnist/workflow.yaml`](../../../examples/ml-mnist/workflow.yaml)
   lines 70-121: `train_light.depends_on: [preprocess]` and
   `train_heavy.depends_on: [preprocess]` — structurally parallel.
-- [`ml-mnist-parallel-walkthrough.spec.ts:310-321`](../../dashboard/e2e/specs/ml-mnist-parallel-walkthrough.spec.ts#L310-L321):
+- [`ml-mnist-parallel-walkthrough.spec.ts:310-321`](../../../dashboard/e2e/specs/ml-mnist-parallel-walkthrough.spec.ts#L310-L321):
   waits for all 5 rows, doesn't assert start/finish overlap.
 - `workflow_outcomes` row written by feature 40 carries
   `started_at` + `duration_ms` at workflow grain — **not at job
@@ -109,7 +109,7 @@ test proves:**
 - **Dispatcher serialisation.** The workflow lifecycle emits a
   single `dispatch` tick per state change. If it only emits for the
   first Ready job, the second waits until the next heartbeat.
-  Read [`workflow_lifecycle.go`](../../internal/cluster/workflow_lifecycle.go)
+  Read [`workflow_lifecycle.go`](../../../internal/cluster/workflow_lifecycle.go)
   and fix at the source.
 
 Landing the unit test first catches this regardless of which of the
@@ -121,7 +121,7 @@ No new attack surface. Bumping `max_slots` is the only possibly
 risky change — it increases per-node concurrency. Mitigations:
 
 - Existing per-node CPU / memory bin-packing
-  ([`policy_resource.go`](../../internal/cluster/policy_resource.go))
+  ([`policy_resource.go`](../../../internal/cluster/policy_resource.go))
   still bounds real resource use; a higher slot count doesn't
   override resource checks, just permits more jobs to pass the
   slot gate.

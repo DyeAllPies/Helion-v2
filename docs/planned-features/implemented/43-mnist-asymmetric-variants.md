@@ -1,7 +1,7 @@
 # Feature: Asymmetric `train_light` vs `train_heavy` — dataset size, not just max_iter
 
 **Priority:** P2
-**Status:** Pending
+**Status:** Implemented (2026-04-21)
 **Affected files:**
 `examples/ml-mnist/preprocess.py` (honour a `HELION_PREPROCESS_SAMPLES_<LIGHT|HEAVY>` ceiling OR emit two subsample artefacts),
 `examples/ml-mnist/train.py` (read the variant-specific sample
@@ -34,13 +34,13 @@ seconds), which:
 
 ## Current state
 
-- [`examples/ml-mnist/ingest.py:56`](../../examples/ml-mnist/ingest.py#L56):
+- [`examples/ml-mnist/ingest.py:56`](../../../examples/ml-mnist/ingest.py#L56):
   `fetch_openml("mnist_784")` → full 70 000 rows, 28×28, written to
   a single parquet artefact.
-- [`examples/ml-mnist/preprocess.py:34-35`](../../examples/ml-mnist/preprocess.py#L34-L35):
+- [`examples/ml-mnist/preprocess.py:34-35`](../../../examples/ml-mnist/preprocess.py#L34-L35):
   stratified subsample to 5 000 train + 1 000 test, written as one
   `(X, y)` pair consumed by both `train_light` and `train_heavy`.
-- [`examples/ml-mnist/train.py:50-80`](../../examples/ml-mnist/train.py#L50-L80):
+- [`examples/ml-mnist/train.py:50-80`](../../../examples/ml-mnist/train.py#L50-L80):
   reads `HELION_TRAIN_MAX_ITER` (clamped [20, 1000]) and
   `HELION_TRAIN_VARIANT`. Dataset is whatever preprocess produced.
 - Timing on the 2026-04-20 walkthrough run: `train_light` ~4 s,
@@ -160,7 +160,7 @@ unchanged — it still reads `metrics.json` from each train step.
 - No new network fetches, no new credentials. Preprocess still runs
   entirely inside the demo container with artefacts staged through
   the existing `internal/artifacts` Store
-  ([feature 11](implemented/11-ml-artifact-store.md)).
+  ([feature 11](11-ml-artifact-store.md)).
 - No new env-var denylist bypass — the two new variables are
   `HELION_PREPROCESS_SAMPLES_*`, subject to the same validation as
   any other env var today. Both are integer-only; `preprocess.py`
@@ -208,7 +208,7 @@ unchanged — it still reads `metrics.json` from each train step.
 ## Deferred
 
 - Option B (light variant uses `load_digits()`). Filed as
-  [`deferred/43-light-variant-load-digits.md`](deferred/43-light-variant-load-digits.md)
+  [`deferred/43-light-variant-load-digits.md`](../deferred/43-light-variant-load-digits.md)
   — revisit if the UX goal shifts from "dramatic time gap" back to
   "dramatic dataset-shape gap."
 

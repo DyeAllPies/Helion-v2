@@ -1,7 +1,7 @@
 # Feature: DAG-builder draft persistence + Submit-tab "resume draft" button
 
 **Priority:** P2
-**Status:** Pending
+**Status:** Implemented (2026-04-21)
 **Affected files:**
 `dashboard/src/app/features/submit/submit-dag-builder.component.ts`,
 `dashboard/src/app/features/submit/submit-dag-builder.component.html`,
@@ -22,7 +22,7 @@ spec posts the workflow body via `fetch()` inside `page.evaluate()`,
 because no path exists that actually links the two pages. Today:
 
 - The DAG builder
-  ([`submit-dag-builder.component.ts:488-549`](../../dashboard/src/app/features/submit/submit-dag-builder.component.ts#L488-L549))
+  ([`submit-dag-builder.component.ts:488-549`](../../../dashboard/src/app/features/submit/submit-dag-builder.component.ts#L488-L549))
   holds its form in a `FormArray`/`FormGroup` with no persistence —
   navigating away loses everything.
 - Validate → Preview → Submit is a single-page flow: the "Submit"
@@ -45,7 +45,7 @@ because no path exists that actually links the two pages. Today:
   job-submission form only; there is no "resume DAG-builder draft"
   affordance.
 - E2E spec
-  ([`ml-mnist-parallel-walkthrough.spec.ts:167-176`](../../dashboard/e2e/specs/ml-mnist-parallel-walkthrough.spec.ts#L167-L176))
+  ([`ml-mnist-parallel-walkthrough.spec.ts:167-176`](../../../dashboard/e2e/specs/ml-mnist-parallel-walkthrough.spec.ts#L167-L176))
   sidesteps the UI and posts via `fetch()`; the "+ add job" clicks
   at lines 232-253 are visual filler.
 

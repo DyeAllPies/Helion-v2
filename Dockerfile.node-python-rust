@@ -59,6 +59,7 @@ RUN pip install --no-cache-dir -r /tmp/iris-requirements.txt
 COPY examples/ml-iris/ingest.py      /app/ml-iris/ingest.py
 COPY examples/ml-iris/preprocess.py  /app/ml-iris/preprocess.py
 COPY examples/ml-iris/train.py       /app/ml-iris/train.py
+COPY examples/ml-iris/baseline.py    /app/ml-iris/baseline.py
 COPY examples/ml-iris/register.py    /app/ml-iris/register.py
 COPY examples/ml-iris/serve.py       /app/ml-iris/serve.py
 COPY examples/ml-mnist/ingest.py     /app/ml-mnist/ingest.py
