@@ -1,0 +1,17 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../out-tsc/e2e",
+    "rootDir": "./",
+    "types": ["node"],
+    "noEmit": true,
+    "noPropertyAccessFromIndexSignature": false
+  },
+  "include": [
+    "./**/*.ts"
+  ],
+  "exclude": [
+    "../node_modules/**",
+    "../dist/**"
+  ]
+}

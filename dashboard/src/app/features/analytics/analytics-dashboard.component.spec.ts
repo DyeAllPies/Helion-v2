@@ -32,6 +32,20 @@ const emptyWorkflow = (): AnalyticsWorkflowOutcomesResponse => ({
   from: '', to: '', data: [],
 });
 
+// Component fixes its rolling window to the last 7 days on ngOnInit,
+// so fixtures with hard-coded calendar dates silently drift out of
+// range as time passes — a row stamped "2026-04-13T10:00:00Z" lands
+// outside the window once `now` crosses 2026-04-20T10:00:00Z. Using
+// dates relative to `now` keeps the two bucket hours inside the
+// window regardless of when the test runs. Two consecutive whole
+// hours in the past (2 h and 3 h ago) give us "two distinct buckets
+// with data in them" for the test to assert against.
+function hoursAgoISO(h: number): string {
+  const d = new Date(Date.now() - h * 60 * 60 * 1000);
+  d.setUTCMinutes(0, 0, 0);
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
 function mkApiSpy(): jasmine.SpyObj<ApiService> {
   const spy = jasmine.createSpyObj<ApiService>('ApiService', [
     'getAnalyticsThroughput',
@@ -114,12 +128,14 @@ describe('AnalyticsDashboardComponent', () => {
   // ── Throughput data ────────────────────────────────────────────────────
 
   it('processes throughput data into chart series', () => {
+    const hourA = hoursAgoISO(3);
+    const hourB = hoursAgoISO(2);
     apiSpy.getAnalyticsThroughput.and.returnValue(of({
       from: '', to: '',
       data: [
-        { hour: '2026-04-13T10:00:00Z', status: 'completed', job_count: 5, avg_duration_ms: 100, p95_duration_ms: 200 },
-        { hour: '2026-04-13T10:00:00Z', status: 'failed',    job_count: 2, avg_duration_ms: 50,  p95_duration_ms: 80 },
-        { hour: '2026-04-13T11:00:00Z', status: 'completed', job_count: 7, avg_duration_ms: 120, p95_duration_ms: 220 },
+        { hour: hourA, status: 'completed', job_count: 5, avg_duration_ms: 100, p95_duration_ms: 200 },
+        { hour: hourA, status: 'failed',    job_count: 2, avg_duration_ms: 50,  p95_duration_ms: 80 },
+        { hour: hourB, status: 'completed', job_count: 7, avg_duration_ms: 120, p95_duration_ms: 220 },
       ],
     }));
     component.reload();
@@ -143,7 +159,7 @@ describe('AnalyticsDashboardComponent', () => {
     apiSpy.getAnalyticsThroughput.and.returnValue(of({
       from: '', to: '',
       data: [
-        { hour: '2026-04-13T10:00:00Z', status: 'completed', job_count: 5, avg_duration_ms: 0, p95_duration_ms: 0 },
+        { hour: hoursAgoISO(2), status: 'completed', job_count: 5, avg_duration_ms: 0, p95_duration_ms: 0 },
       ],
     }));
     component.reload();
@@ -159,8 +175,8 @@ describe('AnalyticsDashboardComponent', () => {
     apiSpy.getAnalyticsQueueWait.and.returnValue(of({
       from: '', to: '',
       data: [
-        { hour: '2026-04-13T10:00:00Z', avg_wait_ms: 500, p95_wait_ms: 1500, job_count: 10 },
-        { hour: '2026-04-13T11:00:00Z', avg_wait_ms: 300, p95_wait_ms: 900,  job_count: 8 },
+        { hour: hoursAgoISO(3), avg_wait_ms: 500, p95_wait_ms: 1500, job_count: 10 },
+        { hour: hoursAgoISO(2), avg_wait_ms: 300, p95_wait_ms: 900,  job_count: 8 },
       ],
     }));
     component.reload();

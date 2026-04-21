@@ -149,6 +149,7 @@ mod tests {
             env: std::collections::HashMap::from([("K".into(), "V".into())]),
             timeout_seconds: 30,
             limits: None,
+            working_dir: String::new(),
         };
 
         let encoded = req.encode_to_vec();
@@ -267,6 +268,7 @@ mod tests {
             env: Default::default(),
             timeout_seconds: 5,
             limits: None,
+            working_dir: String::new(),
         };
         let encoded = req.encode_to_vec();
         write_frame(&mut client, MSG_RUN_REQUEST, &encoded).await.unwrap();

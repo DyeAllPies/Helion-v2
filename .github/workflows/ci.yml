@@ -232,6 +232,39 @@ jobs:
           path: dashboard/coverage/
           retention-days: 14
 
+  # ── TypeScript: strict typecheck for code outside ng build ──────────────────
+  # `ng build` + `ng test` run tsc under the hood but only against
+  # the main app (src/). The Playwright E2E specs under
+  # dashboard/e2e/ sit outside that program — Playwright has its
+  # own implicit TS compilation at test-run time, which means
+  # broken E2E types only surface once Docker is up and the test
+  # runner actually starts. A standalone tsc --noEmit on
+  # dashboard/e2e/tsconfig.json catches those early, in parallel
+  # with the other tier-1 suites, so a type error in an E2E spec
+  # doesn't wait for the 5-minute Docker cluster boot to show up.
+  typecheck:
+    name: TypeScript — E2E spec typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        working-directory: dashboard
+        run: npm ci
+
+      - name: tsc --noEmit on E2E specs
+        working-directory: dashboard
+        run: npx tsc --noEmit -p e2e/tsconfig.json
+
   # ── E2E: build Docker images in parallel with unit tests ─────────────────────
   e2e-images:
     name: E2E — build images
@@ -297,7 +330,10 @@ jobs:
   e2e:
     name: E2E — Playwright (non-ML full suite)
     runs-on: ubuntu-latest
-    needs: [build, test-dashboard, test-rust, e2e-images]
+    # Tier 2 branch B: runs in parallel with the iris → mnist
+    # sequence in branch A. Needs the full tier 1 (build, tests,
+    # images) since the non-ML cluster rides the pre-built tarballs.
+    needs: [build, test-dashboard, test-rust, typecheck, e2e-images]
 
     # The e2e-overlay coordinator depends_on the analytics-db service, which
     # in the base compose file is gated behind `profiles: ["analytics"]`.
@@ -472,7 +508,10 @@ jobs:
   e2e-iris:
     name: E2E — iris pipeline (REST + Playwright)
     runs-on: ubuntu-latest
-    needs: [build, test-dashboard]
+    # Tier 2 branch A, step 1: iris is the fast minimal-ML gate.
+    # Needs tier-1 suites; e2e-mnist below chains onto this job so
+    # a red iris shortcuts the longer MNIST run.
+    needs: [build, test-dashboard, test-rust, typecheck]
     env:
       COMPOSE_PROFILES: analytics,ml
 
@@ -561,12 +600,15 @@ jobs:
   # Runs on the same iris overlay the iris job uses (coordinator +
   # 2 Go-Python nodes + 1 Rust-Python node + MinIO + Postgres).
   # Takes ~2 minutes of cluster time on CI for the full walkthrough.
-  # Separate job (not piggy-backed on e2e-iris) so a flake in one
-  # doesn't mask the other.
+  # Chained AFTER e2e-iris in the same tier-2 branch (branch A):
+  # iris is the quicker minimum-ML gate; if it's red the longer
+  # MNIST run is almost certainly broken too, so short-circuiting
+  # saves ~2 minutes of runner time + ~300 MiB of image rebuild.
+  # Branch B (non-ML full e2e) runs independently in parallel.
   e2e-mnist:
     name: E2E — MNIST parallel pipeline (features 21, 40, 42, 43)
     runs-on: ubuntu-latest
-    needs: [build, test-dashboard]
+    needs: [e2e-iris]
     env:
       COMPOSE_PROFILES: analytics,ml
 

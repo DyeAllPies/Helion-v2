@@ -128,6 +128,12 @@ func TestGetJobLogs_TailParam(t *testing.T) {
 		_ = srv.Shutdown(ctx)
 	})
 
+	// Feature 37 authz — the log-read handler loads the Job record
+	// first so it can authorise against the owner + share list. The
+	// record has to exist before the GET, even though logs live in
+	// a separate store.
+	submitJob(t, addr, "tail-job", "echo", []string{"test"})
+
 	ctx := context.Background()
 	for i := 1; i <= 10; i++ {
 		_ = ls.Append(ctx, logstore.LogEntry{JobID: "tail-job", Seq: uint64(i), Data: fmt.Sprintf("line %d", i)})
@@ -182,6 +188,11 @@ func TestGetJobLogs_EmptyLogs(t *testing.T) {
 		defer cancel()
 		_ = srv.Shutdown(ctx)
 	})
+
+	// Feature 37 authz — same requirement as the tail test: the
+	// handler loads the Job record for ownership checks before
+	// reaching the (empty) log store, so the record must exist.
+	submitJob(t, addr, "no-logs-job", "echo", []string{"no-logs"})
 
 	resp, err := http.Get(fmt.Sprintf("http://%s/jobs/no-logs-job/logs", addr))
 	if err != nil {
