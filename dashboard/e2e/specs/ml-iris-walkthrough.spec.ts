@@ -144,6 +144,9 @@ async function ensureServe(token: string): Promise<void> {
       env: { PYTHONPATH: '/app/ml-iris' },
       inputs: [{ name: 'MODEL', uri: modelURI, local_path: 'model.joblib' }],
       service: { port: 8000, health_path: '/healthz', health_initial_ms: 2000 },
+      // uvicorn needs Python — pin to the Go runtime. Workflow jobs
+      // above already do the same (see their node_selector fields).
+      node_selector: { runtime: 'go' },
     }),
   });
   const deadline = Date.now() + 30_000;

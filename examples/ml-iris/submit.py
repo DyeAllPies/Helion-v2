@@ -241,6 +241,14 @@ def _serve_job_body(model_name: str, model_version: str) -> dict:
             "health_path": "/healthz",
             "health_initial_ms": 2000,
         },
+        # Pin to the Go runtime: the iris serve job runs `uvicorn`, which
+        # needs Python on the node. The mnist iris overlay also wires a
+        # Rust-runtime node for MNIST parallel-train walk-throughs; that
+        # node has no Python and the Rust runtime env_clear()'s PATH, so
+        # a serve job landing there fails with exec error. The workflow
+        # jobs (preprocess/train/eval/register) pin the same selector —
+        # see examples/ml-iris/workflow.yaml line 28.
+        "node_selector": {"runtime": "go"},
     }
 
 

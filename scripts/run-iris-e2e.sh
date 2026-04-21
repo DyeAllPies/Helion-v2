@@ -237,7 +237,8 @@ SERVE_RESP=$(cat <<JSON | curl -sf --cacert "$CA_PEM" -X POST -H "Authorization:
   "args": ["serve:app", "--host", "0.0.0.0", "--port", "8000"],
   "env": {"PYTHONPATH": "/app/ml-iris"},
   "inputs": [{"name": "MODEL", "uri": "$MODEL_URI", "local_path": "model.joblib"}],
-  "service": {"port": 8000, "health_path": "/healthz", "health_initial_ms": 2000}
+  "service": {"port": 8000, "health_path": "/healthz", "health_initial_ms": 2000},
+  "node_selector": {"runtime": "go"}
 }
 JSON
 )

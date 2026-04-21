@@ -589,17 +589,36 @@ test.describe('Analytics REST API', () => {
   test('events pagination: offset produces disjoint result sets', async () => {
     const token = getRootToken();
 
-    // Submit a few jobs so we have events to page through.
+    // Record the timestamp just BEFORE submitting so we can clip the
+    // query window to our own events. The endpoint orders by
+    // `timestamp DESC`, so without this clip a concurrent flush between
+    // p1 and p2 adds newer rows at the top and shifts our target rows
+    // into p2's window — creating an overlap with p1 that has nothing
+    // to do with the handler's offset semantics.
+    const fromISO = new Date(Date.now() - 1_000).toISOString();
+
+    // Submit 5 jobs — exactly 5 `job_submit` events land on the bus.
     for (let i = 0; i < 5; i++) {
       const id = `e2e-analytics-page-${Date.now()}-${i}`;
       await submitJob(token, { id, command: 'echo', args: ['page'] });
     }
+    const toISO = new Date(Date.now() + 60_000).toISOString();
     // Let the sink flush.
     await new Promise(r => setTimeout(r, 1_500));
 
+    // Filter by `type=job_submit` + tight `from/to` window so the query
+    // set is exactly the 5 submits we just made. Pagination over a
+    // stable set is what the test is actually asserting.
     const page = async (limit: number, offset: number) => {
+      const qs = new URLSearchParams({
+        type: 'job_submit',
+        from: fromISO,
+        to: toISO,
+        limit: String(limit),
+        offset: String(offset),
+      });
       const res = await fetch(
-        `${API_URL}/api/analytics/events?limit=${limit}&offset=${offset}`,
+        `${API_URL}/api/analytics/events?${qs}`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       expect(res.status).toBe(200);
@@ -612,7 +631,7 @@ test.describe('Analytics REST API', () => {
     const p1 = await page(3, 0);
     const p2 = await page(3, 3);
 
-    // Both pages should have events (we just submitted 5).
+    // Both pages should have events (5 submits → p1 = 3, p2 = 2).
     expect(p1.length).toBeGreaterThan(0);
     expect(p2.length).toBeGreaterThan(0);
 

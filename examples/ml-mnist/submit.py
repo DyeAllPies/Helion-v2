@@ -203,6 +203,9 @@ def _serve_job_body(model_name: str, model_version: str) -> "dict[str, Any]":
             "health_path": "/healthz",
             "health_initial_ms": 2000,
         },
+        # Pin to the Go runtime: uvicorn needs Python, which the Rust
+        # runtime node doesn't have. Consistent with the iris submitter.
+        "node_selector": {"runtime": "go"},
     }
 
 

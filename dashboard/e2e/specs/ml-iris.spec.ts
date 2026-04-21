@@ -301,6 +301,9 @@ async function submitServeJob(token: string): Promise<void> {
     env: { PYTHONPATH: '/app/ml-iris' },
     inputs: [{ name: 'MODEL', uri: modelURI, local_path: 'model.joblib' }],
     service: { port: 8000, health_path: '/healthz', health_initial_ms: 2000 },
+    // uvicorn needs Python — pin to the Go runtime. Workflow jobs in
+    // this spec already carry the same selector.
+    node_selector: { runtime: 'go' },
   };
   const res = await fetch(`${API_URL}/jobs`, {
     method: 'POST',
