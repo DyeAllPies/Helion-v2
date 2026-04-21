@@ -209,6 +209,18 @@ jobs:
         working-directory: dashboard
         run: npx ng lint
 
+      # `ng test` runs tsc under the hood but only against src/**
+      # (tsconfig.json explicitly excludes e2e/**). Playwright has
+      # its own implicit TS compilation at test-run time, so broken
+      # E2E spec types would only surface once Docker is up and the
+      # test runner started. tsc --noEmit on e2e/tsconfig.json here
+      # catches those early, and folding it into the dashboard job
+      # reuses the already-installed Node runtime instead of paying
+      # ~1 minute of runner setup for a 10-second check.
+      - name: tsc --noEmit on E2E specs
+        working-directory: dashboard
+        run: npx tsc --noEmit -p e2e/tsconfig.json
+
       - name: Unit tests + coverage
         working-directory: dashboard
         run: |
@@ -231,39 +243,6 @@ jobs:
           name: angular-coverage
           path: dashboard/coverage/
           retention-days: 14
-
-  # ── TypeScript: strict typecheck for code outside ng build ──────────────────
-  # `ng build` + `ng test` run tsc under the hood but only against
-  # the main app (src/). The Playwright E2E specs under
-  # dashboard/e2e/ sit outside that program — Playwright has its
-  # own implicit TS compilation at test-run time, which means
-  # broken E2E types only surface once Docker is up and the test
-  # runner actually starts. A standalone tsc --noEmit on
-  # dashboard/e2e/tsconfig.json catches those early, in parallel
-  # with the other tier-1 suites, so a type error in an E2E spec
-  # doesn't wait for the 5-minute Docker cluster boot to show up.
-  typecheck:
-    name: TypeScript — spec typecheck
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: dashboard/package-lock.json
-
-      - name: Install dependencies
-        working-directory: dashboard
-        run: npm ci
-
-      - name: tsc --noEmit on E2E specs
-        working-directory: dashboard
-        run: npx tsc --noEmit -p e2e/tsconfig.json
 
   # ── E2E: build Docker images in parallel with unit tests ─────────────────────
   e2e-images:
@@ -333,7 +312,7 @@ jobs:
     # Tier 2 branch B: runs in parallel with the iris → mnist
     # sequence in branch A. Needs the full tier 1 (build, tests,
     # images) since the non-ML cluster rides the pre-built tarballs.
-    needs: [build, test-dashboard, test-rust, typecheck, e2e-images]
+    needs: [build, test-dashboard, test-rust, e2e-images]
 
     # Both profiles are needed:
     #   - analytics: gates analytics-db (PostgreSQL) that the coordinator
@@ -512,12 +491,12 @@ jobs:
   # pass/fail. This halves the overall CI time vs. running the two
   # layers in separate jobs.
   e2e-iris:
-    name: E2E — iris pipeline REST + Playwright
+    name: E2E — iris pipeline
     runs-on: ubuntu-latest
     # Tier 2 branch A, step 1: iris is the fast minimal-ML gate.
     # Needs tier-1 suites; e2e-mnist below chains onto this job so
     # a red iris shortcuts the longer MNIST run.
-    needs: [build, test-dashboard, test-rust, typecheck]
+    needs: [build, test-dashboard, test-rust, e2e-images]
     env:
       COMPOSE_PROFILES: analytics,ml
 

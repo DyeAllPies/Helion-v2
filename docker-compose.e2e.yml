@@ -27,6 +27,18 @@ services:
     ports:
       - "127.0.0.1:9090:9090"   # gRPC
       - "127.0.0.1:8080:8080"   # HTTP API
+    # Feature 39 — the base compose healthcheck is
+    # `wget http://127.0.0.1:9090/healthz`, which under TLS-on E2E
+    # tries plain HTTP against the mTLS gRPC listener and logs
+    # "TLS handshake error: client sent an HTTP request to an HTTPS
+    # server" every 10 s. BusyBox wget (bundled in alpine) has no
+    # --cacert flag, so there's no clean way to probe the real TLS
+    # endpoint from inside the container without bundling curl.
+    # Dependents here use `service_started` (see the iris overlay
+    # comment), so the healthcheck isn't load-bearing — disabling
+    # it silences the noise without changing boot semantics.
+    healthcheck:
+      disable: true
     environment:
       - HELION_SCHEDULER=roundrobin
       - HELION_ROTATE_TOKEN=false

@@ -69,3 +69,4 @@ benchmarks/
 **/*.pb.go
 **/*_grpc.pb.go
 **/__pycache__/
+**/.pytest_cache/
