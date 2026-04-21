@@ -1,55 +1,27 @@
 # Helion v2 — Architecture Reference
 
-Helion v2 is a minimal distributed orchestrator. This document is the technical
-companion to the [README](README.md). It covers component internals, protocol
-contracts, persistence design, the CI/CD pipeline, runtime benchmarks, and the
-key decisions behind every major choice.
+Helion v2 is a minimal distributed orchestrator built as a student learning project. This document is the technical companion to the [README](README.md). It covers component internals, protocol contracts, persistence design, the CI/CD pipeline, runtime benchmarks, and the key decisions behind every major choice. The posture throughout is "better safe than sorry" — the project exercises production patterns even though nothing here is actually deployed beyond Docker Compose + GitHub Actions CI.
 
 ---
 
 ## Table of contents
 
-1. [v1 post-mortem](#1-v1-post-mortem)
-2. [Technology decisions](#2-technology-decisions)
-3. [Component design](#3-component-design) → [COMPONENTS.md](COMPONENTS.md)
-4. [Persistence layer](#4-persistence-layer) → [persistence.md](persistence.md)
-5. [Protocol contracts](#5-protocol-contracts)
-6. [Angular dashboard design](#6-angular-dashboard-design)
-7. [CI/CD pipeline](#7-cicd-pipeline)
-8. [Benchmarks](#8-benchmarks--go-vs-rust-runtime) → [PERFORMANCE.md](PERFORMANCE.md)
-9. [Known constraints and out-of-scope](#9-known-constraints-and-out-of-scope)
-10. [Glossary](#10-glossary)
-11. [Key decisions quick reference](#11-key-decisions-quick-reference)
-12. [Analytics pipeline](#12-analytics-pipeline)
-13. [ML pipeline](#13-ml-pipeline) → [ml-pipelines.md](ml-pipelines.md)
+1. [Technology decisions](#1-technology-decisions)
+2. [Component design](#2-component-design) → [COMPONENTS.md](COMPONENTS.md)
+3. [Persistence layer](#3-persistence-layer) → [persistence.md](persistence.md)
+4. [Protocol contracts](#4-protocol-contracts)
+5. [Angular dashboard design](#5-angular-dashboard-design)
+6. [CI/CD pipeline](#6-cicd-pipeline)
+7. [Benchmarks](#7-benchmarks--go-vs-rust-runtime) → [PERFORMANCE.md](PERFORMANCE.md)
+8. [Known constraints and out-of-scope](#8-known-constraints-and-out-of-scope)
+9. [Glossary](#9-glossary)
+10. [Key decisions quick reference](#10-key-decisions-quick-reference)
+11. [Analytics pipeline](#11-analytics-pipeline)
+12. [ML pipeline](#12-ml-pipeline) → [ml-pipelines.md](ml-pipelines.md)
 
 ---
 
-## 1. v1 post-mortem
-
-v1 (4th semester) was a genuine success. The following table records what worked, what was
-partial, and what was rebuilt from scratch in v2.
-
-| Area | v1 status | Root cause / notes |
-|---|---|---|
-| Core runtime (process exec + namespaces) | ✓ Working | Correctly gated behind root / `HELION_ALLOW_ISOLATION`. |
-| Node registration + heartbeat | ✓ Working | Both push and pull ran simultaneously — redundant but resilient. |
-| Round-robin + least-loaded scheduler | ✓ Working | Logic correct; concurrency bug in `lastIndex` write (see below). |
-| Job persistence (`cluster.json`) | ✓ Working | Atomic write-then-rename pattern is production-correct. |
-| Crash recovery / lost-job detection | ✓ Working | Correctly marks running jobs as `lost` on restart. Reschedule timing was naive (see below). |
-| Dashboard (HTML template) | ⚠ Partial | Blocked by `CheckHealth` deadlock in steady state. |
-| Docker Compose packaging | ✓ Working | All three Dockerfiles built and composed correctly on Linux. |
-| `CheckHealth()` deadlock | ✗ Bug | Held write lock while making blocking HTTP calls to every node. Starved all other goroutines. |
-| `lastIndex` write under `RLock` | ✗ Bug | Writes a field while only holding `RLock` — classic TOCTOU race. Fixed with `atomic.Int64`. |
-| Double-close on `Heartbeat.stop` | ✗ Bug | `Stop()` called twice (defer + explicit). Closing a closed channel panics. Fixed with `sync.Once`. |
-| State round-trip of `*PersistentState` | ✗ Bug | Serialising a pointer to its own path caused silent nil on reload. State excluded from JSON; BadgerDB handles persistence in v2. |
-| Timeout layering in `job.go` | ✗ Design | 5 s client timeout + 3 s select timeout: inner always fired first, making the outer meaningless. |
-| `recoverLostJobs()` timing | ✗ Bug | Fired before any node had re-registered on startup. Fixed with a 15 s grace period. |
-| Security | ✗ Missing | No mTLS, no token auth, no rate limiting. Acceptable for v1; not for v2. |
-
----
-
-## 2. Technology decisions
+## 1. Technology decisions
 
 ### Primary language — Go 1.26
 
@@ -67,9 +39,7 @@ protobuf-over-Unix-socket interface; the swap changes no other component.
 
 ### Inter-node protocol — gRPC + Protocol Buffers
 
-Replaces the v1 ad-hoc HTTP/JSON protocol. Reasons: strongly-typed contracts enforced at
-compile time; bidirectional streaming for logs and heartbeats; native mTLS support;
-language-agnostic contracts that make a future Rust node agent a drop-in replacement.
+gRPC + Protobuf are the substrate for coordinator↔node traffic. Reasons: strongly-typed contracts enforced at compile time; bidirectional streaming for logs and heartbeats; native mTLS support; language-agnostic contracts that make a future Rust node agent a drop-in replacement.
 
 The coordinator's public API (consumed by the dashboard and CLI) remains REST+JSON over
 HTTPS for simplicity and browser compatibility.
@@ -92,7 +62,7 @@ and handles JWT authentication with automatic session management.
 
 ---
 
-## 3. Component design
+## 2. Component design
 
 See [COMPONENTS.md](COMPONENTS.md) for detailed internals on the Coordinator
 (registry, scheduler, job lifecycle, dispatch loop, workflow/DAG engine, crash
@@ -100,7 +70,7 @@ recovery), Node agent, and Runtime interface (Go + Rust).
 
 ---
 
-## 4. Persistence layer
+## 3. Persistence layer
 
 See [persistence.md](persistence.md) for the full rules, key schema, and TTL
 conventions. Summary:
@@ -111,7 +81,7 @@ conventions. Summary:
 
 ---
 
-## 5. Protocol contracts
+## 4. Protocol contracts
 
 Protocol Buffers are the single source of truth for all coordinator↔node communication.
 Generated Go stubs are checked into the repository. `.proto` files live in `proto/`.
@@ -213,7 +183,7 @@ a real submission.
 
 ---
 
-## 6. Angular dashboard design
+## 5. Angular dashboard design
 
 ### Component tree
 
@@ -253,7 +223,7 @@ security contract (JWT in-memory only, first-message WebSocket auth, CSP).
 
 ---
 
-## 7. CI/CD pipeline
+## 6. CI/CD pipeline
 
 ### Workflow structure
 
@@ -294,30 +264,39 @@ artifacts for debugging.
 
 ---
 
-## 8. Benchmarks — Go vs Rust runtime
+## 7. Benchmarks — Go vs Rust runtime
 
 See [PERFORMANCE.md](PERFORMANCE.md) for full benchmark results, reproduction
 instructions, cgroup v2 overhead measurements, and seccomp filtering latency.
 
 ---
 
-## 9. Known constraints and out-of-scope
+## 8. Known constraints and out-of-scope
 
+- **Never deployed.** Helion has only ever run under Docker Compose and GitHub Actions CI.
+  The Helm chart under [`deploy/helm/`](../deploy/helm/) is design scaffolding for what
+  production would look like — no real Kubernetes install has exercised it.
+- **GPU support is code-complete but unverified on real hardware.** Feature 15 ships the
+  scheduler's whole-GPU allocator, `CUDA_VISIBLE_DEVICES` pinning, and a build-tag-gated
+  integration test under `tests/gpu/` that probes `nvidia-smi` when present. GitHub Actions
+  free tier has no GPU runners, so no run of CI has ever touched a real GPU — everything
+  is asserted on the CPU-path stub or a simulated nvidia-smi. See
+  [`planned-features/implemented/15-ml-gpu-first-class-resource.md`](planned-features/implemented/15-ml-gpu-first-class-resource.md)
+  for the full status and what a real-hardware validation pass would need to prove.
 - **Single coordinator replica.** HA (active-passive or Raft) is architecturally possible
-  via the BadgerDB → etcd swap but not in v2 scope.
+  via the BadgerDB → etcd swap but out of scope.
 - **Workflows are single-coordinator.** DAG execution runs on one coordinator instance.
   HA would require distributed locking for workflow state transitions.
-- **No multi-tenancy.** All jobs share a single namespace. Per-tenant RBAC is a v3 concern.
-- **No GPU scheduling.** Requires Kubernetes device plugin integration.
-- **No MapReduce demo.** Deferred to keep v2 focused on infrastructure correctness.
+- **No multi-tenancy.** All jobs share a single namespace. Per-tenant RBAC is out of scope.
+- **No MapReduce demo.** Deferred to keep the project focused on infrastructure correctness.
 - **Linux-only isolation.** Cross-compiled binaries run on other OS targets without
   namespace isolation (`HELION_ALLOW_ISOLATION=false`), suitable for local development.
-- **Namespace isolation requires root or `CAP_SYS_ADMIN`.** Set in the DaemonSet
-  `SecurityContext` in Kubernetes.
+- **Namespace isolation requires root or `CAP_SYS_ADMIN`.** The hypothetical Kubernetes
+  deployment would set this in the DaemonSet `SecurityContext`.
 
 ---
 
-## 10. Glossary
+## 9. Glossary
 
 | Term | Definition |
 |---|---|
@@ -345,7 +324,7 @@ instructions, cgroup v2 overhead measurements, and seccomp filtering latency.
 
 ---
 
-## 11. Key decisions quick reference
+## 10. Key decisions quick reference
 
 | Decision | Choice | Rationale |
 |---|---|---|
@@ -356,10 +335,10 @@ instructions, cgroup v2 overhead measurements, and seccomp filtering latency.
 | Frontend | Angular 21 | Enterprise framework with real WebSocket + auth complexity. |
 | Key exchange | ML-KEM hybrid | NIST FIPS 203. Hybrid maintains classical compatibility while adding quantum resistance. Low cost at design time. |
 | Signatures | ML-DSA hybrid | NIST FIPS 204. Node certificate signing, hybrid with ECDSA during transition. |
-| Deployment | Kubernetes + Helm | True cloud agnosticism. Coordinator = Deployment, Agents = DaemonSet. One chart, per-cloud values files. |
+| Deployment (planned, untested) | Kubernetes + Helm | The chart under `deploy/helm/` describes the intended shape — coordinator = `Deployment`, agents = `DaemonSet`, per-cloud values files. Never installed against a real cluster; Docker Compose + CI is the full lifecycle. |
 | CI/CD | GitHub Actions + Snyk | Free for public repos, native to GitHub. Snyk added for dependency and container CVE scanning. |
-| Health model | Push heartbeat stream | Node maintains gRPC stream; coordinator does not poll. Eliminates the v1 `CheckHealth` deadlock by design. |
-| Crash recovery | Grace period + retry | Fixes v1 naive recovery. 15 s default grace period; configurable. |
+| Health model | Push heartbeat stream | Node maintains gRPC stream; coordinator does not poll. Avoids the classic "coordinator holds a write lock while making blocking HTTP calls to every node" deadlock by design. |
+| Crash recovery | Grace period + retry | 15 s default startup grace period before `recoverLostJobs()` fires, so nodes have time to re-register before their jobs are marked lost. Configurable. |
 | JWT storage (dashboard) | In-memory only | Never `localStorage`/`sessionStorage`. Intentional for a security-focused project. |
 | Audit log | Append-only, BadgerDB | Every security and job event recorded. Never updated or deleted in normal operation. |
 | Analytics store | PostgreSQL (opt-in) | Triple-tier storage: BadgerDB for operational hot path, object store for ML artifact bytes, PostgreSQL for historical analytics. Opt-in via `HELION_ANALYTICS_DSN`. |
@@ -369,7 +348,7 @@ instructions, cgroup v2 overhead measurements, and seccomp filtering latency.
 
 ---
 
-## 12. Analytics pipeline
+## 11. Analytics pipeline
 
 The analytics pipeline exports event data from the operational system into a PostgreSQL
 database for historical querying and dashboard visualisation.
@@ -452,7 +431,7 @@ Feature 35 is the identity primitive for features 36–38:
 
 ---
 
-## 13. ML pipeline
+## 12. ML pipeline
 
 Helion's ML slice (features 11–19) turns the base orchestrator
 into one that runs a training → registry → serve pipeline

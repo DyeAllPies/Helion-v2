@@ -6,7 +6,7 @@ job. Built around the iris reference pipeline in
 [`examples/ml-iris/`](../examples/ml-iris/).
 
 For the implementation internals behind each feature, see
-[ARCHITECTURE.md § ML pipeline](ARCHITECTURE.md#13-ml-pipeline) and
+[ARCHITECTURE.md § ML pipeline](ARCHITECTURE.md#12-ml-pipeline) and
 [COMPONENTS.md § ML subsystems](COMPONENTS.md#5-ml-subsystems).
 
 ---
@@ -398,6 +398,15 @@ a triage reason:
 
 ### GPU requests
 
+**Status:** code-complete on paper, **unverified on real GPU
+hardware.** Every unit test exercises either the CPU-path stub
+or a simulated `nvidia-smi`; the GitHub Actions runners have no
+GPU, so no CI run has ever touched a real device. A
+build-tag-gated harness under `tests/gpu/` exists for a local
+developer with CUDA to sanity-check the real path
+(`go test -tags=gpu ./tests/gpu/...`). Treat the design below as
+"wired correctly" rather than "validated end-to-end."
+
 `resources.gpus` is a first-class scheduler dimension:
 
 ```yaml
@@ -668,5 +677,5 @@ HTTP error raises and fails the job.
 - Example code: [`examples/ml-iris/`](../examples/ml-iris/)
 - Videos: [full e2e run](e2e-full-run.mp4) · [iris walkthrough](e2e-iris-run.mp4)
 - Security: [SECURITY.md](SECURITY.md) · [JWT-GUIDE.md](JWT-GUIDE.md)
-- Architecture: [ARCHITECTURE.md § ML pipeline](ARCHITECTURE.md#13-ml-pipeline)
+- Architecture: [ARCHITECTURE.md § ML pipeline](ARCHITECTURE.md#12-ml-pipeline)
 - Components: [COMPONENTS.md § ML subsystems](COMPONENTS.md#5-ml-subsystems)

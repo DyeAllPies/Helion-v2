@@ -113,7 +113,7 @@ Key boundaries:
   never blocks on PG.
 
 See [ml-pipelines.md](ml-pipelines.md) for the ML-side
-implications and [ARCHITECTURE.md § 13](ARCHITECTURE.md#13-ml-pipeline)
+implications and [ARCHITECTURE.md § 12](ARCHITECTURE.md#12-ml-pipeline)
 for the diagram.
 
 ## Storage tiers — audit ↔ analytics ↔ logs (feature 28)

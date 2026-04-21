@@ -15,7 +15,7 @@ record under `nodes/`.
 
 **Scheduler.** Selects a target node for each incoming job. Policies are pluggable behind
 an interface:
-- `roundrobin` — cycles through healthy nodes using `atomic.Int64` (v1 race fixed)
+- `roundrobin` — cycles through healthy nodes using `atomic.Int64`
 - `least` — picks the node with the fewest running jobs
 
 **Job lifecycle.** Tracks every job through a strict state machine:

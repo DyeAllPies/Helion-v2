@@ -1,8 +1,8 @@
 # Feature: ML GPU as a First-Class Resource
 
 **Priority:** P1
-**Status:** Done
-**Affected files:** `internal/proto/coordinatorpb/types.go`, `internal/api/types.go`, `internal/cluster/scheduler.go`, `internal/cluster/registry_node.go`, `internal/runtime/gpu_alloc.go`, `internal/runtime/go_runtime.go`, `internal/runtime/rust_client.go`, `cmd/helion-node/labels.go`.
+**Status:** Code-complete, **unverified on real GPU hardware.** The scheduler bin-packs on a `GPUs` dimension, the per-node allocator tracks device indices, and `CUDA_VISIBLE_DEVICES` is set on the job env — all exercised by unit tests and a build-tag-gated `tests/gpu/` harness that probes `nvidia-smi` when present. GitHub Actions free tier has no GPU runners, so the harness has never run in CI; no CI run has ever touched a real GPU. A local developer with a CUDA-capable machine can run `go test -tags=gpu ./tests/gpu/...` to exercise the real-device path. Until that run happens on a representative GPU, treat GPU scheduling as "wired correctly on paper" rather than "validated end-to-end on hardware."
+**Affected files:** `internal/proto/coordinatorpb/types.go`, `internal/api/types.go`, `internal/cluster/scheduler.go`, `internal/cluster/registry_node.go`, `internal/runtime/gpu_alloc.go`, `internal/runtime/go_runtime.go`, `internal/runtime/rust_client.go`, `cmd/helion-node/labels.go`, `tests/gpu/real_nvidia_smi_test.go`.
 **Parent slice:** [feature 10 — ML pipeline](../10-minimal-ml-pipeline.md)
 
 ## GPU as a first-class resource

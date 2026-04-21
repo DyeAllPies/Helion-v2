@@ -125,10 +125,9 @@ startup if `ApplyHybridKEM` silently produced a config without the Kyber curve
 falls back to classical-only curves when the runtime does not support Kyber; with the
 flag it refuses to start, guaranteeing the production posture never silently downgrades.
 
-**Why now?** The threat is harvest-now-decrypt-later: an adversary can record encrypted
-coordinator↔node traffic today and decrypt it once a sufficiently powerful quantum computer
-exists. Building hybrid PQC at design time costs relatively little; retrofitting it is
-expensive. NIST finalised ML-KEM as FIPS 203 in 2024.
+**Why hybrid PQC at all?** The primary answer is "better safe than sorry." Helion is a student learning project, not a production system — but wiring hybrid PQC at design time costs relatively little (mostly Go + Chromium's existing support; no new servers, no key-management overhead), and building the habit on a non-production codebase means the same patterns land correctly if the project ever is taken to production. The posture is safety-by-default.
+
+**Why not classical-only?** The secondary argument is harvest-now-decrypt-later: an adversary could record encrypted coordinator↔node traffic today and decrypt it once a sufficiently powerful quantum computer exists. This matters most for systems that are actually deployed and see real traffic — Helion is neither, so HNDL is a longevity / future-proofing concern here rather than a live threat. NIST finalised ML-KEM as FIPS 203 in 2024, which makes the "how" cheap; the "why" is mostly disciplinary, not adversarial.
 
 **Verification with Wireshark:**
 
