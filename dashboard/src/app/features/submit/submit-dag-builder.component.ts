@@ -25,7 +25,7 @@
 // a true drag-drop canvas in the future replaces only this
 // component's template.
 
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import {
@@ -33,8 +33,11 @@ import {
   ReactiveFormsModule, Validators,
 } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
+import { Subject, merge } from 'rxjs';
+import { debounceTime, takeUntil } from 'rxjs/operators';
 
 import { ApiService } from '../../core/services/api.service';
+import { WorkflowDraftService } from '../../core/services/workflow-draft.service';
 import { SubmitWorkflowRequest, SubmitWorkflowJobRequest } from '../../shared/models';
 import { SubmitPreviewDialogComponent, PreviewResult } from './submit-preview-dialog.component';
 import { validateWorkflowShape } from './workflow-shape-validator';
@@ -376,7 +379,7 @@ import { validateWorkflowShape } from './workflow-shape-validator';
     .btn:disabled { opacity: 0.45; cursor: not-allowed; }
   `],
 })
-export class SubmitDagBuilderComponent implements OnInit {
+export class SubmitDagBuilderComponent implements OnInit, OnDestroy {
   metaForm!: FormGroup;
   jobsArray!: FormArray;
   activeIdx = -1;
@@ -391,7 +394,14 @@ export class SubmitDagBuilderComponent implements OnInit {
 
   generatedJSON = '{}';
 
-  constructor(private fb: FormBuilder, private api: ApiService, private router: Router) {}
+  private readonly destroy$ = new Subject<void>();
+
+  constructor(
+    private fb: FormBuilder,
+    private api: ApiService,
+    private router: Router,
+    private drafts: WorkflowDraftService,
+  ) {}
 
   ngOnInit(): void {
     this.metaForm = this.fb.group({
@@ -400,11 +410,63 @@ export class SubmitDagBuilderComponent implements OnInit {
     });
     this.jobsArray = this.fb.array([]);
 
+    // Feature 41 — hydrate from sessionStorage so returning to the
+    // builder after navigating away (e.g. via the Submit landing
+    // card's Edit button) doesn't reset the operator's work.
+    const draft = this.drafts.load();
+    if (draft) {
+      this.hydrateFromDraft(draft.body);
+    }
+
     // Recompute the live preview on every change to any field —
     // job list, job form, or metadata.
-    this.metaForm.valueChanges.subscribe(() => this.refreshGenerated());
-    this.jobsArray.valueChanges.subscribe(() => this.refreshGenerated());
+    this.metaForm.valueChanges
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(() => this.refreshGenerated());
+    this.jobsArray.valueChanges
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(() => this.refreshGenerated());
+
+    // Feature 41 — auto-save draft on every form edit, debounced so
+    // the write volume is at most one per 400 ms even during rapid
+    // typing. Merged because either form moving changes the whole
+    // body, and we want one save per change-batch not two.
+    merge(this.metaForm.valueChanges, this.jobsArray.valueChanges)
+      .pipe(debounceTime(400), takeUntil(this.destroy$))
+      .subscribe(() => this.drafts.save(this.buildBody()));
+
     this.refreshGenerated();
+  }
+
+  ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
+
+  /**
+   * Rebuild both forms from a persisted SubmitWorkflowRequest.
+   * Called only from ngOnInit when WorkflowDraftService returns a
+   * non-null draft; never from a running form so the order of
+   * operations is (fresh form → clear → re-push populated groups).
+   */
+  private hydrateFromDraft(body: SubmitWorkflowRequest): void {
+    this.metaForm.patchValue({ id: body.id ?? '', name: body.name ?? '' });
+    this.jobsArray.clear();
+    for (const j of body.jobs ?? []) {
+      const group = this.fb.group({
+        name:            [j.name ?? '', Validators.required],
+        command:         [j.command ?? '', Validators.required],
+        argsRaw:         [(j.args ?? []).join('\n')],
+        envRaw:          [envToRaw(j.env)],
+        depends_on:      this.fb.control<string[]>([...(j.depends_on ?? [])]),
+        timeout_seconds: [j.timeout_seconds ?? 0],
+        selectorRaw:     [selectorToRaw(j.node_selector)],
+      });
+      this.jobsArray.push(group);
+    }
+    if (this.jobControls.length > 0) {
+      this.activeIdx = 0;
+    }
   }
 
   get jobControls(): FormGroup[] { return this.jobsArray.controls as FormGroup[]; }
@@ -537,6 +599,10 @@ export class SubmitDagBuilderComponent implements OnInit {
     this.api.submitWorkflow(body).subscribe({
       next: wf => {
         this.submitting = false;
+        // Feature 41 — draft served its purpose; clear before
+        // navigating so the Submit landing card reflects "no
+        // draft" on the way out.
+        this.drafts.clear();
         this.router.navigate(['/ml/pipelines', wf.id]);
       },
       error: (err: HttpErrorResponse) => {
@@ -575,4 +641,28 @@ function parseEnvLines(raw: unknown): Record<string, string> {
     if (k) out[k] = v;
   }
   return out;
+}
+
+// Reverse of `parseEnvLines` — used by feature-41 draft hydration
+// to round-trip a job's env map back into the multi-line textarea.
+// Stable key order (object-insertion order on modern engines) keeps
+// the textarea byte-identical across save/restore, which matters
+// for the E2E spec's exact-match assertions.
+function envToRaw(env: Record<string, string> | undefined): string {
+  if (!env) return '';
+  return Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n');
+}
+
+// Reverse of `parseKeyValue`. The DAG builder only authors single-
+// pair selectors today (feature 22 limitation), so a persisted
+// multi-pair selector from another submission path collapses to
+// its first entry here — preferable to crashing on hydration. The
+// server-side validator still sees the full selector if the
+// operator edits raw JSON.
+function selectorToRaw(selector: Record<string, string> | undefined): string {
+  if (!selector) return '';
+  const entries = Object.entries(selector);
+  if (entries.length === 0) return '';
+  const [k, v] = entries[0];
+  return `${k}=${v}`;
 }

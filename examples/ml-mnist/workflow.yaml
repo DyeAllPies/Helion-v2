@@ -11,10 +11,14 @@
 # - ingest + preprocess are the cheap orchestration steps, both on
 #   Go-runtime nodes (node_selector: {runtime: go}).
 # - train_light + train_heavy run in PARALLEL on different runtime
-#   nodes: light on Go (max_iter=50, ~5 s fit), heavy on Rust
-#   (max_iter=400, ~20–30 s fit). The Jobs page shows both with
-#   DIFFERENT node_id columns at the same moment — that's the
-#   heterogeneous-dispatch visual.
+#   nodes with intentionally asymmetric input sizes (feature 43):
+#   light on Go trains on 1 000 rows × 50 iters (~1–2 s fit) while
+#   heavy on Rust trains on 20 000 rows × 400 iters (~30–60 s fit).
+#   The Jobs page shows both with DIFFERENT node_id columns at the
+#   same moment — that's the heterogeneous-dispatch visual. The
+#   wide wall-clock gap makes the "heavy is doing real work" beat
+#   land on video, and gives feature 42's overlap assertion ample
+#   margin.
 # - compare consumes BOTH trained models, picks the winner by
 #   test-set accuracy, and registers both against the registry
 #   with a `winner=true|false` tag on each. See examples/ml-mnist/
@@ -53,19 +57,33 @@ jobs:
   - name: preprocess
     command: python
     args: [/app/ml-mnist/preprocess.py]
-    timeout_seconds: 60
+    # Heavy-variant subsample is up to 24 000 rows (20k train + 4k test);
+    # keep ample headroom on the default 60 s cap since parquet writes
+    # dominate wall-clock here on slow disks.
+    timeout_seconds: 120
     depends_on: [ingest]
     node_selector:
       runtime: go
+    env:
+      # Feature 43: per-variant subsample sizes give the parallel
+      # train fork a visibly asymmetric wall-clock footprint without
+      # changing dataset shape — apples-to-apples accuracy compare
+      # stays valid (compare.py reads metrics.json from each side).
+      HELION_PREPROCESS_SAMPLES_LIGHT: "1000"
+      HELION_PREPROCESS_SAMPLES_HEAVY: "20000"
     inputs:
       - name: RAW_CSV
         from: ingest.RAW_CSV
         local_path: raw.csv
     outputs:
-      - name: TRAIN_PARQUET
-        local_path: train.parquet
-      - name: TEST_PARQUET
-        local_path: test.parquet
+      - name: TRAIN_LIGHT_PARQUET
+        local_path: train_light.parquet
+      - name: TEST_LIGHT_PARQUET
+        local_path: test_light.parquet
+      - name: TRAIN_HEAVY_PARQUET
+        local_path: train_heavy.parquet
+      - name: TEST_HEAVY_PARQUET
+        local_path: test_heavy.parquet
 
   # ── Parallel training (feature 21 heterogeneous dispatch) ─────
   #
@@ -76,6 +94,7 @@ jobs:
   - name: train_light
     command: python
     args: [/app/ml-mnist/train.py]
+    # 1 000 train rows × 50 iters lands well under 30 s on any runner.
     timeout_seconds: 120
     depends_on: [preprocess]
     node_selector:
@@ -85,10 +104,10 @@ jobs:
       HELION_TRAIN_VARIANT: light
     inputs:
       - name: TRAIN_PARQUET
-        from: preprocess.TRAIN_PARQUET
+        from: preprocess.TRAIN_LIGHT_PARQUET
         local_path: train.parquet
       - name: TEST_PARQUET
-        from: preprocess.TEST_PARQUET
+        from: preprocess.TEST_LIGHT_PARQUET
         local_path: test.parquet
     outputs:
       - name: MODEL
@@ -99,7 +118,10 @@ jobs:
   - name: train_heavy
     command: python
     args: [/app/ml-mnist/train.py]
-    timeout_seconds: 300
+    # 20 000 train rows × 400 iters runs ~30–60 s on the Rust runner;
+    # 5× the timeout_seconds budget absorbs outliers without masking
+    # a real hang.
+    timeout_seconds: 600
     depends_on: [preprocess]
     node_selector:
       runtime: rust
@@ -108,10 +130,10 @@ jobs:
       HELION_TRAIN_VARIANT: heavy
     inputs:
       - name: TRAIN_PARQUET
-        from: preprocess.TRAIN_PARQUET
+        from: preprocess.TRAIN_HEAVY_PARQUET
         local_path: train.parquet
       - name: TEST_PARQUET
-        from: preprocess.TEST_PARQUET
+        from: preprocess.TEST_HEAVY_PARQUET
         local_path: test.parquet
     outputs:
       - name: MODEL

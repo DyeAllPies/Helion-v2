@@ -114,6 +114,12 @@ type JobResponse struct {
 	NodeID         string            `json:"node_id,omitempty"`
 	Runtime        string            `json:"runtime,omitempty"`
 	CreatedAt      time.Time         `json:"created_at"`
+	// Feature 42 — exposed so per-job run-intervals are computable
+	// from REST without scraping the analytics event stream. Set
+	// by the state machine on Scheduled → Dispatching; stays empty
+	// for jobs that never got picked up (Pending → Failed via
+	// unschedulable, etc.).
+	DispatchedAt   *time.Time        `json:"dispatched_at,omitempty"`
 	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
 	Error          string            `json:"error,omitempty"`
 	SubmittedBy    string            `json:"submitted_by,omitempty"` // AUDIT L1 — legacy; kept for one release (feature 36)

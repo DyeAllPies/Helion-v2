@@ -3,15 +3,19 @@
 Trains a multiclass LogisticRegression classifier on the preprocessed
 MNIST parquet, evaluates on the held-out split, writes the model +
 metrics. The full training loop is the observable "running" phase of
-the pipeline — on 5 000 × 784 rows this takes ~10–30 s depending on
-CPU and the configured max-iteration ceiling.
+the pipeline.
 
 The parallel-training demo (see compare.py) runs this script twice
-in the same workflow — once with HELION_TRAIN_MAX_ITER=50 on the
-Go-runtime node (fast, less converged) and once with =400 on the
-Rust-runtime node (slower, more accurate). The `variant` tag in
-metrics.json lets compare.py render a clear A/B row on the demo
-analytics panel.
+in the same workflow. Feature 43 gives the two runs intentionally
+asymmetric inputs:
+
+  - light variant — 1 000 train rows × max_iter=50 on the Go-runtime
+    node (fast, ~1–2 s fit, noisy baseline).
+  - heavy variant — 20 000 train rows × max_iter=400 on the Rust-runtime
+    node (real work, ~30–60 s fit, firm accuracy).
+
+The `variant` tag in metrics.json lets compare.py render a clear A/B
+row on the demo analytics panel.
 
 Environment
 -----------

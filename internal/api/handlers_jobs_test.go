@@ -497,6 +497,65 @@ func TestGetJob_WithFinishedAt_ResponseIncludesFinishedAt(t *testing.T) {
 	}
 }
 
+// Feature 42 — per-job run-interval columns are required so the E2E
+// walkthrough's overlap assertion can prove train_light and
+// train_heavy ran concurrently. Exposed via JobResponse.DispatchedAt
+// (pointer + omitempty so pre-dispatch jobs still serialise cleanly).
+func TestGetJob_WithDispatchedAt_ResponseIncludesDispatchedAt(t *testing.T) {
+	js := newMockJobStore()
+	dispatchedAt := time.Now().Add(-3 * time.Minute)
+	finishedAt := time.Now().Add(-1 * time.Minute)
+	js.jobs["j-dispatched"] = &cpb.Job{
+		ID:           "j-dispatched",
+		Command:      "ls",
+		Status:       cpb.JobStatusCompleted,
+		DispatchedAt: dispatchedAt,
+		FinishedAt:   finishedAt,
+	}
+	srv := newServer(js, nil, nil)
+	rr := do(srv, "GET", "/jobs/j-dispatched", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+
+	var resp api.JobResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.DispatchedAt == nil {
+		t.Fatal("want dispatched_at populated; got nil")
+	}
+	if !resp.DispatchedAt.Equal(dispatchedAt) {
+		t.Errorf("dispatched_at roundtrip mismatch:\n  got:  %v\n  want: %v",
+			resp.DispatchedAt, dispatchedAt)
+	}
+	if resp.FinishedAt == nil || !resp.FinishedAt.Equal(finishedAt) {
+		t.Errorf("finished_at roundtrip mismatch: %v", resp.FinishedAt)
+	}
+}
+
+// Jobs that never reached Dispatching (unschedulable, cancelled
+// pre-pickup) must not serialise a dispatched_at key — JSON consumers
+// rely on omitempty to distinguish "not yet dispatched" from
+// "dispatched at epoch".
+func TestGetJob_WithoutDispatchedAt_OmitsFieldFromJSON(t *testing.T) {
+	js := newMockJobStore()
+	js.jobs["j-pending"] = &cpb.Job{
+		ID:      "j-pending",
+		Command: "ls",
+		Status:  cpb.JobStatusPending,
+	}
+	srv := newServer(js, nil, nil)
+	rr := do(srv, "GET", "/jobs/j-pending", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "dispatched_at") {
+		t.Errorf("pending job should omit dispatched_at; body=%s", body)
+	}
+}
+
 func TestGetJob_EnvAndTimeoutRoundtrip(t *testing.T) {
 	js := newMockJobStore()
 	js.jobs["job-get-env"] = &cpb.Job{

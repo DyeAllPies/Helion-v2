@@ -61,6 +61,10 @@ func jobToResponse(j *cpb.Job) JobResponse {
 		SubmittedBy:    j.SubmittedBy,    // AUDIT L1 — legacy alias, retained one release
 		OwnerPrincipal: j.OwnerPrincipal, // Feature 36 — authoritative owner
 	}
+	if !j.DispatchedAt.IsZero() {
+		t := j.DispatchedAt
+		resp.DispatchedAt = &t
+	}
 	if !j.FinishedAt.IsZero() {
 		t := j.FinishedAt
 		resp.FinishedAt = &t

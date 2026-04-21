@@ -8,7 +8,9 @@ import { HttpErrorResponse } from '@angular/common/http';
 
 import { SubmitDagBuilderComponent } from './submit-dag-builder.component';
 import { ApiService } from '../../core/services/api.service';
-import { Workflow, SubmitWorkflowJobRequest } from '../../shared/models';
+import { WorkflowDraftService } from '../../core/services/workflow-draft.service';
+import { Workflow, SubmitWorkflowJobRequest, SubmitWorkflowRequest } from '../../shared/models';
+import { fakeAsync, tick } from '@angular/core/testing';
 
 describe('SubmitDagBuilderComponent', () => {
   let fixture:   ComponentFixture<SubmitDagBuilderComponent>;
@@ -17,6 +19,13 @@ describe('SubmitDagBuilderComponent', () => {
   let routerSpy: jasmine.SpyObj<Router>;
 
   beforeEach(async () => {
+    // Karma reuses one browser session, so a leftover draft from a
+    // previous spec could silently hydrate the fresh component here
+    // (feature 41). Clear before each test to keep these cases
+    // orthogonal; the dedicated hydration-describe below seeds its
+    // own fixture explicitly.
+    sessionStorage.clear();
+
     apiSpy = jasmine.createSpyObj<ApiService>('ApiService', ['submitWorkflow']);
     apiSpy.submitWorkflow.and.returnValue(of({
       id: 'wf-1', name: 't', status: 'pending', jobs: [], created_at: '',
@@ -37,7 +46,10 @@ describe('SubmitDagBuilderComponent', () => {
     fixture.detectChanges();
   });
 
-  afterEach(() => fixture.destroy());
+  afterEach(() => {
+    fixture.destroy();
+    sessionStorage.clear();
+  });
 
   // ── Initial state ──────────────────────────────────────────────
 
@@ -194,5 +206,137 @@ describe('SubmitDagBuilderComponent', () => {
     component.metaForm.patchValue({ id: 'fresh-id', name: 'x' });
     expect(component.generatedJSON).not.toBe(before);
     expect(component.generatedJSON).toContain('"fresh-id"');
+  });
+
+  // ── Feature 41 — draft persistence ────────────────────────────
+
+  it('auto-saves the draft after edits (debounced 400 ms)', fakeAsync(() => {
+    const drafts = TestBed.inject(WorkflowDraftService);
+    const saveSpy = spyOn(drafts, 'save').and.callThrough();
+
+    component.metaForm.patchValue({ id: 'draft-wf', name: 'd' });
+    component.addJob();
+    component.jobControls[0].patchValue({ name: 'ingest', command: 'python' });
+
+    // Inside the debounce window — no save yet.
+    tick(100);
+    expect(saveSpy).not.toHaveBeenCalled();
+
+    // Past the debounce — exactly one save per idle burst.
+    tick(500);
+    expect(saveSpy).toHaveBeenCalled();
+    const lastCall = saveSpy.calls.mostRecent();
+    const saved = lastCall.args[0] as SubmitWorkflowRequest;
+    expect(saved.id).toBe('draft-wf');
+    expect(saved.jobs[0]?.name).toBe('ingest');
+  }));
+
+  it('successful submit clears the draft', () => {
+    const drafts = TestBed.inject(WorkflowDraftService);
+    const clearSpy = spyOn(drafts, 'clear').and.callThrough();
+
+    component.metaForm.patchValue({ id: 'wf-1', name: 't' });
+    component.addJob();
+    component.jobControls[0].patchValue({ name: 'a', command: 'echo' });
+    component.onValidate();
+    component.openPreview();
+    component.onPreviewResolved('confirm');
+
+    expect(clearSpy).toHaveBeenCalled();
+  });
+
+  it('failed submit keeps the draft intact', () => {
+    const drafts = TestBed.inject(WorkflowDraftService);
+    const clearSpy = spyOn(drafts, 'clear').and.callThrough();
+    apiSpy.submitWorkflow.and.returnValue(throwError(() => new HttpErrorResponse({
+      error: { error: 'nope' }, status: 400,
+    })));
+
+    component.metaForm.patchValue({ id: 'wf-1', name: 't' });
+    component.addJob();
+    component.jobControls[0].patchValue({ name: 'a', command: 'echo' });
+    component.onValidate();
+    component.openPreview();
+    component.onPreviewResolved('confirm');
+
+    expect(clearSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ── hydration on init (separate describe so beforeEach can seed
+//     sessionStorage before component creation) ─────────────────
+describe('SubmitDagBuilderComponent — hydrate from saved draft', () => {
+  let fixture: ComponentFixture<SubmitDagBuilderComponent>;
+  let component: SubmitDagBuilderComponent;
+
+  beforeEach(async () => {
+    sessionStorage.clear();
+    sessionStorage.setItem(WorkflowDraftService.STORAGE_KEY, JSON.stringify({
+      schema: 'v1',
+      savedAt: new Date().toISOString(),
+      body: {
+        id: 'mnist-parallel-wf-1',
+        name: 'mnist parallel',
+        jobs: [
+          {
+            name: 'ingest', command: 'python', args: ['/app/ingest.py'],
+            env: { HELION_API_URL: 'https://coordinator:8080' },
+            timeout_seconds: 180,
+            node_selector: { runtime: 'go' },
+          },
+          {
+            name: 'train_heavy', command: 'python',
+            depends_on: ['preprocess'],
+            node_selector: { runtime: 'rust' },
+          },
+        ],
+      },
+    }));
+
+    const apiSpy = jasmine.createSpyObj<ApiService>('ApiService', ['submitWorkflow']);
+    const routerSpy = jasmine.createSpyObj<Router>('Router', ['navigate']);
+
+    await TestBed.configureTestingModule({
+      imports: [SubmitDagBuilderComponent],
+      providers: [
+        provideRouter([]),
+        provideAnimations(),
+        { provide: ApiService, useValue: apiSpy },
+        { provide: Router,     useValue: routerSpy },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(SubmitDagBuilderComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    fixture.destroy();
+    sessionStorage.clear();
+  });
+
+  it('hydrates both forms from the saved draft', () => {
+    expect(component.metaForm.value.id).toBe('mnist-parallel-wf-1');
+    expect(component.metaForm.value.name).toBe('mnist parallel');
+    expect(component.jobControls.length).toBe(2);
+
+    const ingest = component.jobControls[0].value;
+    expect(ingest.name).toBe('ingest');
+    expect(ingest.command).toBe('python');
+    expect(ingest.argsRaw).toBe('/app/ingest.py');
+    expect(ingest.envRaw).toBe('HELION_API_URL=https://coordinator:8080');
+    expect(ingest.timeout_seconds).toBe(180);
+    expect(ingest.selectorRaw).toBe('runtime=go');
+
+    const trainHeavy = component.jobControls[1].value;
+    expect(trainHeavy.name).toBe('train_heavy');
+    expect(trainHeavy.depends_on).toEqual(['preprocess']);
+    expect(trainHeavy.selectorRaw).toBe('runtime=rust');
+  });
+
+  it('selects the first job so the editor pane is populated', () => {
+    expect(component.activeIdx).toBe(0);
+    expect(component.activeJob).not.toBeNull();
   });
 });
