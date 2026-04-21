@@ -72,9 +72,9 @@ written rationales), `git mv` it from `planned-features/NN-slug.md`
 to `planned-features/implemented/NN-slug.md`. The number is
 preserved so cross-references from audits and commit messages still
 resolve. Fix the relative paths inside the moved file
-(sibling-feature links go from `NN-foo.md` to `../NN-foo.md`; the
-`../SECURITY.md` reference becomes `../../SECURITY.md`). Update
-`planned-features/README.md` to strike through the moved row.
+(sibling-feature links go from `NN-foo.md` to `../NN-foo.md`; a
+`../security/README.md` reference becomes `../../security/README.md`).
+Update `planned-features/README.md` to strike through the moved row.
 
 **Audit a slice:** copy `audits/TEMPLATE.md` to
 `audits/<today>-<NN>.md`, `NN` starting at `01` and incrementing for

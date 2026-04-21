@@ -41,7 +41,7 @@ On your laptop:
 
 - Go toolchain and Docker Compose (to run a local Helion cluster).
 - Python 3.11 with `pip`, so `submit.py` can parse the workflow YAML.
-- A Helion JWT bearer token (see [`docs/JWT-GUIDE.md`](../../docs/JWT-GUIDE.md) § Fetching a token).
+- A Helion JWT bearer token (see [`docs/operators/jwt.md`](../../docs/operators/jwt.md) § Fetching a token).
 
 On the node(s) that will run the workflow jobs:
 

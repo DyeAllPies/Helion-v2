@@ -38,7 +38,7 @@ prefer concrete names and types over prose.
 How the feature interacts with the project's existing mTLS / JWT / audit /
 rate-limit stack. If it adds a new trust boundary, say so and enumerate the
 controls. If it adds a new audit-event topic, list it. Cross-reference
-[`docs/SECURITY.md`](../SECURITY.md) where appropriate.
+[`docs/security/`](../security/) where appropriate.
 
 ## Implementation order
 

@@ -49,5 +49,5 @@ helm install helion ./deploy/helm -f deploy/helm/values-gke.yaml
 helm install helion ./deploy/helm -f deploy/helm/values-do.yaml
 ```
 
-See the project [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md)
+See the project [`docs/architecture/`](../../docs/architecture/)
 for the architectural shape the chart is modelling.
