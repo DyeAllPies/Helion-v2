@@ -43,11 +43,10 @@ EXIT_CODE=0
 # Feature 39 — the E2E coordinator listens on HTTPS. Every curl
 # pins the self-signed CA exported to $CA_PEM (copied out of the
 # coordinator container below). submit.py also reads it through
-# HELION_CA_FILE. Using ${API_URL} instead of a hardcoded
-# `$API_URL` keeps the script host-only; all REST
-# traffic goes through TLS + CA validation with no
-# --insecure / -k escape.
-API_URL="$API_URL"
+# HELION_CA_FILE. Using ${API_URL} everywhere keeps the script
+# host-only; all REST traffic goes through TLS + CA validation
+# with no --insecure / -k escape.
+API_URL="https://127.0.0.1:8080"
 CA_PEM="$ROOT_DIR/state/ca.pem"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

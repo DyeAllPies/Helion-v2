@@ -243,7 +243,7 @@ jobs:
   # with the other tier-1 suites, so a type error in an E2E spec
   # doesn't wait for the 5-minute Docker cluster boot to show up.
   typecheck:
-    name: TypeScript — E2E spec typecheck
+    name: TypeScript — spec typecheck
     runs-on: ubuntu-latest
 
     steps:
@@ -328,20 +328,26 @@ jobs:
   # with E2E_VIDEO=1 for documentation; CI only needs the pass/fail
   # signal so E2E_VIDEO stays off.
   e2e:
-    name: E2E — Playwright (non-ML full suite)
+    name: E2E — Playwright non-ML full suite
     runs-on: ubuntu-latest
     # Tier 2 branch B: runs in parallel with the iris → mnist
     # sequence in branch A. Needs the full tier 1 (build, tests,
     # images) since the non-ML cluster rides the pre-built tarballs.
     needs: [build, test-dashboard, test-rust, typecheck, e2e-images]
 
-    # The e2e-overlay coordinator depends_on the analytics-db service, which
-    # in the base compose file is gated behind `profiles: ["analytics"]`.
-    # Activating the profile here (job-scoped env) makes every `docker compose`
-    # invocation in this job — up, logs, down — see the service. Mirrors what
+    # Both profiles are needed:
+    #   - analytics: gates analytics-db (PostgreSQL) that the coordinator
+    #     talks to when HELION_ANALYTICS_DSN is set.
+    #   - ml:        gates minio + minio-bootstrap. node1/node2 in the e2e
+    #     overlay explicitly depend_on minio-bootstrap (feature 11 —
+    #     Stager wires S3 at startup), so without this profile
+    #     `docker compose up` errors out with
+    #     "service node2 depends on undefined service minio-bootstrap".
+    # Job-scoped so every `docker compose` invocation in this job (up,
+    # logs, down) sees the same service graph. Mirrors what
     # scripts/run-e2e.sh does locally via its own COMPOSE_PROFILES export.
     env:
-      COMPOSE_PROFILES: analytics
+      COMPOSE_PROFILES: analytics,ml
 
     steps:
       - name: Checkout
@@ -506,7 +512,7 @@ jobs:
   # pass/fail. This halves the overall CI time vs. running the two
   # layers in separate jobs.
   e2e-iris:
-    name: E2E — iris pipeline (REST + Playwright)
+    name: E2E — iris pipeline REST + Playwright
     runs-on: ubuntu-latest
     # Tier 2 branch A, step 1: iris is the fast minimal-ML gate.
     # Needs tier-1 suites; e2e-mnist below chains onto this job so
@@ -606,7 +612,7 @@ jobs:
   # saves ~2 minutes of runner time + ~300 MiB of image rebuild.
   # Branch B (non-ML full e2e) runs independently in parallel.
   e2e-mnist:
-    name: E2E — MNIST parallel pipeline (features 21, 40, 42, 43)
+    name: E2E — MNIST parallel pipeline
     runs-on: ubuntu-latest
     needs: [e2e-iris]
     env:
