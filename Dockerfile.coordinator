@@ -19,9 +19,14 @@ RUN mkdir -p /app/state && chown helion:helion /app/state
 
 USER helion
 EXPOSE 9090
-# Container-level liveness for non-k8s deployers (Compose, Swarm, Nomad).
-# Kubernetes uses its own probes in the Helm chart and ignores this.
-# See AUDIT 2026-04-11-01/M4.
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -qO- http://localhost:8080/healthz || exit 1
+# Feature 39 — REST is TLS-on; a plain-HTTP HEALTHCHECK at the
+# Dockerfile layer would hit the HTTPS listener and log "client
+# sent an HTTP request to an HTTPS server" every 10 s. BusyBox
+# wget (alpine default) has no --cacert flag, so probing HTTPS
+# with CA pinning isn't possible without bundling curl + the CA
+# at image-build time — which wouldn't survive a cert rotation
+# anyway. Compose / Swarm / Nomad deployments rely on
+# `depends_on: ... service_started` and a TLS-aware external
+# probe instead. Kubernetes deployments define their own probes
+# in the Helm chart and ignore Dockerfile HEALTHCHECK regardless.
 ENTRYPOINT ["/usr/local/bin/helion-coordinator"]

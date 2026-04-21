@@ -43,9 +43,29 @@ except ImportError:
     print("PyYAML is required — `pip install pyyaml`", file=sys.stderr)
     sys.exit(1)
 
+import ssl
+
 
 SERVE_JOB_ID = "mnist-serve-1"
 SERVE_PORT = 8000
+
+
+def _ssl_context() -> "ssl.SSLContext | None":
+    """Build a strict SSL context pinned to HELION_CA_FILE.
+
+    Feature 39 flipped the coordinator REST listener to TLS-on; the
+    E2E + iris overlays run `https://coordinator:8080`, and plain-HTTP
+    requests against the same port return 400. Returns None when
+    HELION_CA_FILE is unset or missing so local dev against a
+    publicly-trusted CA still works via the system trust store. Kept
+    byte-identical to examples/ml-iris/submit.py's helper.
+    """
+    ca_file = os.environ.get("HELION_CA_FILE", "").strip()
+    if not ca_file or not os.path.exists(ca_file):
+        return None
+    ctx = ssl.create_default_context(cafile=ca_file)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
 
 
 def _auth_headers(token: str) -> dict:
@@ -60,7 +80,7 @@ def _post(base: str, path: str, token: str, body: "dict[str, Any]") -> "dict[str
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers=_auth_headers(token))
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
         return json.loads(resp.read())
 
 
@@ -68,7 +88,7 @@ def _get(base: str, path: str, token: str) -> "dict[str, Any]":
     url = base.rstrip("/") + path
     req = urllib.request.Request(url, method="GET",
                                  headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
         return json.loads(resp.read())
 
 
@@ -82,14 +102,25 @@ def _read_yaml(path: str) -> "dict[str, Any]":
 
 def _mint_workflow_token(api_url: str, admin_token: str, wf_id: str,
                          ttl_hours: int = 1) -> str:
-    """Mint a short-lived `job`-role token scoped to this workflow.
-    adminMiddleware rejects `job` role at 403 for /admin/*, so a
-    leaked env cannot escalate. Falls back to the admin token if
-    /admin/tokens rejects (older coordinator without the `job` role
-    or missing tokenManager)."""
+    """Mint a short-lived admin-role token scoped to this workflow.
+
+    compare.py (the MNIST equivalent of iris's register.py) needs to
+    GET /workflows/{id} for lineage AND POST /api/models to write the
+    winner + runner-up entries. Feature 37's authz policy confines
+    job-role tokens to reading JOB resources only, so a job-role token
+    returns 403 on all of those calls. Admin-role is the simplest role
+    the registry handlers accept for writes today; a narrower per-
+    workflow creator role is the proper long-term fix but out of scope
+    for a demo submitter.
+
+    The scope-down is still real: subject is `workflow:<id>` (so audit
+    entries stamp the workflow), and TTL is 1h (bounded blast radius
+    if the env is dumped). Falls back to the caller's admin token if
+    /admin/tokens rejects (older coordinator without tokenManager).
+    """
     body = {
         "subject": f"workflow:{wf_id}",
-        "role": "job",
+        "role": "admin",
         "ttl_hours": ttl_hours,
     }
     try:
@@ -107,10 +138,17 @@ def _mint_workflow_token(api_url: str, admin_token: str, wf_id: str,
 
 
 def _inject_api_env(spec: "dict[str, Any]", api_url: str, token: str) -> None:
-    """Inject HELION_API_URL + HELION_TOKEN into every workflow
-    job's env so in-workflow scripts can call back to the
-    coordinator. Go runtime does not forward node-agent env to
-    subprocess jobs; the submitter owns credential plumbing.
+    """Inject HELION_API_URL + HELION_TOKEN + HELION_CA_FILE into
+    every workflow job's env so in-workflow scripts can call back to
+    the coordinator over TLS. Go runtime does not forward node-agent
+    env to subprocess jobs; the submitter owns credential plumbing.
+
+    HELION_CA_FILE is stamped to `/app/state/ca.pem` unconditionally:
+    the e2e + iris overlays mount the state volume across coordinator
+    + nodes so that path is valid inside every job container. On
+    local dev with a publicly trusted CA the file doesn't exist and
+    compare.py's `_ssl_context()` falls back to the system trust
+    store.
 
     Also injects a minimal PATH so the Rust subprocess runtime —
     which env_clear()s before spawn (see runtime-rust executor) —
@@ -124,6 +162,7 @@ def _inject_api_env(spec: "dict[str, Any]", api_url: str, token: str) -> None:
         env = job.setdefault("env", {})
         env.setdefault("HELION_API_URL", api_url)
         env.setdefault("HELION_TOKEN", token)
+        env.setdefault("HELION_CA_FILE", "/app/state/ca.pem")
         env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
 
 

@@ -102,31 +102,40 @@ def _read_yaml(path: str) -> "dict[str, Any]":
 
 def _mint_workflow_token(api_url: str, admin_token: str, wf_id: str,
                          ttl_hours: int = 1) -> str:
-    """Mint a short-lived `job`-role token scoped to this workflow.
+    """Mint a short-lived admin-role token scoped to this workflow.
 
     Posted by the submitter against POST /admin/tokens using the
     operator's admin token. The returned token:
 
-      - Has `role: job` — adminMiddleware rejects it at 403 for
-        /admin/* endpoints (so a leaked token from a compromised
-        in-workflow script cannot mint more tokens, revoke nodes,
-        or otherwise escalate).
+      - Has `role: admin` — register.py needs to GET /workflows/{id}
+        (read lineage) and POST /api/datasets + /api/models (write
+        registry entries). Feature 37's authz policy confines job-role
+        tokens to reading JOB resources only (see internal/authz/authz.go
+        KindJob rule), so a job-role token returns 403 on all three
+        calls. Admin-role is the simplest role the registry handlers
+        accept for writes today; narrower scope (e.g. a per-workflow
+        "creator" role that can only POST to /api/datasets and
+        /api/models for entries whose source_job_id belongs to the
+        scoping workflow) is the proper long-term fix but out of scope
+        for a demo submitter.
       - Has `subject: workflow:<id>` — audit-log entries stamp the
         workflow ID directly in the actor column, so compliance
-        queries can group by workflow without joining on JTI.
-      - Expires in `ttl_hours` hours — bounds the damage window if
-        a job's env is ever dumped. One hour is enough headroom for
-        the iris pipeline (typically <2 min end-to-end) plus any
-        operator-driven retries.
+        queries can group by workflow without joining on JTI. A leaked
+        token's damage is still narrowed by the subject tag: operators
+        can grep audit for workflow-scoped actions and revoke quickly.
+      - Expires in `ttl_hours` hours — bounds the damage window if a
+        job's env is ever dumped. One hour is enough headroom for the
+        iris pipeline (typically <2 min end-to-end) plus any operator-
+        driven retries.
 
     Falls back to the root admin token if the cluster's coordinator
-    rejects /admin/tokens (e.g. an older build without the `job`
-    role, or a deployment without tokenManager wired). The fallback
-    logs a warning so the operator sees the downgrade.
+    rejects /admin/tokens (older build without tokenManager wired,
+    etc.). The fallback logs a warning so the operator sees the
+    downgrade.
     """
     body = {
         "subject": f"workflow:{wf_id}",
-        "role": "job",
+        "role": "admin",
         "ttl_hours": ttl_hours,
     }
     try:
