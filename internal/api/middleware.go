@@ -62,14 +62,19 @@ const (
 // run PERCENTILE_CONT + ORDER BY on job_summary, which is expensive as data
 // grows — without this limit, an authenticated user could DoS the coordinator.
 //
-// The dashboard loads 5 charts per page open (5 requests instantly) and users
-// may navigate repeatedly, so a tight bucket (burst 10) would rate-limit real
-// usage. Rate 2 rps + burst 30 accommodates ~6 full dashboard loads in quick
-// succession and caps sustained load at ~120 queries per minute per subject —
-// far above normal use, well below what a DoS attack would need.
+// Sizing: the dashboard fires 7 parallel reload() calls per page open
+// (throughput, node-reliability, retry-effectiveness, queue-wait,
+// workflow-outcomes, submission-history, auth-events) and polls every 2 s in
+// dev / 5 s in prod — steady-state 3.5 rps in dev. The previous 2 rps / 30
+// burst settings were sized for the feature-18 5-endpoint dashboard and could
+// no longer sustain polling load; E2E tests that navigate to /analytics 5-6
+// times in quick succession would exhaust the bucket and surface a transient
+// 429 error banner. Rate 5 rps covers polling headroom, burst 60 covers ~8
+// rapid full-dashboard opens. Sustained ~300 queries/min per subject stays
+// well below what a DoS attack would need.
 const (
-	analyticsQueryRate  = 2.0
-	analyticsQueryBurst = 30
+	analyticsQueryRate  = 5.0
+	analyticsQueryBurst = 60
 )
 
 // ── Analytics input bounds ──────────────────────────────────────────────────

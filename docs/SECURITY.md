@@ -194,12 +194,18 @@ coordinator.
 
 | Property | Value |
 |---|---|
-| Rate | 2 queries/sec per JWT subject |
-| Burst | 30 |
-| Sustained cap | ~120 queries/min per subject |
+| Rate | 5 queries/sec per JWT subject |
+| Burst | 60 |
+| Sustained cap | ~300 queries/min per subject |
 | HTTP status on limit hit | `429 Too Many Requests` |
 | Body | `{"error":"analytics query rate limit exceeded"}` |
 | Keyed on | JWT `sub` claim (subject) |
+
+Sizing notes: the dashboard loads 7 panels in parallel and polls every
+2 s (dev) / 5 s (prod), so steady-state is ~3.5 rps per active viewer.
+Burst 60 absorbs rapid navigation between pages without tripping the
+limiter; sustained 5 rps keeps polling headroom while staying well
+under what a DoS attack would need.
 
 Rate-limited requests are rejected *before* the audit step, so abusive
 traffic doesn't flood the audit log. See

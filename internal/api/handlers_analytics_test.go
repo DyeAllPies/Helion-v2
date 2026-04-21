@@ -381,8 +381,8 @@ func TestAnalytics_RateLimit_BurstAllowed(t *testing.T) {
 	db := &mockAnalyticsDB{rows: &mockRows{}}
 	srv := newAnalyticsServer(db)
 
-	// Burst is 30 — the first 30 requests must succeed without 429.
-	for i := 0; i < 30; i++ {
+	// Burst is 60 — the first 60 requests must succeed without 429.
+	for i := 0; i < 60; i++ {
 		rr := doGet(t, srv, "/api/analytics/throughput")
 		if rr.Code != http.StatusOK {
 			t.Fatalf("request %d: status = %d, want 200; body: %s", i, rr.Code, rr.Body.String())
@@ -394,9 +394,9 @@ func TestAnalytics_RateLimit_ExcessReturns429(t *testing.T) {
 	db := &mockAnalyticsDB{rows: &mockRows{}}
 	srv := newAnalyticsServer(db)
 
-	// Exhaust the burst (30), then 50 more should rate-limit.
+	// Exhaust the burst (60), then further requests should rate-limit.
 	seen429 := false
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 150; i++ {
 		rr := doGet(t, srv, "/api/analytics/throughput")
 		if rr.Code == http.StatusTooManyRequests {
 			seen429 = true

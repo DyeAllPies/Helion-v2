@@ -418,7 +418,7 @@ API surface (jobs/nodes/metrics/audit):
 | Control | Value | Source |
 |---|---|---|
 | JWT Bearer auth | Required | `authMiddleware` |
-| Per-subject rate limit | 2 rps burst 30 → 429 | `analyticsQueryAllow` (mirrors `tokenIssueAllow`) |
+| Per-subject rate limit | 5 rps burst 60 → 429 (bumped from 2 rps burst 30 once the dashboard grew to 7 parallel panels polling every 2 s) | `analyticsQueryAllow` (mirrors `tokenIssueAllow`) |
 | Time-range bounds | 365-day max; 400 on invalid / inverted / malformed | `parseTimeRange` |
 | Pagination bounds | `limit` clamped to 1000, negative → default | `parseIntParam` |
 | Audit log of queries | Every successful query recorded as `analytics.query` with actor + endpoint + range; rate-limited requests are **not** audited | `analyticsPreflight` + `audit.Logger` |

@@ -367,6 +367,24 @@ describe('AnalyticsDashboardComponent', () => {
     expect(component.loading).toBe(false);
   });
 
+  it('does NOT set error banner on HTTP 429 (rate limited)', () => {
+    // 429 is a transient rate-limit hit; the 2s poll tick retries on its
+    // own. Flashing a sticky red banner for a rate-limit response masks
+    // real failures with noise.
+    apiSpy.getAnalyticsThroughput.and.returnValue(
+      throwError(() => ({ status: 429, message: 'rate limit' })));
+    component.reload();
+    expect(component.error).toBe('');
+    expect(component.loading).toBe(false);
+  });
+
+  it('still sets error banner on HTTP 500 (real failure)', () => {
+    apiSpy.getAnalyticsThroughput.and.returnValue(
+      throwError(() => ({ status: 500, message: 'internal' })));
+    component.reload();
+    expect(component.error).toContain('throughput');
+  });
+
   // ── Date range reload ─────────────────────────────────────────────────
 
   it('reload() uses the current fromDate and toDate', () => {

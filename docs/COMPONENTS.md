@@ -219,7 +219,7 @@ as the rest of the authenticated API surface:
 | Control | Details |
 |---|---|
 | JWT auth | `authMiddleware` — 401 if missing/invalid Bearer token |
-| Per-subject rate limit | Token bucket: `analyticsQueryRate=2 rps`, `analyticsQueryBurst=30`. Returns **429 Too Many Requests** when exceeded. Bucket keyed on JWT subject. |
+| Per-subject rate limit | Token bucket: `analyticsQueryRate=5 rps`, `analyticsQueryBurst=60`. Sized to cover the dashboard's 7 parallel panels polling every 2 s (dev) / 5 s (prod) with headroom for rapid navigation. Returns **429 Too Many Requests** when exceeded. Bucket keyed on JWT subject. |
 | Time-range bounds | `analyticsMaxRange = 365 * 24h`. Rejects inverted, malformed, or oversized ranges with **400 Bad Request**. |
 | Pagination bounds | `analyticsMaxLimit = 1000`. `limit` query param is clamped; negative values fall back to default 100. |
 | Audit logging | Every successful query is recorded as `analytics.query` in the audit log with `actor`, `endpoint`, `from`, `to`. Rate-limited requests are rejected **before** audit so they are not recorded as successful reads. |

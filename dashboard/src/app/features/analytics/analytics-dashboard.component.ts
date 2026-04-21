@@ -657,7 +657,14 @@ export class AnalyticsDashboardComponent implements OnInit, OnDestroy {
     };
     const fail = (msg: string) => (err: unknown) => {
       console.error(msg, err);
-      this.error = `Failed to load ${msg}`;
+      // 429 (rate limit) is transient — the next 2s poll tick will get
+      // through once the token bucket refills. Surfacing it as a sticky
+      // red banner is noise, not signal. Non-429 failures (500 / network /
+      // auth) still set the banner so real regressions stay visible.
+      const status = (err as { status?: number } | undefined)?.status;
+      if (status !== 429) {
+        this.error = `Failed to load ${msg}`;
+      }
       done();
     };
 
