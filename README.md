@@ -2,47 +2,44 @@
 
 [![CI](https://github.com/DyeAllPies/Helion-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/DyeAllPies/Helion-v2/actions/workflows/ci.yml)
 
-A from-scratch distributed job scheduler written in Go — built as a vehicle for
-studying systems programming, distributed systems theory, container
-orchestration, and production security practices.
+A minimal distributed job scheduler written in Go — built as a student
+learning project for systems programming, distributed systems theory,
+container orchestration, and production security practices.
 
-All project documentation lives under **[`docs/`](docs/)**:
+All project documentation lives under **[`docs/`](docs/)**. Pick a lane:
 
-| Document | Contents |
+| I want to… | Start here |
 |---|---|
-| **[docs/README.md](docs/README.md)** | Project overview, stack, environment variables, local dev, deployment |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Component responsibilities, lifecycle, concurrency model |
-| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, mTLS + PQC, JWT lifecycle, audit log schema |
-| [docs/AUDIT.md](docs/AUDIT.md) | Security & code-quality audit **template** (blank — copy into `docs/audits/<YYYY-MM-DD>.md` when starting a new audit) |
-| [docs/audits/](docs/audits/) | Archive of closed audits, one Markdown file per audit run (grows over time) |
-| [docs/dashboard.md](docs/dashboard.md) | Angular dashboard — stack, testing, local dev |
-| [docs/persistence.md](docs/persistence.md) | `internal/persistence` rules and key schema |
-| [docs/docker-compose-dev-notes.md](docs/docker-compose-dev-notes.md) | Local Docker Compose workflow |
+| Read the project overview, stack, and quickstart | **[docs/README.md](docs/README.md)** |
+| Understand how Helion is built (components, protocols, persistence) | [docs/architecture/](docs/architecture/) |
+| Run a cluster (env vars, rotation, revocation, runbooks) | [docs/operators/](docs/operators/) |
+| Write a workflow or ML pipeline | [docs/guides/](docs/guides/) |
+| Understand the threat model (crypto, auth, runtime, data plane) | [docs/security/](docs/security/) |
+| Contribute (feature specs, audits, deferred items) | [docs/DOCS-WORKFLOW.md](docs/DOCS-WORKFLOW.md) |
 
-Start with **[docs/README.md](docs/README.md)** for the full overview.
+## Packing the repo for download
 
----
-
-## Packing the repo for download (excluding audit logs)
-
-`docs/audits/` grows over time — a long audit history can make the repo
-heavy when bundling it for an AI assistant or sharing it offline. Pack
-the source tree **without** the audits using [repomix](https://github.com/yamadashy/repomix):
+`docs/audits/` and `docs/planned-features/` grow over time — a long
+audit history can make the repo heavy when bundling for an AI assistant
+or sharing offline. Pack **without** them using
+[repomix](https://github.com/yamadashy/repomix):
 
 ```bash
-# One-shot: pack the whole repo to repomix-output.xml, skipping audit archives.
-npx repomix --ignore "docs/audits/**"
+# One-shot pack skipping the archive directories:
+npx repomix --ignore "docs/audits/**,docs/planned-features/**"
 ```
 
-Prefer git? The same idea works as a git archive:
+Or with git:
 
 ```bash
 git archive --format=tar.gz -o helion-v2.tar.gz HEAD \
-  -- ':(exclude)docs/audits'
+  -- ':(exclude)docs/audits' ':(exclude)docs/planned-features'
 ```
 
-Either command keeps the template (`docs/AUDIT.md`) and ships the code,
-but drops every dated audit file under `docs/audits/`.
+Either command keeps [`docs/DOCS-WORKFLOW.md`](docs/DOCS-WORKFLOW.md)
+and the three `TEMPLATE.md` files so a fresh reader still sees how the
+process works, and drops only the dated audit files and feature-spec
+archive.
 
 ---
 

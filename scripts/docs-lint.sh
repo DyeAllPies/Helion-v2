@@ -41,7 +41,6 @@ is_exempt() {
         docs/planned-features/deferred/*)            return 0 ;;
         docs/planned-features/implemented/*)         return 0 ;;
         docs/DOCS-WORKFLOW.md)                       return 0 ;;
-        docs/README.md)                              return 0 ;;  # commit 4
         docs/ARCHITECTURE.md)                        return 0 ;;  # commit 5
         docs/COMPONENTS.md)                          return 0 ;;  # commit 5
     esac
