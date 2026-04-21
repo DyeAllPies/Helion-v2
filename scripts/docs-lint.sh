@@ -44,7 +44,6 @@ is_exempt() {
         docs/README.md)                              return 0 ;;  # commit 4
         docs/ARCHITECTURE.md)                        return 0 ;;  # commit 5
         docs/COMPONENTS.md)                          return 0 ;;  # commit 5
-        docs/SECURITY.md)                            return 0 ;;  # commit 3
     esac
     return 1
 }
