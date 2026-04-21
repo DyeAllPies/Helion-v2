@@ -21,6 +21,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/DyeAllPies/Helion-v2/internal/api"
 )
@@ -359,6 +363,193 @@ func TestAnalyticsMLRuns_LimitClamped(t *testing.T) {
 	if n, ok := last.(int); !ok || n != 500 {
 		t.Errorf("limit not clamped: lastArg=%v (want 500)", last)
 	}
+}
+
+// Exercises the row-scan path of handleAnalyticsMLRuns end-to-end:
+// one row with tags + started_at + duration_ms populates the
+// response. Without this test the scan/tag-unmarshal/pointer-assign
+// branches sit uncovered and drag internal/api below the 85% CI
+// threshold.
+func TestAnalyticsMLRuns_RowWithTagsAndTiming_Serialises(t *testing.T) {
+	started := time.Date(2026, 4, 21, 3, 55, 23, 0, time.UTC)
+	completed := started.Add(9 * time.Second)
+	duration := int64(9075)
+	rows := &mlRunsFakeRows{
+		rows: []mlRunRow{{
+			WorkflowID:     "iris-wf-1",
+			Status:         "completed",
+			CompletedAt:    completed,
+			JobCount:       5,
+			SuccessCount:   5,
+			FailedCount:    0,
+			FailedJob:      "",
+			OwnerPrincipal: "user:root",
+			TagsJSON:       []byte(`{"env":"ci","task":"iris-classification","team":"ml"}`),
+			StartedAt:      &started,
+			DurationMs:     &duration,
+		}},
+	}
+	db := &mockAnalyticsDB{rows: rows}
+	srv := newAnalyticsServer(db)
+	rr := doGet(t, srv, "/api/analytics/ml-runs")
+	if rr.Code != 200 {
+		t.Fatalf("code: got %d want 200. body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp api.MLRunsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Rows) != 1 {
+		t.Fatalf("expected 1 row, got total=%d len=%d", resp.Total, len(resp.Rows))
+	}
+	row := resp.Rows[0]
+	if row.WorkflowID != "iris-wf-1" {
+		t.Errorf("workflow_id: got %q want iris-wf-1", row.WorkflowID)
+	}
+	if row.JobCount != 5 || row.SuccessCount != 5 {
+		t.Errorf("job_count=%d success_count=%d, want 5/5", row.JobCount, row.SuccessCount)
+	}
+	if row.OwnerPrincipal != "user:root" {
+		t.Errorf("owner_principal: %q", row.OwnerPrincipal)
+	}
+	if row.StartedAt == nil || !row.StartedAt.Equal(started) {
+		t.Errorf("started_at: got %v want %v", row.StartedAt, started)
+	}
+	if row.DurationMs == nil || *row.DurationMs != duration {
+		t.Errorf("duration_ms: got %v want %d", row.DurationMs, duration)
+	}
+	for k, v := range map[string]string{
+		"team": "ml", "task": "iris-classification", "env": "ci",
+	} {
+		if row.Tags[k] != v {
+			t.Errorf("tag %s: got %q want %q", k, row.Tags[k], v)
+		}
+	}
+}
+
+// Malformed tags JSONB must not poison the response — the handler
+// tolerates it and emits the row with empty tags. The scan/unmarshal
+// branch is specifically the "no tags" fallback path (feature 40b).
+func TestAnalyticsMLRuns_RowWithMalformedTags_TagsDropped(t *testing.T) {
+	completed := time.Date(2026, 4, 21, 4, 0, 0, 0, time.UTC)
+	rows := &mlRunsFakeRows{
+		rows: []mlRunRow{{
+			WorkflowID:   "bad-tags-wf",
+			Status:       "completed",
+			CompletedAt:  completed,
+			JobCount:     1,
+			SuccessCount: 1,
+			FailedCount:  0,
+			TagsJSON:     []byte(`{not-json`),
+		}},
+	}
+	db := &mockAnalyticsDB{rows: rows}
+	srv := newAnalyticsServer(db)
+	rr := doGet(t, srv, "/api/analytics/ml-runs")
+	if rr.Code != 200 {
+		t.Fatalf("code: got %d want 200. body=%s", rr.Code, rr.Body.String())
+	}
+	var resp api.MLRunsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Total != 1 {
+		t.Fatalf("want 1 row, got %d", resp.Total)
+	}
+	if len(resp.Rows[0].Tags) != 0 {
+		t.Errorf("expected empty tags on malformed JSONB, got %v", resp.Rows[0].Tags)
+	}
+	if resp.Rows[0].StartedAt != nil {
+		t.Errorf("started_at should be nil on missing timing; got %v", resp.Rows[0].StartedAt)
+	}
+	if resp.Rows[0].DurationMs != nil {
+		t.Errorf("duration_ms should be nil on missing timing; got %v", resp.Rows[0].DurationMs)
+	}
+}
+
+// Scan error inside the row loop must surface as 500; no partial
+// body should be written. This is the scan-error branch not
+// reachable through the DB.err path (which fails earlier).
+func TestAnalyticsMLRuns_ScanError_Returns500(t *testing.T) {
+	rows := &mlRunsFakeRows{scanErr: errors.New("oob column")}
+	// Prime one row so Next() returns true and we hit the scan call.
+	rows.rows = []mlRunRow{{WorkflowID: "doomed"}}
+	db := &mockAnalyticsDB{rows: rows}
+	srv := newAnalyticsServer(db)
+	rr := doGet(t, srv, "/api/analytics/ml-runs")
+	if rr.Code != 500 {
+		t.Fatalf("code: got %d want 500", rr.Code)
+	}
+}
+
+// ── fake rows that actually yield data for the ml-runs test ──
+
+type mlRunRow struct {
+	WorkflowID     string
+	Status         string
+	CompletedAt    time.Time
+	JobCount       int
+	SuccessCount   int
+	FailedCount    int
+	FailedJob      string
+	OwnerPrincipal string
+	TagsJSON       []byte
+	StartedAt      *time.Time
+	DurationMs     *int64
+}
+
+type mlRunsFakeRows struct {
+	rows    []mlRunRow
+	idx     int
+	scanErr error
+	closed  bool
+}
+
+func (r *mlRunsFakeRows) Close()                                       { r.closed = true }
+func (r *mlRunsFakeRows) Err() error                                   { return nil }
+func (r *mlRunsFakeRows) CommandTag() pgconn.CommandTag                { return pgconn.NewCommandTag("SELECT") }
+func (r *mlRunsFakeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *mlRunsFakeRows) Values() ([]any, error)                       { return nil, nil }
+func (r *mlRunsFakeRows) RawValues() [][]byte                          { return nil }
+func (r *mlRunsFakeRows) Conn() *pgx.Conn                              { return nil }
+
+func (r *mlRunsFakeRows) Next() bool {
+	if r.idx >= len(r.rows) {
+		return false
+	}
+	r.idx++
+	return true
+}
+
+// Scan populates dest args in the order handleAnalyticsMLRuns uses:
+//
+//	workflow_id, status, completed_at, job_count, success_count,
+//	failed_count, failed_job, owner_principal, tags(bytes),
+//	started_at(*time.Time), duration_ms(*int64)
+func (r *mlRunsFakeRows) Scan(dest ...any) error {
+	if r.scanErr != nil {
+		return r.scanErr
+	}
+	if r.idx == 0 || r.idx > len(r.rows) {
+		return errors.New("Scan called outside valid row window")
+	}
+	row := r.rows[r.idx-1]
+	if len(dest) != 11 {
+		return errors.New("unexpected dest length in mlRunsFakeRows.Scan")
+	}
+	*(dest[0].(*string))     = row.WorkflowID
+	*(dest[1].(*string))     = row.Status
+	*(dest[2].(*time.Time))  = row.CompletedAt
+	*(dest[3].(*int))        = row.JobCount
+	*(dest[4].(*int))        = row.SuccessCount
+	*(dest[5].(*int))        = row.FailedCount
+	*(dest[6].(*string))     = row.FailedJob
+	*(dest[7].(*string))     = row.OwnerPrincipal
+	*(dest[8].(*[]byte))     = row.TagsJSON
+	*(dest[9].(**time.Time)) = row.StartedAt
+	*(dest[10].(**int64))    = row.DurationMs
+	return nil
 }
 
 // ── scanAuthEvents error surface ─────────────────────────────

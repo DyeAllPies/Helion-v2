@@ -26,8 +26,12 @@ import (
 type mockAnalyticsDB struct {
 	lastSQL  string
 	lastArgs []any
-	rows     *mockRows
-	err      error
+	// rows is typed as the pgx.Rows interface so tests can plug in
+	// either the zero-row mockRows or a yielding fake (see
+	// mlRunsFakeRows in handlers_analytics_unified_test.go) without
+	// two parallel mock DB types.
+	rows pgx.Rows
+	err  error
 }
 
 func (m *mockAnalyticsDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
