@@ -163,7 +163,7 @@ test.describe('Analytics Dashboard', () => {
 
     const headers = await page.locator('.analytics-table th').allTextContents();
     expect(headers.map(h => h.trim())).toEqual(
-      expect.arrayContaining(['NODE', 'ADDRESS', 'COMPLETED', 'FAILED', 'FAILURE %', 'STALE']),
+      expect.arrayContaining(['NODE', 'COMPLETED', 'FAILED', 'FAILURE %', 'STALE']),
     );
   });
 
