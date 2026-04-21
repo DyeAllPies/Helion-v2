@@ -6,8 +6,8 @@
 // log (BadgerDB) is the forever-record. This file owns the
 // once-a-day sweep that prunes rows older than
 // `HELION_ANALYTICS_RETENTION_DAYS` from every feature-28 table.
-// Audit data is untouched — see docs/persistence.md for the tier
-// contract.
+// Audit data is untouched — see docs/architecture/persistence.md for
+// the tier contract.
 //
 // Design:
 //

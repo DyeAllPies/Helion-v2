@@ -5,7 +5,7 @@
 # Helion v2 — Security Operations Guide
 
 Operational checklists, environment variables, and troubleshooting for the
-security subsystem. For the threat model and architecture, see [SECURITY.md](../SECURITY.md).
+security subsystem. For the threat model and architecture, see [security/](../security/).
 
 ---
 

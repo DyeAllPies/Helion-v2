@@ -24,7 +24,7 @@
 -- Retention: each of these tables is subject to the retention cron
 -- (`HELION_ANALYTICS_RETENTION_DAYS`, default 60). The audit log in
 -- BadgerDB is the forever-record; analytics is the operational
--- window. See docs/persistence.md for the tier contract.
+-- window. See docs/architecture/persistence.md for the tier contract.
 --
 -- PII: the `actor` column is stored verbatim by default. When
 -- `HELION_ANALYTICS_PII_MODE=hash_actor` is set, the sink writes
@@ -32,7 +32,7 @@
 -- schema does not encode the mode — the sink decides at write time
 -- — so toggling modes mid-deployment gives a mixed table, which the
 -- operator must reconcile by truncating or letting retention age it
--- out. See docs/ARCHITECTURE.md for the tradeoff.
+-- out. See docs/security/data-plane.md § 6 for the tradeoff.
 
 -- ── submission_history ──────────────────────────────────────────────
 --

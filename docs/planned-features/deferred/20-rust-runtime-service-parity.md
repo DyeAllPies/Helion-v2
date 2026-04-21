@@ -21,7 +21,7 @@ Three reasons:
 2. **Rust parity is a mechanical proto + IPC edit plus cooperative timeout handling in the Rust process supervisor.** None of that is hard; it just takes a full Rust build + test cycle and a matching `runtime-rust/src/proto.rs` regeneration, which is substantial churn for a slice that the Go runtime already covers.
 3. **The work is cleaner once the Rust-runtime resource-tracking slice also lands.** That slice (tracked separately under in-use resource tracking; see this folder's index) will regenerate `proto/runtime.proto` anyway. Bundling the `IsService` field into that proto bump avoids two back-to-back regenerations.
 
-Until then, `docs/SECURITY.md` § 5 documents the gap: service jobs on Rust-backed nodes run without timeout bypass or probe coverage, so they will get killed on the default timeout and never reach the `GET /api/services/{id}` mapping. Operators running an inference workload on a Rust-backed cluster should stay on the Go runtime for that node pool.
+Until then, `docs/security/runtime.md` § 3 documents the gap: service jobs on Rust-backed nodes run without timeout bypass or probe coverage, so they will get killed on the default timeout and never reach the `GET /api/services/{id}` mapping. Operators running an inference workload on a Rust-backed cluster should stay on the Go runtime for that node pool.
 
 ## Revisit trigger
 

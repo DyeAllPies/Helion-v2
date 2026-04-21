@@ -26,8 +26,8 @@ When a feature reaches the "fully implemented" bar:
    reconciliation against the original spec is visible at a glance.
 3. `git mv docs/planned-features/NN-slug.md docs/planned-features/implemented/NN-slug.md`
 4. Fix the relative paths inside the moved file (sibling-feature
-   links go from `NN-foo.md` to `../NN-foo.md`; the `../SECURITY.md`
-   reference becomes `../../SECURITY.md`; etc.).
+   links go from `NN-foo.md` to `../NN-foo.md`; a `../security/README.md`
+   reference becomes `../../security/README.md`; etc.).
 5. Update `../README.md` — strike the row for the moved feature in
    the active table and add a one-line pointer here.
 

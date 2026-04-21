@@ -103,7 +103,7 @@ func NewS3Store(cfg S3Config) (*S3Store, error) {
 	// Loud warning when artifact traffic runs in the clear. Fine for a
 	// local MinIO dev loop; a production deployment talking to a real
 	// S3 endpoint without TLS is a harvest-now-decrypt-later risk (see
-	// docs/SECURITY.md §3). We do not *require* TLS here — operators
+	// docs/security/crypto.md § 2). We do not *require* TLS here — operators
 	// need the MinIO-over-HTTP escape hatch — but the log line shows up
 	// every time a node starts, so a prod misconfig is visible.
 	if !cfg.UseSSL {

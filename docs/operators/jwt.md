@@ -5,7 +5,7 @@
 # Helion v2 — JWT Authentication Guide
 
 Complete reference for JWT token lifecycle, issuance, usage, and revocation.
-For the broader security model, see [SECURITY.md](../SECURITY.md).
+For the broader security model, see [security/](../security/).
 
 ---
 

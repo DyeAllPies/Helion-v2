@@ -9,7 +9,7 @@ certificate, importing it into the browser's certificate store, and
 validating end-to-end that `HELION_REST_CLIENT_CERT_REQUIRED=on`
 blocks cert-less traffic.
 
-See [SECURITY.md §9.6](../SECURITY.md#96-optional-browser-mtls-for-dashboard-operators-feature-27)
+See [security/operator-auth.md § 1](../security/operator-auth.md#1-browser-mtls-feature-27)
 for the threat model + safety properties this guide backs.
 
 ## Prerequisites

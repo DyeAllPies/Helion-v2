@@ -131,8 +131,8 @@ acceptance test.
 ## Security plan
 
 This section anchors every step of the feature to the project's
-existing security doctrine ([`docs/SECURITY.md`](../../SECURITY.md),
-[`docs/SECURITY-OPS.md`](../../SECURITY-OPS.md),
+existing security doctrine ([`docs/SECURITY.md`](../../security/),
+[`docs/SECURITY-OPS.md`](../../operators/runbook.md),
 [`docs/audits/TEMPLATE.md`](../../audits/TEMPLATE.md)). The ML pipeline expands Helion's
 trust surface in three new directions — bulk artifact bytes, cross-job
 data references, and node-attested output metadata — each of which

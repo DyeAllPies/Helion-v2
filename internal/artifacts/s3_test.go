@@ -254,7 +254,7 @@ func TestNewS3Store_RequiresEndpointAndBucket(t *testing.T) {
 // production — a silent regression (the Warn gets removed or
 // gated) would let artifact traffic run in the clear without any
 // visible signal, a harvest-now-decrypt-later risk that
-// docs/SECURITY.md §3 explicitly calls out.
+// docs/security/crypto.md § 2 explicitly calls out.
 //
 // The matching negative case (UseSSL=true produces no WARN) is
 // covered implicitly by the whole test suite running without

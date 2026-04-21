@@ -170,7 +170,7 @@ workdir if the digest matches. Mismatches return
 workdir, failing the downstream job.
 
 This is defence-in-depth on top of the hybrid PQ channel
-([`docs/SECURITY.md` §3](../../SECURITY.md)): the ML-KEM-768 / X25519
+([`docs/SECURITY.md` §3](../../security/)): the ML-KEM-768 / X25519
 key exchange already protects the coordinator↔node wire from
 tampering, and the artifact store is typically accessed over TLS.
 The digest check catches three scenarios those layers don't

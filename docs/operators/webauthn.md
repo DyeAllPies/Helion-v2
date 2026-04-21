@@ -11,7 +11,7 @@ ceremony, and validating that
 `HELION_AUTH_WEBAUTHN_REQUIRED=on` refuses admin requests that
 don't carry a WebAuthn-minted JWT.
 
-See [SECURITY.md §9.12](../SECURITY.md) for the threat model and
+See [security/operator-auth.md § 3](../security/operator-auth.md#3-webauthn--fido2-feature-34) for the threat model and
 safety properties this guide backs. Pairs with feature 27
 (browser mTLS) and feature 33 (per-operator cert-CN binding).
 
@@ -332,4 +332,4 @@ admin authority.
 - [feature 31 — cert revocation](../planned-features/implemented/31-cert-revocation-crl-ocsp.md)
 - [feature 33 — per-operator accountability](../planned-features/implemented/33-per-operator-accountability.md)
 - [feature 34 spec (implemented)](../planned-features/implemented/34-webauthn-fido2.md)
-- [SECURITY.md](../SECURITY.md) — §9.6 mTLS, §9.12 WebAuthn
+- [security/](../security/) — see `operator-auth.md § 1` (mTLS) and `§ 3` (WebAuthn)

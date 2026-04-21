@@ -67,7 +67,7 @@ out in the spec for steps 3 and 4 of the parent slice.
 
 ## Security plan (this step)
 
-See [`docs/SECURITY.md` § ML dashboard module surface](../../SECURITY.md#ml-dashboard-module-surface-feature-18) for the authoritative write-up. Summary:
+See [`docs/SECURITY.md` § ML dashboard module surface](../../security/README.md#ml-dashboard-module-surface-feature-18) for the authoritative write-up. Summary:
 
 - All three views inherit the dashboard's existing `authGuard` + JWT interceptor; no new auth surface.
 - `GET /api/services` is the same data the per-job lookup already exposes, just batched. Same auth middleware.

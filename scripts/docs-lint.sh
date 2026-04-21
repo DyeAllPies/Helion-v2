@@ -10,18 +10,11 @@
 #      Files that grow past the cap are a signal to split, not a
 #      reason to raise the cap.
 #
-# Exemptions — files in docs/ that are NOT gated because they predate
-# feature 44 or belong to the immutable history the restructure does
-# not touch:
+# Exemptions — files in docs/ that are NOT gated because they use
+# a different template (feature spec / audit) or are immutable history:
 #   - docs/audits/**                    (immutable post-mortems)
 #   - docs/planned-features/**          (feature-spec + audit templates)
 #   - docs/DOCS-WORKFLOW.md             (canonical contributor doc)
-#   - Breadcrumb stubs at old paths     (detected heuristically — first
-#     line starts with "<!-- MOVED" and file is <= 10 lines)
-#   - docs/README.md                    (rewritten in feature 44 commit 4)
-#   - docs/ARCHITECTURE.md              (split/removed in commit 5)
-#   - docs/COMPONENTS.md                (split/removed in commit 5)
-#   - docs/SECURITY.md                  (split into security/*.md in commit 3)
 #
 # Run: ./scripts/docs-lint.sh
 # CI:  .github/workflows/ci.yml — docs-lint job

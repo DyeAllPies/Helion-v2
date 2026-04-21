@@ -48,7 +48,7 @@ Notes on the ML additions (features 11–19):
   The registry metadata is small and low-traffic compared to
   jobs; a separate DB file would be operational overhead for no
   isolation benefit. See
-  [COMPONENTS.md § 5.4](../COMPONENTS.md#54-registry--internalregistry).
+  [components.md § 5.4](components.md#54-registry--internalregistry).
 - The `jobs/{id}` Job record gains a
   `ResolvedOutputs []ArtifactOutput` field when a job completes
   with declared outputs. This field is the authoritative record
@@ -116,8 +116,8 @@ Key boundaries:
   batches writes out-of-band; the coordinator's dispatch loop
   never blocks on PG.
 
-See [ml-pipelines.md](../guides/ml-pipelines.md) for the ML-side
-implications and [ARCHITECTURE.md § 12](../ARCHITECTURE.md#12-ml-pipeline)
+See [guides/ml-pipelines.md](../guides/ml-pipelines.md) for the ML-side
+implications and [protocols.md § Three-tier storage](protocols.md#5-three-tier-storage-ml-pipeline)
 for the diagram.
 
 ## Storage tiers — audit ↔ analytics ↔ logs (feature 28)

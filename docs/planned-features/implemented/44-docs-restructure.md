@@ -46,19 +46,19 @@ well-structured and out of scope):
 | File | Lines | Audience today | Problem |
 |------|-------|----------------|---------|
 | [README.md](../../README.md) | 267 | Mixed | Splash + quickstart + env-var table + constraints + doc index all in one file |
-| [ARCHITECTURE.md](../../ARCHITECTURE.md) | 574 | Engineers | Overlaps COMPONENTS + ml-pipelines |
-| [COMPONENTS.md](../../COMPONENTS.md) | 434 | Engineers | Overlaps ARCHITECTURE § 2 |
-| [SECURITY.md](../../SECURITY.md) | 1,772 | Mixed | Threat table in feature-# order, not subsystem order; intermixes design + ops + history |
-| [PERFORMANCE.md](../../PERFORMANCE.md) | 82 | Engineers | Fine; needs a home under a reference/ section |
-| [SECURITY-OPS.md](../../SECURITY-OPS.md) | 81 | Operators | Orphaned — no operators/ folder to live in |
-| [JWT-GUIDE.md](../../JWT-GUIDE.md) | 97 | Operators | Same |
-| [dashboard.md](../../dashboard.md) | 313 | Engineers | Narrow reference; orphaned |
-| [persistence.md](../../persistence.md) | 238 | Engineers | Narrow reference; orphaned |
-| [runtime-rust.md](../../runtime-rust.md) | 209 | Engineers | Narrow reference; orphaned |
-| [ml-pipelines.md](../../ml-pipelines.md) | 681 | Users | Only user-facing guide; no siblings |
-| [docker-compose-dev-notes.md](../../docker-compose-dev-notes.md) | 56 | Operators | Orphaned stub |
-| [ops/operator-cert-guide.md](../../ops/operator-cert-guide.md) | 290 | Operators | Correct-shaped but `ops/` never became the operators/ home |
-| [ops/operator-webauthn-guide.md](../../ops/operator-webauthn-guide.md) | 331 | Operators | Same |
+| [ARCHITECTURE.md](../../architecture/) | 574 | Engineers | Overlaps COMPONENTS + ml-pipelines |
+| [COMPONENTS.md](../../architecture/components.md) | 434 | Engineers | Overlaps ARCHITECTURE § 2 |
+| [SECURITY.md](../../security/) | 1,772 | Mixed | Threat table in feature-# order, not subsystem order; intermixes design + ops + history |
+| [PERFORMANCE.md](../../architecture/performance.md) | 82 | Engineers | Fine; needs a home under a reference/ section |
+| [SECURITY-OPS.md](../../operators/runbook.md) | 81 | Operators | Orphaned — no operators/ folder to live in |
+| [JWT-GUIDE.md](../../operators/jwt.md) | 97 | Operators | Same |
+| [dashboard.md](../../architecture/dashboard.md) | 313 | Engineers | Narrow reference; orphaned |
+| [persistence.md](../../architecture/persistence.md) | 238 | Engineers | Narrow reference; orphaned |
+| [runtime-rust.md](../../architecture/runtime-rust.md) | 209 | Engineers | Narrow reference; orphaned |
+| [ml-pipelines.md](../../guides/ml-pipelines.md) | 681 | Users | Only user-facing guide; no siblings |
+| [docker-compose-dev-notes.md](../../operators/docker-compose.md) | 56 | Operators | Orphaned stub |
+| [ops/operator-cert-guide.md](../../operators/cert-rotation.md) | 290 | Operators | Correct-shaped but `ops/` never became the operators/ home |
+| [ops/operator-webauthn-guide.md](../../operators/webauthn.md) | 331 | Operators | Same |
 | [DOCS-WORKFLOW.md](../../DOCS-WORKFLOW.md) | 128 | Contributors | Canonical, keep as-is |
 
 Measured total under `docs/` (excluding `audits/` + `planned-features/`):

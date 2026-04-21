@@ -54,7 +54,7 @@ of this step is "you can train a model and serve it without leaving Helion."
 
 ## Security plan (this step)
 
-See [`docs/SECURITY.md` § Inference service surface](../../SECURITY.md#inference-service-surface-feature-17) for the authoritative write-up. Summary:
+See [`docs/SECURITY.md` § Inference service surface](../../security/README.md#inference-service-surface-feature-17) for the authoritative write-up. Summary:
 
 - Prober binds to `127.0.0.1` only; coordinator never proxies.
 - `ReportServiceEvent` validates the reporting node against the dispatched job's `NodeID` — same cross-node-poison defence as `ReportResult`.

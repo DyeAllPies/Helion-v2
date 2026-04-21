@@ -10,8 +10,8 @@ job. Built around the iris reference pipeline in
 [`examples/ml-iris/`](../../examples/ml-iris/).
 
 For the implementation internals behind each feature, see
-[ARCHITECTURE.md § ML pipeline](../ARCHITECTURE.md#12-ml-pipeline) and
-[COMPONENTS.md § ML subsystems](../COMPONENTS.md#5-ml-subsystems).
+[architecture/protocols.md § Three-tier storage](../architecture/protocols.md#5-three-tier-storage-ml-pipeline) and
+[architecture/components.md § ML subsystems](../architecture/components.md#5-ml-subsystems).
 
 ---
 
@@ -585,7 +585,7 @@ or foreign-scheme URIs into another job's inputs.
 ### Transport integrity
 
 SHA-256 propagation is defense-in-depth on top of the hybrid PQ
-channel ([SECURITY.md § 3](../SECURITY.md#3-post-quantum-cryptography)).
+channel ([security/crypto.md § 2](../security/crypto.md#2-post-quantum-cryptography)).
 The digest travels with the URI; the downstream node's Stager
 routes verified downloads through `artifacts.GetAndVerify`. This
 catches three scenarios the channel crypto doesn't directly
@@ -680,6 +680,6 @@ HTTP error raises and fails the job.
   [19](../planned-features/implemented/19-ml-end-to-end-demo.md)
 - Example code: [`examples/ml-iris/`](../../examples/ml-iris/)
 - Videos: [full e2e run](../e2e-full-run.mp4) · [iris walkthrough](../e2e-iris-run.mp4)
-- Security: [SECURITY.md](../SECURITY.md) · [jwt.md](../operators/jwt.md)
-- Architecture: [ARCHITECTURE.md § ML pipeline](../ARCHITECTURE.md#12-ml-pipeline)
-- Components: [COMPONENTS.md § ML subsystems](../COMPONENTS.md#5-ml-subsystems)
+- Security: [security/](../security/) · [operators/jwt.md](../operators/jwt.md)
+- Architecture: [architecture/protocols.md § Three-tier storage](../architecture/protocols.md#5-three-tier-storage-ml-pipeline)
+- Components: [architecture/components.md § ML subsystems](../architecture/components.md#5-ml-subsystems)
