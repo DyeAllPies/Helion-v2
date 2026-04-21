@@ -94,3 +94,48 @@ helion-v2/
 | BadgerDB for persistence | Embedded, ACID, pure Go, no external process. Swap path to etcd is a one-file change — business logic accesses storage through a typed interface. |
 | Angular 21 for the dashboard | Fills the enterprise-framework gap; the dashboard consumes real WebSocket streams, renders live metrics, and handles JWT auth with automatic session management — it is not a UI exercise. |
 | Hybrid PQC from day one | "Better safe than sorry" on a non-production codebase means the right patterns exist if the project ever is taken to production. Secondary: harvest-now-decrypt-later resistance for deployed systems. |
+
+## CI/CD pipeline
+
+| Trigger | Job | Steps |
+|---|---|---|
+| Every push / PR | `build` | `go vet` · `golangci-lint` · `go test -race -count=1 ./...` · coverage gates (internal/ ≥ 85%, cmd/ ≥ 25%) |
+| Every push / PR | `test-rust` | `cargo clippy -D warnings` · `cargo llvm-cov` with ≥ 85% coverage gate |
+| Every push / PR | `test-dashboard` | `npm ci` · `ng lint` · `ng test --browsers=ChromeHeadless` with coverage thresholds (85 / 60 / 85 / 85) |
+| Every push / PR | `docs-lint` | Frontmatter + per-folder line-budget gate (feature 44) |
+| After unit suites pass | `e2e` | Build Docker images · boot cluster · wait for healthy nodes · run Playwright non-ML specs · tear down |
+| After tier 1 | `e2e-iris` → `e2e-mnist` | ML-pipeline Playwright walkthroughs chained sequentially |
+| After all E2E | `snyk`, `docker` | CVE scans (Go deps + coordinator image) + `docker buildx` caching to GHA |
+
+Test categories:
+
+- **Unit tests.** Co-located with source (`*_test.go`). Always run with `-race`.
+- **Integration tests.** `tests/integration/` — real BadgerDB in a temp dir.
+- **Security tests.** `tests/integration/security/` — TLS rejection, revoked nodes, rate limits, audit completeness.
+- **Angular unit tests.** Karma + Jasmine. Coverage thresholds enforced by `scripts/check-dashboard-coverage.sh` because the Karma builder ignores `karma.conf.js`'s `check:` block.
+- **E2E tests.** `dashboard/e2e/` — Playwright specs covering login → jobs → workflows → analytics → ML pipelines. Against a real cluster, no mocks.
+- **Benchmarks.** `tests/bench/` — Go vs Rust runtime. See [performance.md](performance.md).
+
+## Glossary
+
+| Term | Definition |
+|---|---|
+| **BadgerDB** | Embeddable key-value store in Go. LSM-tree design, ACID transactions, optional per-key TTL. No external process required. |
+| **cgroup v2** | Linux control group v2. Used by the Rust runtime to enforce per-job CPU and memory limits. |
+| **ML-DSA (Dilithium)** | NIST FIPS 204. Lattice-based digital signature algorithm. Used to sign node certificates. Resistant to quantum attacks. |
+| **ML-KEM (Kyber)** | NIST FIPS 203. Lattice-based key encapsulation mechanism. Used in hybrid TLS key exchange. Resistant to quantum attacks. |
+| **DaemonSet** | Kubernetes workload type that ensures one pod runs on every (or selected) node. Used for Helion node agents. |
+| **gRPC** | Google RPC framework using HTTP/2 and Protocol Buffers. Supports streaming, cancellation, and mTLS natively. |
+| **Harvest-now-decrypt-later** | Attack where an adversary records encrypted traffic today to decrypt once a quantum computer is available. |
+| **Helm** | Package manager for Kubernetes. A chart is a parameterised collection of manifests. |
+| **Hybrid TLS** | TLS that negotiates both a classical (X25519) and post-quantum (ML-KEM) key exchange simultaneously. Breaking the session requires breaking both. |
+| **JTI (JWT ID)** | Unique identifier in a JWT. Storing it in BadgerDB with a TTL enables sub-second revocation. |
+| **mTLS** | Mutual TLS. Both client and server present and verify certificates. Prevents unauthorised nodes from connecting. |
+| **PQC** | Post-Quantum Cryptography. NIST completed standardisation of ML-KEM and ML-DSA in 2024. |
+| **seccomp-bpf** | Linux kernel feature that restricts which syscalls a process can make. Used by the Rust runtime for job isolation. |
+| **Artifact store** | Object-storage abstraction for ML job bytes. S3-compatible (MinIO in dev); `file://` fallback for local testing. Addressed by `s3://<bucket>/jobs/<job-id>/<path>`. |
+| **Stager** | Node-side component that prepares a per-job working directory: downloads declared inputs before `Run()`, uploads declared outputs after exit 0. |
+| **`from:` reference** | Workflow YAML syntax for "rewrite this input's URI to the upstream job's resolved output URI at dispatch time." |
+| **ResolvedOutputs** | Per-job record of the `(name, uri, sha256, size)` tuples the coordinator persists once the stager uploads on exit 0. Attested via scheme + prefix + suffix + declared-name checks. |
+| **Service job** | Long-running job with a `service: {port, health_path}` block. Runtime skips timeout enforcement; node runs a readiness prober. |
+| **`CUDA_VISIBLE_DEVICES`** | Env var set by the runtime on GPU jobs (list of claimed device indices) and on CPU jobs running on GPU-equipped nodes (empty string, hides all devices from the process). |
