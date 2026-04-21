@@ -59,6 +59,7 @@ relates to `audits/` and `deferred/`.
 | ~~41~~ | ~~DAG-builder draft persistence + Submit-tab "resume draft" button~~ | **Implemented** (sessionStorage-backed WorkflowDraftService + Resume-draft card on the SubmitShell; E2E rewrite drives the real UI path); moved to [`implemented/41-dag-builder-draft-resume.md`](implemented/41-dag-builder-draft-resume.md) | P2 | — |
 | ~~42~~ | ~~Verify + enforce parallel `train_light` ‖ `train_heavy` execution~~ | **Implemented** (overlap-assertion unit test exposed a real dispatcher serialisation bug; fixed by goroutine-per-job in `dispatch.go`; E2E walkthrough now asserts per-job `dispatched_at` intervals overlap on wall clock); moved to [`implemented/42-parallel-train-overlap-guarantee.md`](implemented/42-parallel-train-overlap-guarantee.md) | P2 | — |
 | ~~43~~ | ~~Asymmetric `train_light` vs `train_heavy` — dataset size, not just max_iter~~ | **Implemented** (preprocess emits four parquet artefacts per variant; walk-through shows a ~5× wall-clock gap between the two train_*); moved to [`implemented/43-mnist-asymmetric-variants.md`](implemented/43-mnist-asymmetric-variants.md) | P2 | — |
+| 44 | Docs restructure + line budgets (four-audience folders; SECURITY.md split by subsystem; docs-lint in CI) | Pending | P2 | [`44-docs-restructure.md`](44-docs-restructure.md) |
 
 ### Priority definitions
 
