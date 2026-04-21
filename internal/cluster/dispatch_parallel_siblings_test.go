@@ -187,29 +187,178 @@ func TestDispatchLoop_ParallelSiblings_BothDispatchedInOneTick(t *testing.T) {
 	}
 }
 
+// TestDispatchLoop_ParallelSiblings_DispatchCallsOverlapInWallClock
+// is the stricter cousin of the test above: it proves the feature-42
+// fix in dispatch.go (goroutine-per-job) actually gives sibling
+// dispatches concurrent execution, not just sequential scheduling.
+//
+// The simulated dispatcher sleeps 500 ms per call. If the dispatch
+// loop were still synchronous (pre-feature-42), the second sibling
+// wouldn't enter DispatchToNode until the first returned — so the
+// earliest-entry and latest-entry would be ≥500 ms apart. With the
+// goroutine-per-job fix, both calls enter within a few ms of each
+// other and their wall-clock intervals overlap.
+func TestDispatchLoop_ParallelSiblings_DispatchCallsOverlapInWallClock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	jobs := cluster.NewJobStore(cluster.NewMemJobPersister(), nil)
+	wfs := cluster.NewWorkflowStore(cluster.NewMemWorkflowPersister(), nil)
+	reg := heterogeneousRegistry(t)
+	sched := cluster.NewScheduler(reg, cluster.NewRoundRobinPolicy())
+	nd := &parallelDispatcher{entryDelay: 500 * time.Millisecond}
+	loop := cluster.NewDispatchLoop(jobs, sched, nd, 20*time.Millisecond, slog.Default())
+	loop.SetWorkflowStore(wfs)
+
+	wf := &cpb.Workflow{
+		ID:   "wf-overlap",
+		Name: "overlap",
+		Jobs: []cpb.WorkflowJob{
+			{Name: "preprocess", Command: "echo"},
+			{
+				Name:         "train_light",
+				Command:      "echo",
+				DependsOn:    []string{"preprocess"},
+				NodeSelector: map[string]string{"runtime": "go"},
+			},
+			{
+				Name:         "train_heavy",
+				Command:      "echo",
+				DependsOn:    []string{"preprocess"},
+				NodeSelector: map[string]string{"runtime": "rust"},
+			},
+		},
+	}
+	if err := wfs.Submit(ctx, wf); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := wfs.Start(ctx, "wf-overlap", jobs); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	preID := "wf-overlap/preprocess"
+	for _, target := range []cpb.JobStatus{
+		cpb.JobStatusDispatching, cpb.JobStatusRunning, cpb.JobStatusCompleted,
+	} {
+		if err := jobs.Transition(ctx, preID, target, cluster.TransitionOptions{
+			NodeID: "go-node",
+		}); err != nil {
+			t.Fatalf("preprocess → %s: %v", target, err)
+		}
+	}
+
+	go loop.Run(ctx)
+
+	// Wait until both dispatch calls ENTERED (not exited) the
+	// dispatcher. With the fix, this happens within ~50 ms of each
+	// other — well before either call exits its 500 ms sleep.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(nd.dispatched()) >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	calls := nd.dispatched()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 dispatch calls, got %d", len(calls))
+	}
+
+	// Calls overlap in wall-clock time iff
+	//   earliestExit > latestEntry.
+	// If a call's exitTime is zero (goroutine still sleeping), treat
+	// it as overlapping-with-now — the test is specifically designed
+	// to observe the dispatchers mid-sleep.
+	now := time.Now()
+	for i := range calls {
+		if calls[i].exitTime.IsZero() {
+			calls[i].exitTime = now
+		}
+	}
+
+	entry1, entry2 := calls[0].entryTime, calls[1].entryTime
+	exit1, exit2 := calls[0].exitTime, calls[1].exitTime
+	earliestExit := exit1
+	if exit2.Before(earliestExit) {
+		earliestExit = exit2
+	}
+	latestEntry := entry1
+	if entry2.After(latestEntry) {
+		latestEntry = entry2
+	}
+	if !earliestExit.After(latestEntry) {
+		t.Fatalf("dispatch calls did not overlap in wall-clock time:\n"+
+			"  entry1=%v exit1=%v\n"+
+			"  entry2=%v exit2=%v\n"+
+			"  earliestExit=%v latestEntry=%v\n"+
+			"  (with 500ms delay, a serial loop would show ≥500ms between entries; "+
+			"the goroutine-per-job fix makes both entries land within ~50ms)",
+			entry1, exit1, entry2, exit2, earliestExit, latestEntry)
+	}
+
+	// Stronger secondary check — the gap between the two entries
+	// should be small (< 250 ms on a warm machine). A synchronous
+	// loop would force ≥500 ms here. This is the real regression
+	// test for the goroutine-per-job change: if someone reverts
+	// it, this check fails even when the overlap check passes due
+	// to a slow test runner.
+	gap := entry2.Sub(entry1)
+	if gap < 0 {
+		gap = -gap
+	}
+	if gap >= 250*time.Millisecond {
+		t.Fatalf("dispatch entries too far apart (%v): the dispatch loop looks serialised again — "+
+			"check dispatch.go for a regression of the feature-42 goroutine-per-job change", gap)
+	}
+}
+
 // ── test-local mock ───────────────────────────────────────────────
 
 // parallelDispatcher is a NodeDispatcher stub that records both the
-// job ID and the node address for each call, since the existing
-// mockNodeDispatcher in dispatch_test.go only records IDs — and the
-// feature-42 assertion needs the address to prove the two siblings
-// hit different runtimes. The mutex mirrors mockNodeDispatcher —
-// DispatchLoop.Run() runs on its own goroutine so the test reader
-// and the dispatcher writer share this slice across threads.
+// job ID, the node address, and the entry timestamp for each call.
+// The existing mockNodeDispatcher in dispatch_test.go only records
+// IDs; the feature-42 assertions need the address to prove the two
+// siblings hit different runtimes AND entry timestamps to prove
+// DispatchToNode calls overlap on the wall clock. The mutex mirrors
+// mockNodeDispatcher — DispatchLoop.Run() spawns a goroutine per
+// job (feature 42), and each call writes from its own goroutine.
+//
+// entryDelay simulates a slow node-side Dispatch handler: when set,
+// DispatchToNode sleeps before returning. This is how the overlap
+// test asserts that goroutine-per-job dispatch actually behaves
+// concurrently — a synchronous loop would block the second call
+// until the first slept its full delay.
 type parallelDispatcher struct {
-	mu    sync.Mutex
-	calls []dispatchCall
+	mu         sync.Mutex
+	calls      []dispatchCall
+	entryDelay time.Duration
 }
 
 type dispatchCall struct {
-	jobID    string
-	nodeAddr string
+	jobID     string
+	nodeAddr  string
+	entryTime time.Time
+	exitTime  time.Time
 }
 
 func (m *parallelDispatcher) DispatchToNode(_ context.Context, nodeAddr string, job *cpb.Job) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls = append(m.calls, dispatchCall{jobID: job.ID, nodeAddr: nodeAddr})
+	idx := len(m.calls)
+	m.calls = append(m.calls, dispatchCall{
+		jobID:     job.ID,
+		nodeAddr:  nodeAddr,
+		entryTime: time.Now(),
+	})
+	delay := m.entryDelay
+	m.mu.Unlock()
+
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+
+	m.mu.Lock()
+	m.calls[idx].exitTime = time.Now()
+	m.mu.Unlock()
 	return nil
 }
 

@@ -123,12 +123,24 @@ function buildMnistWorkflowBody(token: string): {
       {
         name: 'preprocess',
         command: 'python', args: ['/app/ml-mnist/preprocess.py'],
-        env: jobEnv, timeout_seconds: 60, depends_on: ['ingest'],
+        // Feature 43 — preprocess emits FOUR parquets (train/test
+        // × light/heavy) so the two train_* jobs consume
+        // intentionally asymmetric inputs (light 1 000 rows,
+        // heavy 20 000). Kept in sync with examples/ml-mnist/
+        // workflow.yaml; an id mismatch here breaks the fork.
+        env: {
+          ...jobEnv,
+          HELION_PREPROCESS_SAMPLES_LIGHT: '1000',
+          HELION_PREPROCESS_SAMPLES_HEAVY: '20000',
+        },
+        timeout_seconds: 120, depends_on: ['ingest'],
         node_selector: { runtime: 'go' },
         inputs: [{ name: 'RAW_CSV', from: 'ingest.RAW_CSV', local_path: 'raw.csv' }],
         outputs: [
-          { name: 'TRAIN_PARQUET', local_path: 'train.parquet' },
-          { name: 'TEST_PARQUET',  local_path: 'test.parquet'  },
+          { name: 'TRAIN_LIGHT_PARQUET', local_path: 'train_light.parquet' },
+          { name: 'TEST_LIGHT_PARQUET',  local_path: 'test_light.parquet'  },
+          { name: 'TRAIN_HEAVY_PARQUET', local_path: 'train_heavy.parquet' },
+          { name: 'TEST_HEAVY_PARQUET',  local_path: 'test_heavy.parquet'  },
         ],
       },
       // ── Parallel fork: both train_* depend only on preprocess ──
@@ -139,8 +151,8 @@ function buildMnistWorkflowBody(token: string): {
         timeout_seconds: 120, depends_on: ['preprocess'],
         node_selector: { runtime: 'go' },
         inputs: [
-          { name: 'TRAIN_PARQUET', from: 'preprocess.TRAIN_PARQUET', local_path: 'train.parquet' },
-          { name: 'TEST_PARQUET',  from: 'preprocess.TEST_PARQUET',  local_path: 'test.parquet'  },
+          { name: 'TRAIN_PARQUET', from: 'preprocess.TRAIN_LIGHT_PARQUET', local_path: 'train.parquet' },
+          { name: 'TEST_PARQUET',  from: 'preprocess.TEST_LIGHT_PARQUET',  local_path: 'test.parquet'  },
         ],
         outputs: [
           { name: 'MODEL',   local_path: 'model.joblib' },
@@ -151,11 +163,11 @@ function buildMnistWorkflowBody(token: string): {
         name: 'train_heavy',
         command: 'python', args: ['/app/ml-mnist/train.py'],
         env: { ...jobEnv, HELION_TRAIN_MAX_ITER: '400', HELION_TRAIN_VARIANT: 'heavy' },
-        timeout_seconds: 300, depends_on: ['preprocess'],
+        timeout_seconds: 600, depends_on: ['preprocess'],
         node_selector: { runtime: 'rust' },
         inputs: [
-          { name: 'TRAIN_PARQUET', from: 'preprocess.TRAIN_PARQUET', local_path: 'train.parquet' },
-          { name: 'TEST_PARQUET',  from: 'preprocess.TEST_PARQUET',  local_path: 'test.parquet'  },
+          { name: 'TRAIN_PARQUET', from: 'preprocess.TRAIN_HEAVY_PARQUET', local_path: 'train.parquet' },
+          { name: 'TEST_PARQUET',  from: 'preprocess.TEST_HEAVY_PARQUET',  local_path: 'test.parquet'  },
         ],
         outputs: [
           { name: 'MODEL',   local_path: 'model.joblib' },
@@ -232,14 +244,13 @@ test.describe('Feature 40 — MNIST parallel-heterogeneous walkthrough (video)',
     //    typing; hydration, form validation, Preview, and
     //    Submit all run for real.
     //
-    //    addInitScript fires before every document load, so when
-    //    the page navigates to /submit/dag-builder (below) the
-    //    draft is already in sessionStorage.
+    //    authedPage has already authenticated (document loaded),
+    //    so addInitScript wouldn't re-fire on same-origin SPA
+    //    navigations — use page.evaluate to write sessionStorage
+    //    directly on the current context. sessionStorage survives
+    //    Angular route changes within the tab.
     // ──────────────────────────────────────────────────────────
-    await page.addInitScript((seed: { key: string; payload: string }) => {
-      // Guard: don't overwrite an unrelated entry. In practice
-      // sessionStorage is empty here, but this keeps the seed
-      // explicit.
+    await page.evaluate((seed: { key: string; payload: string }) => {
       window.sessionStorage.setItem(seed.key, seed.payload);
     }, {
       key: DRAFT_STORAGE_KEY,
@@ -286,12 +297,12 @@ test.describe('Feature 40 — MNIST parallel-heterogeneous walkthrough (video)',
     //    ApiService.submitWorkflow(body) end-to-end. No fetch()
     //    detour; the spec now honestly drives the UI.
     // ──────────────────────────────────────────────────────────
-    const jobTab = page.locator('a.submit-tab').filter({ hasText: /^\s*JOB\s*$/i }).first();
-    if (await jobTab.isVisible().catch(() => false)) {
-      await jobTab.click();
-    } else {
-      await page.goto('/submit/job');
-    }
+    // routerLink stamps href="/submit/job" on the anchor, so an
+    // attribute selector is stable against label-copy or icon
+    // changes. Fallback to the path-based filter in case the
+    // Angular rev switches to query-param routing.
+    const jobTab = page.locator('a.submit-tab[href="/submit/job"]').first();
+    await jobTab.click();
     await expect(page).toHaveURL(/\/submit\/job$/, { timeout: 10_000 });
 
     // Resume-draft card visible; SUBMIT NOW is the button that

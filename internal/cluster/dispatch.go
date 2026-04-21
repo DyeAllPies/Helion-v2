@@ -293,37 +293,55 @@ func (d *DispatchLoop) dispatchPending(ctx context.Context) {
 			continue
 		}
 
-		// Send to node
-		if err := d.dispatcher.DispatchToNode(ctx, node.Address, job); err != nil {
-			d.log.Warn("dispatch: send to node failed",
-				slog.String("job_id", job.ID),
-				slog.String("node_id", node.NodeID),
-				slog.Any("err", err))
-			// Mark as failed since we already transitioned to dispatching
-			_ = d.jobs.Transition(ctx, job.ID, cpb.JobStatusFailed, TransitionOptions{
-				ErrMsg: "dispatch failed: " + err.Error(),
-			})
-			continue
-		}
+		// Feature 42 — fire the gRPC Dispatch call in its own
+		// goroutine so the tick can move on to the next eligible
+		// job immediately. The node-side Dispatch handler blocks
+		// on rt.Run until the subprocess exits (see
+		// node_dispatcher.go's dispatchRPCTimeout comment), so a
+		// synchronous call here would serialise siblings — a
+		// parallel train_light ‖ train_heavy fork would dispatch
+		// one job, wait out its whole runtime, then dispatch the
+		// other. Spawning a goroutine keeps the tick non-blocking.
+		// The job is already persisted in "dispatching" state, so
+		// the next tick won't re-pick it up. JobStore.Transition
+		// + publishEvent are both concurrent-safe.
+		go d.sendToNode(ctx, node, job)
+	}
+}
 
-		d.log.Info("job dispatched",
+// sendToNode performs the actual gRPC dispatch on a separate
+// goroutine. Runs per-job so the dispatch loop's tick isn't
+// blocked by long-running subprocess execution on the node.
+func (d *DispatchLoop) sendToNode(ctx context.Context, node *cpb.Node, job *cpb.Job) {
+	if err := d.dispatcher.DispatchToNode(ctx, node.Address, job); err != nil {
+		d.log.Warn("dispatch: send to node failed",
 			slog.String("job_id", job.ID),
 			slog.String("node_id", node.NodeID),
-			slog.String("node_addr", node.Address),
-		)
-		// Feature 28 — emit one artifact.downloaded event per Input
-		// at dispatch time. This is the coordinator's earliest
-		// reliable view of "input was referenced for this job"; the
-		// node performs the actual byte transfer but does not send a
-		// per-download RPC today. The analytics table accepts NULL
-		// bytes / duration_ms for these rows — a follow-up that adds
-		// a node-side ReportArtifactDownload RPC can backfill the
-		// numeric columns.
-		for _, in := range job.Inputs {
-			if in.URI == "" {
-				continue
-			}
-			d.jobs.publishEvent(events.ArtifactDownloaded(job.ID, in.URI, 0, 0, nil))
+			slog.Any("err", err))
+		// Mark as failed since we already transitioned to dispatching
+		_ = d.jobs.Transition(ctx, job.ID, cpb.JobStatusFailed, TransitionOptions{
+			ErrMsg: "dispatch failed: " + err.Error(),
+		})
+		return
+	}
+
+	d.log.Info("job dispatched",
+		slog.String("job_id", job.ID),
+		slog.String("node_id", node.NodeID),
+		slog.String("node_addr", node.Address),
+	)
+	// Feature 28 — emit one artifact.downloaded event per Input
+	// at dispatch time. This is the coordinator's earliest
+	// reliable view of "input was referenced for this job"; the
+	// node performs the actual byte transfer but does not send a
+	// per-download RPC today. The analytics table accepts NULL
+	// bytes / duration_ms for these rows — a follow-up that adds
+	// a node-side ReportArtifactDownload RPC can backfill the
+	// numeric columns.
+	for _, in := range job.Inputs {
+		if in.URI == "" {
+			continue
 		}
+		d.jobs.publishEvent(events.ArtifactDownloaded(job.ID, in.URI, 0, 0, nil))
 	}
 }
