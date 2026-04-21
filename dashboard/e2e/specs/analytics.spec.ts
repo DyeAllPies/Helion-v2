@@ -597,7 +597,7 @@ test.describe('Analytics REST API', () => {
     // to do with the handler's offset semantics.
     const fromISO = new Date(Date.now() - 1_000).toISOString();
 
-    // Submit 5 jobs — exactly 5 `job_submit` events land on the bus.
+    // Submit 5 jobs — exactly 5 `job.submitted` events land on the bus.
     for (let i = 0; i < 5; i++) {
       const id = `e2e-analytics-page-${Date.now()}-${i}`;
       await submitJob(token, { id, command: 'echo', args: ['page'] });
@@ -606,12 +606,12 @@ test.describe('Analytics REST API', () => {
     // Let the sink flush.
     await new Promise(r => setTimeout(r, 1_500));
 
-    // Filter by `type=job_submit` + tight `from/to` window so the query
+    // Filter by `type=job.submitted` + tight `from/to` window so the query
     // set is exactly the 5 submits we just made. Pagination over a
     // stable set is what the test is actually asserting.
     const page = async (limit: number, offset: number) => {
       const qs = new URLSearchParams({
-        type: 'job_submit',
+        type: 'job.submitted',
         from: fromISO,
         to: toISO,
         limit: String(limit),
