@@ -15,6 +15,113 @@ import (
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 )
 
+// ── upsertWorkflowOutcome (feature 40) ───────────────────────
+
+func TestFlush_WorkflowCompletedWithCounts_InsertsWorkflowOutcomeRow(t *testing.T) {
+	evt := events.Event{
+		ID:        "ev-wf-1",
+		Type:      events.TopicWorkflowCompleted,
+		Timestamp: time.Now().UTC(),
+		Data: map[string]any{
+			"workflow_id":     "mnist-wf-1",
+			"job_count":       5,
+			"success_count":   5,
+			"failed_count":    0,
+			"owner_principal": "user:alice",
+			"tags":            map[string]string{"task": "mnist", "team": "ml"},
+		},
+	}
+	calls := flushOne(t, SinkConfig{}, evt)
+	found := false
+	for _, c := range calls {
+		if containsStr(c.SQL, "workflow_outcomes") {
+			found = true
+			// Args: workflowID, outcome, ts, jobCount, successCount,
+			// failedCount, failedJob(nil), owner, tagsJSON.
+			if len(c.Args) != 9 {
+				t.Errorf("args count: got %d, want 9", len(c.Args))
+			}
+			if s, ok := c.Args[0].(string); !ok || s != "mnist-wf-1" {
+				t.Errorf("workflow_id arg: got %v", c.Args[0])
+			}
+			if s, ok := c.Args[1].(string); !ok || s != "completed" {
+				t.Errorf("outcome arg: got %v", c.Args[1])
+			}
+			if n, ok := c.Args[3].(int); !ok || n != 5 {
+				t.Errorf("job_count arg: got %v", c.Args[3])
+			}
+			if s, ok := c.Args[7].(string); !ok || s != "user:alice" {
+				t.Errorf("owner arg: got %v", c.Args[7])
+			}
+			// tagsJSON must be valid JSONB bytes containing both keys.
+			tagsRaw, ok := c.Args[8].([]byte)
+			if !ok {
+				t.Fatalf("tags arg: got %T, want []byte", c.Args[8])
+			}
+			if !containsStr(string(tagsRaw), "mnist") {
+				t.Errorf("tags JSON missing 'mnist': %s", tagsRaw)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("no INSERT for workflow_outcomes")
+	}
+}
+
+func TestFlush_WorkflowFailedWithCounts_InsertsFailedRow(t *testing.T) {
+	evt := events.Event{
+		ID:        "ev-wf-2",
+		Type:      events.TopicWorkflowFailed,
+		Timestamp: time.Now().UTC(),
+		Data: map[string]any{
+			"workflow_id":     "mnist-wf-2",
+			"failed_job":      "train_heavy",
+			"job_count":       5,
+			"success_count":   3,
+			"failed_count":    2,
+			"owner_principal": "user:bob",
+		},
+	}
+	calls := flushOne(t, SinkConfig{}, evt)
+	found := false
+	for _, c := range calls {
+		if !containsStr(c.SQL, "workflow_outcomes") {
+			continue
+		}
+		// Args[6] is failed_job; must be "train_heavy".
+		if s, ok := c.Args[6].(string); !ok || s != "train_heavy" {
+			t.Errorf("failed_job arg: got %v", c.Args[6])
+		}
+		if s, ok := c.Args[1].(string); !ok || s != "failed" {
+			t.Errorf("outcome arg: got %v", c.Args[1])
+		}
+		found = true
+		break
+	}
+	if !found {
+		t.Error("no INSERT for workflow_outcomes (failed branch)")
+	}
+}
+
+func TestFlush_WorkflowCompleted_MissingWorkflowID_NoInsert(t *testing.T) {
+	// Defensive contract: a blank workflow_id triggers a silent
+	// skip rather than an INSERT with "" as the primary key.
+	// Protects against a buggy publisher poisoning the table.
+	evt := events.Event{
+		ID:        "ev-wf-blank",
+		Type:      events.TopicWorkflowCompleted,
+		Timestamp: time.Now().UTC(),
+		Data:      map[string]any{"job_count": 3},
+	}
+	calls := flushOne(t, SinkConfig{}, evt)
+	for _, c := range calls {
+		if containsStr(c.SQL, "workflow_outcomes") {
+			t.Errorf("missing workflow_id still produced INSERT: %s", c.SQL)
+		}
+	}
+}
+
 // ── upsertMLResolveFailed via flush dispatch ─────────────────
 
 func TestFlush_MLResolveFailed_EmitsNoRows(t *testing.T) {

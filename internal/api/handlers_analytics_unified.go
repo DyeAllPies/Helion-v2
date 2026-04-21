@@ -20,6 +20,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -455,6 +456,90 @@ func (s *Server) handleAnalyticsJobLogs(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, "handleAnalyticsJobLogs", JobLogsAnalyticsResponse{
 		JobID: jobID, Rows: out, Total: len(out),
 	})
+}
+
+// ── ml-runs (feature 40) ──────────────────────────────────────────────────
+//
+// Dashboard-facing rollup of the workflow_outcomes table. One row
+// per workflow run — the ML demo spec asserts against this
+// endpoint once the MNIST parallel pipeline completes.
+//
+// Returns rows descending by completed_at so the most recent run
+// lands first. The ?limit= query param follows the same shape
+// feature-28 uses (default 50, cap 500).
+
+type MLRunRow struct {
+	WorkflowID     string            `json:"workflow_id"`
+	Status         string            `json:"status"`
+	CompletedAt    time.Time         `json:"completed_at"`
+	JobCount       int               `json:"job_count"`
+	SuccessCount   int               `json:"success_count"`
+	FailedCount    int               `json:"failed_count"`
+	FailedJob      string            `json:"failed_job,omitempty"`
+	OwnerPrincipal string            `json:"owner_principal,omitempty"`
+	Tags           map[string]string `json:"tags,omitempty"`
+}
+
+type MLRunsResponse struct {
+	Rows  []MLRunRow `json:"rows"`
+	Total int        `json:"total"`
+}
+
+func (s *Server) handleAnalyticsMLRuns(w http.ResponseWriter, r *http.Request) {
+	_, _, _, ok := s.analyticsPreflight(w, r, "analytics.ml_runs")
+	if !ok {
+		return
+	}
+	limit := parseLimit(r, 50, 500)
+
+	// No mandatory time-range filter here because a demo run might
+	// complete seconds before the dashboard queries, and clamping
+	// to the default 24h window would risk the "just submitted"
+	// row missing from the "since yesterday" range on a fresh
+	// test-cluster volume where clock skew matters.
+	rows, err := s.analyticsDB.Query(r.Context(), `
+		SELECT workflow_id, status, completed_at,
+		       job_count, success_count, failed_count,
+		       COALESCE(failed_job, ''),
+		       COALESCE(owner_principal, ''),
+		       COALESCE(tags, '{}'::JSONB)
+		  FROM workflow_outcomes
+		 ORDER BY completed_at DESC
+		 LIMIT $1
+	`, limit)
+	if err != nil {
+		slog.Error("ml-runs query", slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	defer rows.Close()
+
+	var out []MLRunRow
+	for rows.Next() {
+		var row MLRunRow
+		var tagsRaw []byte
+		if err := rows.Scan(
+			&row.WorkflowID, &row.Status, &row.CompletedAt,
+			&row.JobCount, &row.SuccessCount, &row.FailedCount,
+			&row.FailedJob, &row.OwnerPrincipal, &tagsRaw,
+		); err != nil {
+			slog.Error("ml-runs scan", slog.Any("err", err))
+			writeError(w, http.StatusInternalServerError, "scan failed")
+			return
+		}
+		if len(tagsRaw) > 0 {
+			// Tolerant JSONB decode: bad-shape JSONB should be
+			// treated as no-tags rather than killing the response.
+			var t map[string]string
+			if err := json.Unmarshal(tagsRaw, &t); err == nil && len(t) > 0 {
+				row.Tags = t
+			}
+		}
+		out = append(out, row)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, "handleAnalyticsMLRuns", MLRunsResponse{Rows: out, Total: len(out)})
 }
 
 // ── shared helpers ──────────────────────────────────────────────────────────

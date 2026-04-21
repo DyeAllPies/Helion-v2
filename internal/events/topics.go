@@ -253,10 +253,50 @@ func NodeRevoked(nodeID, reason string) Event {
 }
 
 // WorkflowCompleted creates a workflow.completed event.
+//
+// Kept for backwards compatibility with direct callers. The
+// coordinator uses WorkflowCompletedWithCounts (below) so the
+// feature-40 analytics sink can persist a denormalised
+// workflow_outcomes row without querying the job store.
 func WorkflowCompleted(workflowID string) Event {
 	return NewEvent(TopicWorkflowCompleted, map[string]any{
 		"workflow_id": workflowID,
 	})
+}
+
+// WorkflowCompletedWithCounts is the feature-40 enriched variant.
+// The coordinator computes job_count/success_count/failed_count
+// when it detects every job is terminal, then emits this event so
+// the analytics sink can upsert workflow_outcomes in a single
+// pass. Tags + owner carry through from the submission record so
+// the dashboard can filter on them without a second lookup.
+//
+// Defensive copy on `tags`: callers often pass the workflow's
+// own map, which a later writer (status transition, share
+// mutation) could mutate under us. Copying here prevents a
+// subscriber from observing a torn tag set mid-mutation.
+func WorkflowCompletedWithCounts(
+	workflowID, ownerPrincipal string,
+	jobCount, successCount, failedCount int,
+	tags map[string]string,
+) Event {
+	data := map[string]any{
+		"workflow_id":   workflowID,
+		"job_count":     jobCount,
+		"success_count": successCount,
+		"failed_count":  failedCount,
+	}
+	if ownerPrincipal != "" {
+		data["owner_principal"] = ownerPrincipal
+	}
+	if len(tags) > 0 {
+		cp := make(map[string]string, len(tags))
+		for k, v := range tags {
+			cp[k] = v
+		}
+		data["tags"] = cp
+	}
+	return NewEvent(TopicWorkflowCompleted, data)
 }
 
 // DatasetRegistered creates a dataset.registered event. Payload
@@ -314,11 +354,43 @@ func ModelDeleted(name, version, actor string) Event {
 }
 
 // WorkflowFailed creates a workflow.failed event.
+//
+// Kept for backwards compatibility. The coordinator uses
+// WorkflowFailedWithCounts (below) in feature 40.
 func WorkflowFailed(workflowID, failedJob string) Event {
 	return NewEvent(TopicWorkflowFailed, map[string]any{
 		"workflow_id": workflowID,
 		"failed_job":  failedJob,
 	})
+}
+
+// WorkflowFailedWithCounts is the feature-40 enriched variant.
+// Same analytics sink contract as WorkflowCompletedWithCounts —
+// the row lands in workflow_outcomes with status='failed', the
+// failed-job attribution, counts, owner, and tags.
+func WorkflowFailedWithCounts(
+	workflowID, failedJob, ownerPrincipal string,
+	jobCount, successCount, failedCount int,
+	tags map[string]string,
+) Event {
+	data := map[string]any{
+		"workflow_id":   workflowID,
+		"failed_job":    failedJob,
+		"job_count":     jobCount,
+		"success_count": successCount,
+		"failed_count":  failedCount,
+	}
+	if ownerPrincipal != "" {
+		data["owner_principal"] = ownerPrincipal
+	}
+	if len(tags) > 0 {
+		cp := make(map[string]string, len(tags))
+		for k, v := range tags {
+			cp[k] = v
+		}
+		data["tags"] = cp
+	}
+	return NewEvent(TopicWorkflowFailed, data)
 }
 
 // JobUnschedulable fires when the dispatch loop has healthy nodes but

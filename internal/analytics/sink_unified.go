@@ -66,23 +66,88 @@ func (s *Sink) hashActorIfEnabled(raw string) string {
 // ── workflow outcomes ──────────────────────────────────────────────────────
 
 // upsertWorkflowOutcome writes one row per workflow.completed /
-// workflow.failed event into the existing workflow_outcomes
-// materialised view seed path (see migration 004 — the analytics
-// endpoints already aggregate by event_type). The raw event is
-// already in the `events` table; this upsert is intentionally
-// minimal — no separate rollup table today.
+// workflow.failed event into the feature-40 workflow_outcomes
+// denormalised table (see migration 006).
 //
-// outcome is 'completed' or 'failed'; the view infers it from
-// event_type and does its own grouping at query time. The upsert
-// is a no-op today but kept as a hook so a future
-// workflow_outcome_summary table can be wired without touching
-// the dispatch switch.
-func (s *Sink) upsertWorkflowOutcome(_ context.Context, _ pgx.Tx, _ events.Event, _ string) error {
-	// Intentionally empty. The `events` table already captured the
-	// raw row in the earlier insertEvents pass. The existing
-	// workflow-outcomes endpoint (handleAnalyticsWorkflowOutcomes)
-	// queries `events` directly by event_type.
-	return nil
+// The `events` table already captures the raw event in the
+// earlier insertEvents pass; this upsert adds the rollup row the
+// dashboard's ML runs panel queries. Contract:
+//
+//   - outcome ∈ {"completed", "failed"} — the sink's dispatch
+//     switch picks which of the two topic branches fires.
+//   - primary key = workflow_id. Re-submitting a workflow with
+//     the same ID UPDATE-replaces the prior row so the rollup
+//     reflects the latest run. The events table keeps the full
+//     history so forensic reviewers can still reconstruct the
+//     prior runs.
+//   - feature-40 constructors stamp job_count / success_count /
+//     failed_count / owner_principal on the event payload; if a
+//     legacy caller used the short WorkflowCompleted /
+//     WorkflowFailed constructors, the counts default to 0 and
+//     we still write the row (better a partial row than a
+//     missing one).
+//
+// Safety properties:
+//
+//   1. Does not block the flush on missing payload fields. Every
+//      extractor defaults to a zero/empty value rather than
+//      erroring, so a malformed event writes a degraded row
+//      instead of failing the entire tx batch.
+//
+//   2. Tags are inserted as JSONB so the dashboard's filter by
+//      `tags->>'task' = 'image-classification'` works without
+//      a client-side parse pass.
+//
+//   3. JSONB marshalling errors are swallowed and replaced with
+//      '{}'::JSONB — a corrupt tag map should never fail the
+//      entire analytics batch.
+func (s *Sink) upsertWorkflowOutcome(ctx context.Context, tx pgx.Tx, evt events.Event, outcome string) error {
+	workflowID := extractString(evt.Data, "workflow_id")
+	if workflowID == "" {
+		// Defensive — the constructor always sets it, but if a
+		// buggy publisher sends a blank workflow_id we'd otherwise
+		// UPSERT into a phantom primary key that masks real rows.
+		return nil
+	}
+	jobCount := extractInt(evt.Data, "job_count")
+	successCount := extractInt(evt.Data, "success_count")
+	failedCount := extractInt(evt.Data, "failed_count")
+	ownerPrincipal := extractString(evt.Data, "owner_principal")
+	failedJob := extractString(evt.Data, "failed_job")
+
+	// Tags marshal: accept map[string]string OR map[string]any
+	// (since the event bus JSON round-trip can rehydrate strings
+	// as `any`). Empty / malformed → "{}" so the JSONB column
+	// stays valid.
+	tagsJSON := []byte(`{}`)
+	if rawTags, ok := evt.Data["tags"]; ok && rawTags != nil {
+		if b, err := json.Marshal(rawTags); err == nil {
+			tagsJSON = b
+		}
+	}
+
+	_, err := tx.Exec(ctx, `
+		INSERT INTO workflow_outcomes (
+			workflow_id, status, completed_at,
+			job_count, success_count, failed_count,
+			failed_job, owner_principal, tags
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (workflow_id) DO UPDATE SET
+			status          = EXCLUDED.status,
+			completed_at    = EXCLUDED.completed_at,
+			job_count       = EXCLUDED.job_count,
+			success_count   = EXCLUDED.success_count,
+			failed_count    = EXCLUDED.failed_count,
+			failed_job      = EXCLUDED.failed_job,
+			owner_principal = EXCLUDED.owner_principal,
+			tags            = EXCLUDED.tags
+	`,
+		workflowID, outcome, evt.Timestamp,
+		jobCount, successCount, failedCount,
+		nilIfEmpty(failedJob), nilIfEmpty(ownerPrincipal), tagsJSON,
+	)
+	return err
 }
 
 // upsertMLResolveFailed mirrors upsertWorkflowOutcome: the raw

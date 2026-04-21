@@ -89,6 +89,12 @@ func (s *Server) SetAnalyticsDB(db AnalyticsDB) {
 	s.mux.HandleFunc("GET /api/analytics/service-probe", s.authMiddleware(s.handleAnalyticsServiceProbe))
 	s.mux.HandleFunc("GET /api/analytics/artifact-throughput", s.authMiddleware(s.handleAnalyticsArtifactThroughput))
 	s.mux.HandleFunc("GET /api/analytics/job-logs", s.authMiddleware(s.handleAnalyticsJobLogs))
+
+	// Feature 40 — ML runs rollup. One row per terminal workflow
+	// (completed | failed), sourced from the workflow_outcomes
+	// denormalised table that the sink upserts on every
+	// workflow.{completed,failed} event. See migration 006.
+	s.mux.HandleFunc("GET /api/analytics/ml-runs", s.authMiddleware(s.handleAnalyticsMLRuns))
 }
 
 // ── Shared pre-flight ────────────────────────────────────────────────────

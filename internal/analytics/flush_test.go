@@ -145,10 +145,11 @@ func TestUpsertSummaries_RoutesAllEventTypes(t *testing.T) {
 
 	// job.submitted, job.transition(running), job.completed + node incr,
 	// job.failed (no node_id in standard constructor → no node incr),
-	// job.retrying, node.registered, node.stale, node.revoked = 9.
-	// workflow.completed and workflow.failed are no-ops in upsertSummaries.
-	if tx.ExecCallCount() != 9 {
-		t.Errorf("expected 9 exec calls, got %d", tx.ExecCallCount())
+	// job.retrying, node.registered, node.stale, node.revoked,
+	// plus feature-40: workflow.completed + workflow.failed each
+	// INSERT into workflow_outcomes = 11 total.
+	if tx.ExecCallCount() != 11 {
+		t.Errorf("expected 11 exec calls, got %d", tx.ExecCallCount())
 		for i, c := range tx.ExecCalls() {
 			t.Logf("  [%d] %s", i, c.SQL[:min(80, len(c.SQL))])
 		}

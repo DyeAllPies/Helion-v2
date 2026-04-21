@@ -149,10 +149,16 @@ func (s *WorkflowStore) OnJobCompleted(ctx context.Context, jobID string, jobSta
 		}
 	}
 
-	// Check if all workflow jobs are now in a terminal state.
+	// Check if all workflow jobs are now in a terminal state, and
+	// build feature-40 analytics counts in the same pass so we
+	// don't hold the job-store mutex twice.
 	allTerminal := true
 	anyFailed := false
+	jobCount := 0
+	successCount := 0
+	failedCount := 0
 	for _, wj := range targetWorkflow.Jobs {
+		jobCount++
 		if wj.JobID == "" {
 			continue
 		}
@@ -165,8 +171,12 @@ func (s *WorkflowStore) OnJobCompleted(ctx context.Context, jobID string, jobSta
 			allTerminal = false
 			break
 		}
-		if j.Status == cpb.JobStatusFailed || j.Status == cpb.JobStatusTimeout || j.Status == cpb.JobStatusLost || j.Status == cpb.JobStatusSkipped {
+		switch j.Status {
+		case cpb.JobStatusCompleted:
+			successCount++
+		case cpb.JobStatusFailed, cpb.JobStatusTimeout, cpb.JobStatusLost, cpb.JobStatusSkipped:
 			anyFailed = true
+			failedCount++
 		}
 	}
 
@@ -203,18 +213,37 @@ func (s *WorkflowStore) OnJobCompleted(ctx context.Context, jobID string, jobSta
 		s.log.Info("workflow finished",
 			slog.String("workflow_id", workflowID),
 			slog.String("status", targetWorkflow.Status.String()),
+			slog.Int("jobs", jobCount),
+			slog.Int("success", successCount),
+			slog.Int("failed", failedCount),
 		)
 	}
+
+	// Snapshot event-payload inputs before releasing the lock so
+	// the feature-40 constructors see a consistent view. Tags are
+	// NOT currently carried on the Workflow type (only per-Job);
+	// passing nil here is the stable contract — a future tags-on-
+	// workflow feature can just populate the map without touching
+	// the event constructor.
+	ownerPrincipal := targetWorkflow.OwnerPrincipal
 
 	s.mu.Unlock()
 
 	// Publish after releasing the lock so subscribers never contend with us.
 	if s.eventBus != nil {
 		if emitCompleted {
-			s.eventBus.Publish(events.WorkflowCompleted(workflowID))
+			s.eventBus.Publish(events.WorkflowCompletedWithCounts(
+				workflowID, ownerPrincipal,
+				jobCount, successCount, failedCount,
+				nil, // tags (reserved for future workflow-level tags)
+			))
 		}
 		if emitFailed {
-			s.eventBus.Publish(events.WorkflowFailed(workflowID, failedJobName))
+			s.eventBus.Publish(events.WorkflowFailedWithCounts(
+				workflowID, failedJobName, ownerPrincipal,
+				jobCount, successCount, failedCount,
+				nil, // tags (reserved for future workflow-level tags)
+			))
 		}
 	}
 }

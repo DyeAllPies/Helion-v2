@@ -1,38 +1,49 @@
-# MNIST-784 end-to-end workflow — ingest → preprocess → train → register.
+# MNIST-784 parallel-training end-to-end workflow.
 #
-# Heavier sibling of the iris demo (examples/ml-iris/workflow.yaml).
-# MNIST training on 5 000 subsampled rows × 784 features takes ~10–30 s
-# in LogisticRegression — enough to observe the pipeline transitioning
-# pending → dispatching → running → completed on the Pipelines list.
-# The local-only Playwright spec
-# (dashboard/e2e/specs/ml-mnist-live.spec.ts) drives exactly this.
+# Five-stage DAG that demonstrates every observable property of
+# the orchestrator in a single run:
 #
-# `serve.py` is submitted separately once the workflow completes
-# because a service job never reaches a terminal state and would
-# block the DAG.
+#   ingest       ─┐
+#                 ├→ preprocess ─┬→ train_light (Go)  ─┐
+#                                │                      ├→ compare (Go)
+#                                └→ train_heavy (Rust) ─┘
+#
+# - ingest + preprocess are the cheap orchestration steps, both on
+#   Go-runtime nodes (node_selector: {runtime: go}).
+# - train_light + train_heavy run in PARALLEL on different runtime
+#   nodes: light on Go (max_iter=50, ~5 s fit), heavy on Rust
+#   (max_iter=400, ~20–30 s fit). The Jobs page shows both with
+#   DIFFERENT node_id columns at the same moment — that's the
+#   heterogeneous-dispatch visual.
+# - compare consumes BOTH trained models, picks the winner by
+#   test-set accuracy, and registers both against the registry
+#   with a `winner=true|false` tag on each. See examples/ml-mnist/
+#   compare.py for the full flow.
+#
+# Workflow-level analytics (feature 40): when the last job
+# transitions to terminal, the coordinator emits a
+# workflow.completed event. The analytics sink's
+# upsertWorkflowOutcome handler inserts a denormalised row into
+# workflow_outcomes (workflow_id, started_at, completed_at,
+# job_count, success_count, failed_count, duration_ms). The
+# Playwright spec e2e/specs/ml-mnist-parallel-walkthrough asserts
+# this row exists after the run — that's the "analytics page
+# confirms the run" beat of the demo.
 #
 # Heterogeneous scheduling (feature 21): each job declares a
-# `node_selector: { runtime: <go|rust> }` label. Lightweight
-# orchestration steps (ingest/preprocess/register) target the
-# Go-runtime nodes; the training step — the most CPU-heavy job
-# in the DAG — pins to the Rust-runtime node. The Rust subprocess
-# runtime is env_clear()-strict, so PATH must be set explicitly or
-# `python` won't resolve. submit.py injects PATH before sending the
-# request; the inline walkthrough body does the same.
+# `node_selector: { runtime: <go|rust> }` label. The Rust runtime
+# subprocess runs with env_clear() so PATH is injected explicitly
+# below (submit.py does the same for the top-level API submit).
 
 id: mnist-wf-1
-name: mnist-end-to-end
+name: mnist-parallel-heterogeneous
 priority: 50
 
 jobs:
   - name: ingest
     command: python
     args: [/app/ml-mnist/ingest.py]
-    timeout_seconds: 180           # OpenML fetch ~11 MB; first run is slowest
-    # Heterogeneous-scheduling demo (feature 21): ingest + preprocess
-    # + register are lightweight orchestration steps — let them land
-    # on any Go-runtime node via an explicit selector so the demo
-    # output clearly shows the split.
+    timeout_seconds: 180
     node_selector:
       runtime: go
     outputs:
@@ -56,18 +67,22 @@ jobs:
       - name: TEST_PARQUET
         local_path: test.parquet
 
-  - name: train
+  # ── Parallel training (feature 21 heterogeneous dispatch) ─────
+  #
+  # Both train_* jobs depend ONLY on preprocess, so the scheduler
+  # dispatches them concurrently. The runtime split lands light
+  # on Go and heavy on Rust, which the Jobs page renders with
+  # different node_id + runtime columns side-by-side.
+  - name: train_light
     command: python
     args: [/app/ml-mnist/train.py]
-    timeout_seconds: 180
+    timeout_seconds: 120
     depends_on: [preprocess]
-    # Pin the heaviest step (sklearn LogisticRegression fit on
-    # 5 000 × 784 rows) to the Rust-runtime node. The Rust runtime
-    # executes the same Python subprocess as the Go runtime, but
-    # with a different IPC path — the walkthrough video uses the
-    # node_id column on the DAG job cards to prove the split.
     node_selector:
-      runtime: rust
+      runtime: go
+    env:
+      HELION_TRAIN_MAX_ITER: "50"
+      HELION_TRAIN_VARIANT: light
     inputs:
       - name: TRAIN_PARQUET
         from: preprocess.TRAIN_PARQUET
@@ -81,23 +96,62 @@ jobs:
       - name: METRICS
         local_path: metrics.json
 
-  - name: register
+  - name: train_heavy
     command: python
-    args: [/app/ml-mnist/register.py]
+    args: [/app/ml-mnist/train.py]
+    timeout_seconds: 300
+    depends_on: [preprocess]
+    node_selector:
+      runtime: rust
+    env:
+      HELION_TRAIN_MAX_ITER: "400"
+      HELION_TRAIN_VARIANT: heavy
+    inputs:
+      - name: TRAIN_PARQUET
+        from: preprocess.TRAIN_PARQUET
+        local_path: train.parquet
+      - name: TEST_PARQUET
+        from: preprocess.TEST_PARQUET
+        local_path: test.parquet
+    outputs:
+      - name: MODEL
+        local_path: model.joblib
+      - name: METRICS
+        local_path: metrics.json
+
+  # ── Compare + register (merge step) ───────────────────────────
+  #
+  # Reads BOTH trained-model metrics, picks the higher-accuracy
+  # variant, POSTs both model records to the registry with a
+  # `winner=true|false` tag. Emits a comparison summary for the
+  # dashboard to pick up from workflow lineage.
+  - name: compare
+    command: python
+    args: [/app/ml-mnist/compare.py]
     timeout_seconds: 60
-    depends_on: [train]
+    depends_on: [train_light, train_heavy]
     node_selector:
       runtime: go
     env:
       HELION_WORKFLOW_ID: mnist-wf-1
-      HELION_TRAIN_JOB_NAME: train
+      HELION_TRAIN_LIGHT_JOB_NAME: train_light
+      HELION_TRAIN_HEAVY_JOB_NAME: train_heavy
     inputs:
       - name: RAW_CSV
         from: ingest.RAW_CSV
         local_path: raw.csv
-      - name: MODEL
-        from: train.MODEL
-        local_path: model.joblib
-      - name: METRICS
-        from: train.METRICS
-        local_path: metrics.json
+      - name: MODEL_LIGHT
+        from: train_light.MODEL
+        local_path: model_light.joblib
+      - name: MODEL_HEAVY
+        from: train_heavy.MODEL
+        local_path: model_heavy.joblib
+      - name: METRICS_LIGHT
+        from: train_light.METRICS
+        local_path: metrics_light.json
+      - name: METRICS_HEAVY
+        from: train_heavy.METRICS
+        local_path: metrics_heavy.json
+    outputs:
+      - name: COMPARISON
+        local_path: comparison.json

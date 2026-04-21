@@ -271,6 +271,87 @@ func TestServiceProbeTransition_Shape(t *testing.T) {
 	}
 }
 
+// ── WorkflowCompletedWithCounts (feature 40) ────────────────
+
+func TestWorkflowCompletedWithCounts_FullPayload(t *testing.T) {
+	e := events.WorkflowCompletedWithCounts(
+		"wf-1", "user:alice",
+		5, 4, 1,
+		map[string]string{"team": "ml", "task": "mnist"},
+	)
+	assertTopic(t, e, events.TopicWorkflowCompleted)
+	d := dataMap(t, e)
+	assertString(t, d, "workflow_id", "wf-1")
+	assertString(t, d, "owner_principal", "user:alice")
+	if d["job_count"].(int) != 5 {
+		t.Errorf("job_count: got %v", d["job_count"])
+	}
+	if d["success_count"].(int) != 4 {
+		t.Errorf("success_count: got %v", d["success_count"])
+	}
+	if d["failed_count"].(int) != 1 {
+		t.Errorf("failed_count: got %v", d["failed_count"])
+	}
+	tags, ok := d["tags"].(map[string]string)
+	if !ok || tags["team"] != "ml" || tags["task"] != "mnist" {
+		t.Errorf("tags: got %v", d["tags"])
+	}
+}
+
+func TestWorkflowCompletedWithCounts_EmptyOwnerAndTags_Omitted(t *testing.T) {
+	e := events.WorkflowCompletedWithCounts("wf-1", "", 3, 3, 0, nil)
+	d := dataMap(t, e)
+	if _, ok := d["owner_principal"]; ok {
+		t.Error("empty owner must not add 'owner_principal' key")
+	}
+	if _, ok := d["tags"]; ok {
+		t.Error("nil tags must not add 'tags' key")
+	}
+}
+
+func TestWorkflowCompletedWithCounts_TagsDefensiveCopy(t *testing.T) {
+	src := map[string]string{"k": "v"}
+	e := events.WorkflowCompletedWithCounts("wf-1", "", 1, 1, 0, src)
+	d := dataMap(t, e)
+	// Mutating the caller's source after event creation must not
+	// bleed into the payload (event buses are fanout — a
+	// subscriber that mutates its view would corrupt peers).
+	src["k"] = "MUTATED"
+	got := d["tags"].(map[string]string)
+	if got["k"] != "v" {
+		t.Errorf("defensive copy broken: %q", got["k"])
+	}
+}
+
+// ── WorkflowFailedWithCounts (feature 40) ───────────────────
+
+func TestWorkflowFailedWithCounts_FullPayload(t *testing.T) {
+	e := events.WorkflowFailedWithCounts(
+		"wf-2", "train_heavy", "user:bob",
+		5, 3, 2,
+		map[string]string{"task": "mnist"},
+	)
+	assertTopic(t, e, events.TopicWorkflowFailed)
+	d := dataMap(t, e)
+	assertString(t, d, "workflow_id", "wf-2")
+	assertString(t, d, "failed_job", "train_heavy")
+	assertString(t, d, "owner_principal", "user:bob")
+	if d["failed_count"].(int) != 2 {
+		t.Errorf("failed_count: got %v", d["failed_count"])
+	}
+}
+
+func TestWorkflowFailedWithCounts_NoOwnerTags(t *testing.T) {
+	e := events.WorkflowFailedWithCounts("wf-2", "train", "", 3, 2, 1, nil)
+	d := dataMap(t, e)
+	if _, ok := d["owner_principal"]; ok {
+		t.Error("empty owner must be absent")
+	}
+	if _, ok := d["tags"]; ok {
+		t.Error("nil tags must be absent")
+	}
+}
+
 // ── JobLog (uses NewEvent directly) ──────────────────────────
 
 func TestJobLog_UsesCallerTimestamp(t *testing.T) {

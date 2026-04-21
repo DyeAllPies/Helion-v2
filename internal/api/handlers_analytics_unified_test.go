@@ -306,6 +306,61 @@ func TestAnalyticsLimit_Unparseable_FallsBackToDefault(t *testing.T) {
 	}
 }
 
+// ── ml-runs (feature 40) ─────────────────────────────────────
+
+func TestAnalyticsMLRuns_EmptyResult_Returns200(t *testing.T) {
+	db := &mockAnalyticsDB{rows: &mockRows{}}
+	srv := newAnalyticsServer(db)
+	rr := doGet(t, srv, "/api/analytics/ml-runs")
+	if rr.Code != 200 {
+		t.Fatalf("code: got %d want 200. body=%s", rr.Code, rr.Body.String())
+	}
+	var resp api.MLRunsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Total != 0 {
+		t.Errorf("total: got %d, want 0", resp.Total)
+	}
+}
+
+func TestAnalyticsMLRuns_DBError_Returns500(t *testing.T) {
+	db := &mockAnalyticsDB{err: errors.New("pg down")}
+	srv := newAnalyticsServer(db)
+	rr := doGet(t, srv, "/api/analytics/ml-runs")
+	if rr.Code != 500 {
+		t.Errorf("code: got %d want 500", rr.Code)
+	}
+}
+
+func TestAnalyticsMLRuns_QuerySelectsFromWorkflowOutcomes(t *testing.T) {
+	db := &mockAnalyticsDB{rows: &mockRows{}}
+	srv := newAnalyticsServer(db)
+	doGet(t, srv, "/api/analytics/ml-runs")
+	// Guard: the handler MUST query the denormalised table, not
+	// the raw `events` table. If this assertion fails a future
+	// refactor has silently regressed the feature-40 contract
+	// back to feature-28's events-group-by.
+	if !strings.Contains(db.lastSQL, "FROM workflow_outcomes") {
+		t.Errorf("handler should SELECT FROM workflow_outcomes, got: %s", db.lastSQL)
+	}
+	if !strings.Contains(db.lastSQL, "ORDER BY completed_at DESC") {
+		t.Errorf("handler should order newest-first: %s", db.lastSQL)
+	}
+}
+
+func TestAnalyticsMLRuns_LimitClamped(t *testing.T) {
+	db := &mockAnalyticsDB{rows: &mockRows{}}
+	srv := newAnalyticsServer(db)
+	doGet(t, srv, "/api/analytics/ml-runs?limit=10000")
+	// Last arg is the LIMIT placeholder; max is 500 per the
+	// parseLimit helper.
+	last := db.lastArgs[len(db.lastArgs)-1]
+	if n, ok := last.(int); !ok || n != 500 {
+		t.Errorf("limit not clamped: lastArg=%v (want 500)", last)
+	}
+}
+
 // ── scanAuthEvents error surface ─────────────────────────────
 
 func TestScanAuthEvents_DBError_BubblesUp(t *testing.T) {
