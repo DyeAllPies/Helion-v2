@@ -66,12 +66,12 @@ the UI itself.
 ## Current state
 
 - Submit endpoints already exist server-side.
-  [`POST /jobs`](../../internal/api/handlers_jobs.go#L449),
-  [`POST /workflows`](../../internal/api/handlers_workflows.go#L94).
+  [`POST /jobs`](../../../internal/api/handlers_jobs.go#L449),
+  [`POST /workflows`](../../../internal/api/handlers_workflows.go#L94).
   Validation already runs through `validateNodeSelector`,
   `validateServiceSpec`, `forbiddenCommandChars`, 1 MiB
   `http.MaxBytesReader`, timeout cap 3600 s.
-- [`ApiService.submitJob`](../../dashboard/src/app/core/services/api.service.ts)
+- [`ApiService.submitJob`](../../../dashboard/src/app/core/services/api.service.ts)
   already exists. No component calls it.
 - No half-finished submit UI in the repo — this is a greenfield
   UI task over a mostly-complete API.
@@ -223,7 +223,7 @@ follow-up ticket.
    blocker.
 2. **Dev-mode `ng serve` has no CSP; prod Nginx does.** Prod is
    covered by the strict CSP in
-   [`dashboard/nginx.conf`](../../dashboard/nginx.conf).
+   [`dashboard/nginx.conf`](../../../dashboard/nginx.conf).
    Dev-mode XSS repros won't show CSP blocks — worth mirroring
    the prod headers in `ng serve` so local testing reflects the
    deployed posture. Separate ticket; not a blocker for 22.

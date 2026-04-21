@@ -431,7 +431,7 @@ auth-guard on `/analytics`, Nginx CSP on same-origin.
 ## Test coverage
 
 End-to-end coverage lives in
-[`dashboard/e2e/specs/analytics.spec.ts`](../../dashboard/e2e/specs/analytics.spec.ts)
+[`dashboard/e2e/specs/analytics.spec.ts`](../../../dashboard/e2e/specs/analytics.spec.ts)
 (35 tests). Highlights:
 
 **Dashboard UI:**

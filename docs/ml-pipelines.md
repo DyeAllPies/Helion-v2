@@ -40,7 +40,7 @@ DAG + JWT auth; no ML-specific control plane.
 | `POST /jobs` with `"service": {...}` | a long-running job with a readiness prober | live upstream URL at `/api/services/{id}` once the `/healthz` probe passes |
 
 Nine features compose the slice (see
-[parent index](planned-features/10-minimal-ml-pipeline.md)):
+[parent index](planned-features/implemented/10-minimal-ml-pipeline.md)):
 
 - **Artifact store** (11) — S3-compatible blob storage for training
   bytes, addressed by `s3://bucket/jobs/<job-id>/<path>`. Local
@@ -654,7 +654,7 @@ HTTP error raises and fails the job.
 
 ## Reference
 
-- Parent slice: [feature 10 — ML pipeline umbrella](planned-features/10-minimal-ml-pipeline.md)
+- Parent slice: [feature 10 — ML pipeline umbrella](planned-features/implemented/10-minimal-ml-pipeline.md)
 - Implementation docs for each feature:
   [11](planned-features/implemented/11-ml-artifact-store.md) /
   [12](planned-features/implemented/12-ml-job-io-staging.md) /

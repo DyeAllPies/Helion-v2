@@ -16,16 +16,16 @@ relates to `audits/` and `deferred/`.
 
 | #  | Feature | Status | Priority | Doc |
 |---:|---------|--------|----------|-----|
-| 01 | Workflow / DAG support | **Done** | P0 | [01-workflow-dag.md](01-workflow-dag.md) |
-| 02 | Retry + failure policies | **Done** | P0 | [02-retry-failure-policies.md](02-retry-failure-policies.md) |
-| 03 | Resource-aware scheduling | **Done** | P1 | [03-resource-aware-scheduling.md](03-resource-aware-scheduling.md) |
-| 04 | Job state machine improvements | **Done** | P1 | [04-job-state-machine.md](04-job-state-machine.md) |
-| 05 | Priority queues | **Done** | P1 | [05-priority-queues.md](05-priority-queues.md) |
-| 06 | Event system | **Done** | P2 | [06-event-system.md](06-event-system.md) |
-| 07 | Observability improvements | **Done** | P2 | [07-observability.md](07-observability.md) |
-| 08 | Deferred-enhancements index (legacy) | Archived | — | [08-deferred-enhancements.md](08-deferred-enhancements.md) |
-| 09 | Analytics pipeline (BadgerDB → PostgreSQL) | **Done** | P1 | [09-analytics-pipeline.md](09-analytics-pipeline.md) |
-| 10 | Minimal ML pipeline (umbrella) | **Done** (all 10 slices landed + audited + acceptance-green) | P1 | [10-minimal-ml-pipeline.md](10-minimal-ml-pipeline.md) |
+| ~~01~~ | ~~Workflow / DAG support~~ | **Implemented**; moved to [`implemented/01-workflow-dag.md`](implemented/01-workflow-dag.md) | P0 | — |
+| ~~02~~ | ~~Retry + failure policies~~ | **Implemented**; moved to [`implemented/02-retry-failure-policies.md`](implemented/02-retry-failure-policies.md) | P0 | — |
+| ~~03~~ | ~~Resource-aware scheduling~~ | **Implemented**; moved to [`implemented/03-resource-aware-scheduling.md`](implemented/03-resource-aware-scheduling.md) | P1 | — |
+| ~~04~~ | ~~Job state machine improvements~~ | **Implemented**; moved to [`implemented/04-job-state-machine.md`](implemented/04-job-state-machine.md) | P1 | — |
+| ~~05~~ | ~~Priority queues~~ | **Implemented**; moved to [`implemented/05-priority-queues.md`](implemented/05-priority-queues.md) | P1 | — |
+| ~~06~~ | ~~Event system~~ | **Implemented**; moved to [`implemented/06-event-system.md`](implemented/06-event-system.md) | P2 | — |
+| ~~07~~ | ~~Observability improvements~~ | **Implemented**; moved to [`implemented/07-observability.md`](implemented/07-observability.md) | P2 | — |
+| ~~08~~ | ~~Deferred-enhancements index (legacy)~~ | Archived; moved to [`implemented/08-deferred-enhancements.md`](implemented/08-deferred-enhancements.md) | — | — |
+| ~~09~~ | ~~Analytics pipeline (BadgerDB → PostgreSQL)~~ | **Implemented**; moved to [`implemented/09-analytics-pipeline.md`](implemented/09-analytics-pipeline.md) | P1 | — |
+| ~~10~~ | ~~Minimal ML pipeline (umbrella)~~ | **Implemented** (all 10 slices landed + audited + acceptance-green); moved to [`implemented/10-minimal-ml-pipeline.md`](implemented/10-minimal-ml-pipeline.md) | P1 | — |
 | ~~11~~ | ~~ML — Artifact store abstraction~~ | **Implemented**; moved to [`implemented/11-ml-artifact-store.md`](implemented/11-ml-artifact-store.md) | P1 | — |
 | ~~12~~ | ~~ML — Job spec: inputs/outputs/working_dir~~ | **Implemented**; moved to [`implemented/12-ml-job-io-staging.md`](implemented/12-ml-job-io-staging.md) | P1 | — |
 | ~~13~~ | ~~ML — Inter-job artifact passing in workflows~~ | **Implemented**; moved to [`implemented/13-ml-workflow-artifact-passing.md`](implemented/13-ml-workflow-artifact-passing.md) | P1 | — |
@@ -37,7 +37,7 @@ relates to `audits/` and `deferred/`.
 | ~~19~~ | ~~ML — End-to-end iris demo~~ | **Implemented + acceptance-green (2026-04-18)**; moved to [`implemented/19-ml-end-to-end-demo.md`](implemented/19-ml-end-to-end-demo.md) | P1 | — |
 | ~~20~~ | ~~ML — Documentation~~ | **Implemented**; moved to [`implemented/20-ml-documentation.md`](implemented/20-ml-documentation.md) | P2 | — |
 | ~~21~~ | ~~ML — MNIST local E2E (progression-observing)~~ | **Implemented** (six tests green locally; also fixed a hidden 10 s dispatch RPC ceiling); moved to [`implemented/21-ml-mnist-e2e-local.md`](implemented/21-ml-mnist-e2e-local.md) | P2 | — |
-| 22 | Dashboard submission tab (jobs / workflows / ML workflows + DAG builder) | **Shipped** (UI + DAG builder; server hardening 24-26 pending) | P1 | [22-ui-submission-tab.md](22-ui-submission-tab.md) |
+| ~~22~~ | ~~Dashboard submission tab (jobs / workflows / ML workflows + DAG builder)~~ | **Implemented** (UI + DAG builder; server hardening shipped via features 24–26); moved to [`implemented/22-ui-submission-tab.md`](implemented/22-ui-submission-tab.md) | P1 | — |
 | ~~23~~ | ~~Hybrid-PQC on coordinator REST + WebSocket listener~~ | **Implemented** (code + 8 tests shipped; existing e2e overlays opt out via `HELION_REST_TLS=off` pending the batch e2e migration); moved to [`implemented/23-rest-hybrid-pqc.md`](implemented/23-rest-hybrid-pqc.md) | P1 | — |
 | ~~24~~ | ~~Dry-run preflight (`?dry_run=true` on submit endpoints)~~ | **Implemented** (jobs + workflows + datasets + models — deferred item rolled in); moved to [`implemented/24-dry-run-preflight.md`](implemented/24-dry-run-preflight.md) | P1 | — |
 | ~~25~~ | ~~Dangerous-env denylist (`LD_*`, `DYLD_*`, `GCONV_PATH`, …)~~ | **Implemented** (jobs + workflows + artifact staging guards + per-node overrides — both deferred items rolled in); moved to [`implemented/25-env-var-denylist.md`](implemented/25-env-var-denylist.md) | P1 | — |

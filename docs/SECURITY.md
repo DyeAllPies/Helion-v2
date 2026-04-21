@@ -229,7 +229,7 @@ register, read, or delete any entry. There is no per-entry owner check.
 This matches the small-team deployment model of the rest of the API and
 is explicitly called out in the registry handler doc comment. Tightening
 to admin-only delete or owner-only delete is a deliberate future step,
-tracked in `docs/planned-features/10-minimal-ml-pipeline.md`.
+tracked in `docs/planned-features/implemented/10-minimal-ml-pipeline.md`.
 
 **Input validation.** The registry rejects malformed input before any
 disk write:
