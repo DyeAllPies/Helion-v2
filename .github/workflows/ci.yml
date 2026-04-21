@@ -185,6 +185,20 @@ jobs:
           path: runtime-rust/lcov.info
           retention-days: 14
 
+  # ── Docs: frontmatter + line-budget lint (feature 44) ────────────────────────
+  # Tiny, fast job — gates on the Audience/Scope/Depth frontmatter and the
+  # per-folder line budgets from scripts/docs-lint.sh. Runs in parallel with
+  # the heavier tier-1 jobs.
+  docs-lint:
+    name: Docs — frontmatter + line budgets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run docs-lint
+        run: ./scripts/docs-lint.sh
+
   # ── Angular: lint + test + coverage ──────────────────────────────────────────
   test-dashboard:
     name: Angular — lint, test, coverage

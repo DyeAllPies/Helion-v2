@@ -111,8 +111,9 @@ check: lint test test-race coverage-go verify-repo
 	cd dashboard && npx ng lint
 	cd dashboard && npx ng test --watch=false --browsers=ChromeHeadless --code-coverage
 	./scripts/check-dashboard-coverage.sh
+	./scripts/docs-lint.sh
 	@echo ""
-	@echo "==> All local checks passed (Go lint + test + race + coverage, Angular lint + test + coverage, repo hygiene)."
+	@echo "==> All local checks passed (Go lint + test + race + coverage, Angular lint + test + coverage, docs lint, repo hygiene)."
 	@echo ""
 	@echo "NOTE: E2E tests are NOT part of \`make check\` (they take ~3 min and need Docker)."
 	@echo "If this change touches infrastructure (docker-compose*, Dockerfile*, .github/workflows,"
