@@ -274,10 +274,13 @@ func TestServiceProbeTransition_Shape(t *testing.T) {
 // ── WorkflowCompletedWithCounts (feature 40) ────────────────
 
 func TestWorkflowCompletedWithCounts_FullPayload(t *testing.T) {
+	startedAt := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	finishedAt := startedAt.Add(3 * time.Second)
 	e := events.WorkflowCompletedWithCounts(
 		"wf-1", "user:alice",
 		5, 4, 1,
 		map[string]string{"team": "ml", "task": "mnist"},
+		startedAt, finishedAt,
 	)
 	assertTopic(t, e, events.TopicWorkflowCompleted)
 	d := dataMap(t, e)
@@ -296,10 +299,21 @@ func TestWorkflowCompletedWithCounts_FullPayload(t *testing.T) {
 	if !ok || tags["team"] != "ml" || tags["task"] != "mnist" {
 		t.Errorf("tags: got %v", d["tags"])
 	}
+	// Feature 40c — duration_ms is derived from finished - started
+	// in milliseconds, written as an int64.
+	if d["duration_ms"].(int64) != 3_000 {
+		t.Errorf("duration_ms: got %v, want 3000", d["duration_ms"])
+	}
+	if _, ok := d["started_at"].(string); !ok {
+		t.Error("started_at should be present as a string (RFC3339)")
+	}
 }
 
 func TestWorkflowCompletedWithCounts_EmptyOwnerAndTags_Omitted(t *testing.T) {
-	e := events.WorkflowCompletedWithCounts("wf-1", "", 3, 3, 0, nil)
+	e := events.WorkflowCompletedWithCounts(
+		"wf-1", "", 3, 3, 0, nil,
+		time.Time{}, time.Time{},
+	)
 	d := dataMap(t, e)
 	if _, ok := d["owner_principal"]; ok {
 		t.Error("empty owner must not add 'owner_principal' key")
@@ -307,11 +321,21 @@ func TestWorkflowCompletedWithCounts_EmptyOwnerAndTags_Omitted(t *testing.T) {
 	if _, ok := d["tags"]; ok {
 		t.Error("nil tags must not add 'tags' key")
 	}
+	// Feature 40c — zero start + zero finish = no timing fields.
+	if _, ok := d["started_at"]; ok {
+		t.Error("zero startedAt must not add 'started_at' key")
+	}
+	if _, ok := d["duration_ms"]; ok {
+		t.Error("zero startedAt must not add 'duration_ms' key")
+	}
 }
 
 func TestWorkflowCompletedWithCounts_TagsDefensiveCopy(t *testing.T) {
 	src := map[string]string{"k": "v"}
-	e := events.WorkflowCompletedWithCounts("wf-1", "", 1, 1, 0, src)
+	e := events.WorkflowCompletedWithCounts(
+		"wf-1", "", 1, 1, 0, src,
+		time.Time{}, time.Time{},
+	)
 	d := dataMap(t, e)
 	// Mutating the caller's source after event creation must not
 	// bleed into the payload (event buses are fanout — a
@@ -323,13 +347,40 @@ func TestWorkflowCompletedWithCounts_TagsDefensiveCopy(t *testing.T) {
 	}
 }
 
+func TestWorkflowCompletedWithCounts_FinishedBeforeStarted_NoDuration(t *testing.T) {
+	// Defensive: if the clock went backwards (NTP correction
+	// mid-run) we'd compute a negative duration. The constructor
+	// guards that case by omitting duration_ms entirely — the
+	// sink then writes NULL rather than a nonsensical negative.
+	started := time.Date(2026, 4, 20, 12, 0, 5, 0, time.UTC)
+	finished := started.Add(-time.Second) // earlier than started
+	e := events.WorkflowCompletedWithCounts(
+		"wf-1", "", 1, 1, 0, nil,
+		started, finished,
+	)
+	d := dataMap(t, e)
+	if _, ok := d["duration_ms"]; ok {
+		t.Error("finished < started must omit duration_ms")
+	}
+	// started_at + finished_at still present as a forensic signal.
+	if _, ok := d["started_at"].(string); !ok {
+		t.Error("started_at should still be present")
+	}
+	if _, ok := d["finished_at"].(string); !ok {
+		t.Error("finished_at should still be present")
+	}
+}
+
 // ── WorkflowFailedWithCounts (feature 40) ───────────────────
 
 func TestWorkflowFailedWithCounts_FullPayload(t *testing.T) {
+	started := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	finished := started.Add(7 * time.Second)
 	e := events.WorkflowFailedWithCounts(
 		"wf-2", "train_heavy", "user:bob",
 		5, 3, 2,
 		map[string]string{"task": "mnist"},
+		started, finished,
 	)
 	assertTopic(t, e, events.TopicWorkflowFailed)
 	d := dataMap(t, e)
@@ -339,10 +390,16 @@ func TestWorkflowFailedWithCounts_FullPayload(t *testing.T) {
 	if d["failed_count"].(int) != 2 {
 		t.Errorf("failed_count: got %v", d["failed_count"])
 	}
+	if d["duration_ms"].(int64) != 7_000 {
+		t.Errorf("duration_ms: got %v, want 7000", d["duration_ms"])
+	}
 }
 
 func TestWorkflowFailedWithCounts_NoOwnerTags(t *testing.T) {
-	e := events.WorkflowFailedWithCounts("wf-2", "train", "", 3, 2, 1, nil)
+	e := events.WorkflowFailedWithCounts(
+		"wf-2", "train", "", 3, 2, 1, nil,
+		time.Time{}, time.Time{},
+	)
 	d := dataMap(t, e)
 	if _, ok := d["owner_principal"]; ok {
 		t.Error("empty owner must be absent")

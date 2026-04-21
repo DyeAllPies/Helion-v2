@@ -30,9 +30,30 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
+
+
+def _ssl_context() -> ssl.SSLContext | None:
+    """Build a strict SSL context pinned to HELION_CA_FILE.
+
+    See examples/ml-mnist/compare.py for the full rationale.
+    Feature 39 flipped the coordinator REST listener to TLS-on;
+    scripts running inside node containers read the self-signed
+    CA from /app/state/ca.pem (shared volume). Returning None
+    when HELION_CA_FILE is unset leaves urllib with the system
+    trust store — appropriate for local dev against a publicly
+    trusted CA.
+    """
+    ca_file = os.environ.get("HELION_CA_FILE", "").strip()
+    if not ca_file or not os.path.exists(ca_file):
+        return None
+    ctx = ssl.create_default_context(cafile=ca_file)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
+
 
 DATASET_NAME = "mnist"
 DATASET_VERSION = "v1"
@@ -55,7 +76,7 @@ def _get_json(base: str, path: str, token: str) -> dict:
         url, method="GET",
         headers={"Authorization": f"Bearer {token}"},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
         return json.loads(resp.read())
 
 
@@ -87,7 +108,7 @@ def _post(base: str, path: str, token: str, body: dict) -> None:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
             print(f"POST {path} → {resp.status}")
     except urllib.error.HTTPError as e:
         if e.code == 409:

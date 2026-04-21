@@ -56,6 +56,7 @@ func TestLoadMigrations_ExpectedVersions(t *testing.T) {
 		{4, "004_create_views"},
 		{5, "005_unified_sink"},
 		{6, "006_workflow_outcomes"},
+		{7, "007_workflow_outcomes_duration"},
 	}
 
 	if len(migrations) != len(expected) {

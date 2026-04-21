@@ -66,9 +66,41 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
+
+
+def _ssl_context() -> ssl.SSLContext | None:
+    """Build a strict SSL context pinned to HELION_CA_FILE.
+
+    Feature 39 flipped the coordinator's REST listener to TLS-on
+    with a self-signed CA. The E2E overlay writes the CA PEM to
+    /app/state/ca.pem (same volume node agents read at startup);
+    in-container Python scripts inherit access via the shared
+    volume mount. Returning a context that trusts ONLY this CA
+    (not the system trust store) fails closed on any other TLS
+    endpoint, which is the right default for scripts that only
+    ever talk to the coordinator.
+
+    Returns None when HELION_CA_FILE is unset or missing — the
+    urllib default (system trust store + cert verification) then
+    applies, which matches local-dev runs against a publicly
+    trusted CA. Returning None never downgrades security: any
+    https:// URL still validates, just against a different trust
+    anchor.
+    """
+    ca_file = os.environ.get("HELION_CA_FILE", "").strip()
+    if not ca_file or not os.path.exists(ca_file):
+        return None
+    ctx = ssl.create_default_context(cafile=ca_file)
+    # Match the coordinator's MinVersion (TLS 1.3, but keep 1.2
+    # as a floor for non-PQC test clients). A downgrade would
+    # fail the handshake anyway; this is belt-and-braces.
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
+
 
 DATASET_NAME = "mnist"
 DATASET_VERSION = "v1"
@@ -93,7 +125,7 @@ def _get_json(base: str, path: str, token: str) -> dict:
         url, method="GET",
         headers={"Authorization": f"Bearer {token}"},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
         return json.loads(resp.read())
 
 
@@ -125,7 +157,7 @@ def _post(base: str, path: str, token: str, body: dict) -> None:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
             print(f"POST {path} → {resp.status}")
     except urllib.error.HTTPError as e:
         if e.code == 409:

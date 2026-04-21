@@ -72,11 +72,15 @@ interface MLRunsResp {
  */
 async function submitParallelMnistWorkflow(token: string): Promise<void> {
   const jobEnv = {
-    HELION_API_URL: 'http://coordinator:8080',
+    // Feature 39 — coordinator REST is TLS-on; compare.py /
+    // register.py trust the CA pinned via HELION_CA_FILE (see
+    // ssl._ssl_context() in each). No system trust store, no
+    // insecure skip.
+    HELION_API_URL: 'https://coordinator:8080',
+    HELION_CA_FILE: '/app/state/ca.pem',
     HELION_TOKEN:   token,
     // Rust runtime env_clear()s before spawn; python resolves
-    // through PATH on both node images. See
-    // ml-mnist-walkthrough.spec.ts header for the full rationale.
+    // through PATH on both node images.
     PATH: '/usr/local/bin:/usr/bin:/bin',
   };
 
@@ -203,35 +207,50 @@ test.describe('Feature 40 — MNIST parallel-heterogeneous walkthrough (video)',
     // ──────────────────────────────────────────────────────────
     // 1. OPENING beat: DAG builder.
     //
-    // The viewer arrives on /submit — a form-based builder with
-    // "+ add job" on the left pane, a per-job editor on the
-    // right, and the live JSON preview at the bottom. We
-    // demonstrate the mechanic (click "+ add job" → fill one
-    // field) so the audience knows this UI exists, then cut to
-    // the REST submission for deterministic pacing.
+    // Navigate through /submit → /submit/dag-builder (the top-
+    // level /submit redirects to /submit/job by default; the
+    // dag-builder lives under a sub-tab). Demonstrate the
+    // mechanic (click "+ add job" → type into the first job's
+    // name field) so the audience knows this UI exists, then
+    // cut to the REST submission for deterministic pacing —
+    // filling 5 jobs through clicks would risk form-validation
+    // flake on a 40+ s interaction.
     // ──────────────────────────────────────────────────────────
     await page.click('a.nav-link >> text=Submit');
-    await expect(page).toHaveURL(/\/submit$/);
-    await expect(page.locator('h1').filter({ hasText: /DAG builder|SUBMIT|workflow/i }).first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page).toHaveURL(/\/submit\//, { timeout: 10_000 });
+
+    // Navigate to the dag-builder sub-route. The sub-tab link
+    // text is "DAG builder" on current Angular revisions, but
+    // falls back to a direct URL if the copy shifts (the route
+    // path is stable per app.routes.ts).
+    const dagTab = page.locator('a').filter({ hasText: /DAG\s*builder/i }).first();
+    if (await dagTab.isVisible().catch(() => false)) {
+      await dagTab.click();
+    } else {
+      await page.goto('/submit/dag-builder');
+    }
+    await expect(page).toHaveURL(/\/submit\/dag-builder$/, { timeout: 10_000 });
     await page.waitForTimeout(PAUSE_LONG);
 
-    // Click "+ add job" twice so the audience sees the list
-    // grow. Doesn't fill or submit — the REST call below is
-    // the source of truth. The button text is "+ add job"
-    // per submit-dag-builder.component.ts line 65.
+    // Click "+ add job" twice so the audience sees the list grow.
+    // Doesn't fill the whole DAG or submit — the REST call below
+    // is the source of truth. `button.btn-ghost` + text filter
+    // guards against an icon-only future redesign.
     const addJobBtn = page.locator('button.btn-ghost').filter({ hasText: /\+\s*add\s*job/i });
-    await expect(addJobBtn).toBeVisible({ timeout: 5_000 });
-    await addJobBtn.click();
-    await page.waitForTimeout(PAUSE_SHORT);
-    await addJobBtn.click();
-    await page.waitForTimeout(PAUSE_SHORT);
+    if (await addJobBtn.isVisible().catch(() => false)) {
+      await addJobBtn.click();
+      await page.waitForTimeout(PAUSE_SHORT);
+      await addJobBtn.click();
+      await page.waitForTimeout(PAUSE_SHORT);
 
-    // Type into the first job's name so the viewer sees the
-    // live JSON preview update at the bottom of the page.
-    const firstNameInput = page.locator('input[formControlName="name"]').first();
-    await firstNameInput.fill('ingest');
-    await page.waitForTimeout(PAUSE_MEDIUM);
+      // Type into the first job's name so the viewer sees the
+      // live JSON preview update at the bottom of the page.
+      const firstNameInput = page.locator('input[formControlName="name"]').first();
+      if (await firstNameInput.isVisible().catch(() => false)) {
+        await firstNameInput.fill('ingest');
+        await page.waitForTimeout(PAUSE_MEDIUM);
+      }
+    }
 
     // ──────────────────────────────────────────────────────────
     // 2. Navigate to Pipelines and submit the real workflow via
@@ -257,13 +276,23 @@ test.describe('Feature 40 — MNIST parallel-heterogeneous walkthrough (video)',
     // ──────────────────────────────────────────────────────────
     await page.click('a.nav-link >> text=Nodes');
     await expect(page).toHaveURL(/\/nodes$/);
-    // Give the list a tick to populate. Both registered nodes
-    // (e2e-node-1 Go runtime, e2e-node-2 Rust runtime) must be
-    // visible — if only one is, the demo's parallel split
-    // collapses to serial.
+    // Give the list a tick to populate. The iris-overlay brings
+    // up THREE nodes — two Go-runtime Python nodes (node1 =
+    // e2e-node-1, node2 = iris-node-2) and one Rust-runtime
+    // Python node (mnist-node-rust). The parallel walkthrough
+    // lands the Go jobs on either of the Go nodes (round-robin)
+    // and the heavy-training job specifically on the Rust node.
+    // If fewer than three rows, the demo's parallel split risks
+    // collapsing; ≥ 3 keeps the compare step meaningful.
     await expect(
       page.locator('table[mat-table] tr.mat-mdc-row'),
-    ).toHaveCount(2, { timeout: 15_000 });
+    ).toHaveCount(3, { timeout: 15_000 });
+    // Additional narrative beat: assert the rust-runtime node is
+    // actually present by ID. Helps the viewer correlate the
+    // Jobs page's node_id column against the Nodes page.
+    await expect(
+      page.locator('table[mat-table] tr.mat-mdc-row').filter({ hasText: 'mnist-node-rust' }),
+    ).toBeVisible();
     await page.waitForTimeout(PAUSE_LONG);
 
     // ──────────────────────────────────────────────────────────

@@ -29,6 +29,12 @@ func TestFlush_WorkflowCompletedWithCounts_InsertsWorkflowOutcomeRow(t *testing.
 			"failed_count":    0,
 			"owner_principal": "user:alice",
 			"tags":            map[string]string{"task": "mnist", "team": "ml"},
+			// Feature 40c — both are passed through the event
+			// payload so the sink can populate workflow_outcomes.
+			// started_at arrives as the RFC3339Nano string that
+			// the event constructor emits; duration_ms as int64.
+			"started_at":  time.Now().UTC().Add(-3 * time.Second).Format(time.RFC3339Nano),
+			"duration_ms": int64(3_000),
 		},
 	}
 	calls := flushOne(t, SinkConfig{}, evt)
@@ -37,9 +43,10 @@ func TestFlush_WorkflowCompletedWithCounts_InsertsWorkflowOutcomeRow(t *testing.
 		if containsStr(c.SQL, "workflow_outcomes") {
 			found = true
 			// Args: workflowID, outcome, ts, jobCount, successCount,
-			// failedCount, failedJob(nil), owner, tagsJSON.
-			if len(c.Args) != 9 {
-				t.Errorf("args count: got %d, want 9", len(c.Args))
+			// failedCount, failedJob(nil), owner, tagsJSON,
+			// startedAt, durationMs = 11 total.
+			if len(c.Args) != 11 {
+				t.Errorf("args count: got %d, want 11", len(c.Args))
 			}
 			if s, ok := c.Args[0].(string); !ok || s != "mnist-wf-1" {
 				t.Errorf("workflow_id arg: got %v", c.Args[0])
@@ -61,11 +68,49 @@ func TestFlush_WorkflowCompletedWithCounts_InsertsWorkflowOutcomeRow(t *testing.
 			if !containsStr(string(tagsRaw), "mnist") {
 				t.Errorf("tags JSON missing 'mnist': %s", tagsRaw)
 			}
+			// started_at arg is a time.Time (the sink parses the
+			// RFC3339Nano string before handing to pgx).
+			if _, ok := c.Args[9].(time.Time); !ok {
+				t.Errorf("started_at arg: got %T, want time.Time", c.Args[9])
+			}
+			if n, ok := c.Args[10].(int64); !ok || n != 3_000 {
+				t.Errorf("duration_ms arg: got %v", c.Args[10])
+			}
 			break
 		}
 	}
 	if !found {
 		t.Error("no INSERT for workflow_outcomes")
+	}
+}
+
+func TestFlush_WorkflowCompleted_MissingTiming_WritesNulls(t *testing.T) {
+	// Feature 40c — a legacy event without started_at /
+	// duration_ms (or with malformed values) writes NULL into the
+	// new columns rather than failing the tx. Args[9] and
+	// Args[10] should be nil interfaces so pgx binds NULL.
+	evt := events.Event{
+		ID:        "ev-wf-legacy",
+		Type:      events.TopicWorkflowCompleted,
+		Timestamp: time.Now().UTC(),
+		Data: map[string]any{
+			"workflow_id":   "mnist-legacy",
+			"job_count":     4,
+			"success_count": 4,
+			"failed_count":  0,
+		},
+	}
+	calls := flushOne(t, SinkConfig{}, evt)
+	for _, c := range calls {
+		if !containsStr(c.SQL, "workflow_outcomes") {
+			continue
+		}
+		if c.Args[9] != nil {
+			t.Errorf("started_at arg: got %v, want nil (NULL)", c.Args[9])
+		}
+		if c.Args[10] != nil {
+			t.Errorf("duration_ms arg: got %v, want nil (NULL)", c.Args[10])
+		}
 	}
 }
 

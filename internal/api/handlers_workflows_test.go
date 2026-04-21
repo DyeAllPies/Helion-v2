@@ -7,6 +7,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -162,6 +163,89 @@ func TestWorkflowAPI_Submit_TooManyJobs(t *testing.T) {
 		repeatJSON(`{"name":"j%d","command":"echo"}`, 101)+`]}`)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for >100 jobs", rr.Code)
+	}
+}
+
+// ── Feature 40 — Workflow.Tags validation ───────────────────
+
+func TestWorkflowAPI_Submit_Tags_Accepted(t *testing.T) {
+	srv := newWorkflowServer()
+	rr := do(srv, "POST", "/workflows", `{
+		"id": "wf-tag-ok",
+		"name": "tagged",
+		"tags": {"team": "ml", "task": "mnist"},
+		"jobs": [{"name": "a", "command": "echo"}]
+	}`)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkflowAPI_Submit_Tags_TooMany_Rejected(t *testing.T) {
+	// The submit validator caps tags at maxWorkflowTagEntries
+	// (16). 17 entries must 400.
+	srv := newWorkflowServer()
+	tags := ``
+	for i := 0; i < 17; i++ {
+		if i > 0 {
+			tags += ", "
+		}
+		tags += fmt.Sprintf(`"k%d":"v%d"`, i, i)
+	}
+	body := fmt.Sprintf(`{
+		"id": "wf-tag-many",
+		"name": "n",
+		"tags": {%s},
+		"jobs": [{"name": "a", "command": "echo"}]
+	}`, tags)
+	rr := do(srv, "POST", "/workflows", body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkflowAPI_Submit_Tags_ReservedPrefix_Rejected(t *testing.T) {
+	// The `system.` prefix is reserved for sink-injected tags;
+	// a submitter using it gets 400.
+	srv := newWorkflowServer()
+	rr := do(srv, "POST", "/workflows", `{
+		"id": "wf-tag-reserved",
+		"name": "n",
+		"tags": {"system.override": "x"},
+		"jobs": [{"name": "a", "command": "echo"}]
+	}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkflowAPI_Submit_Tags_ControlByte_Rejected(t *testing.T) {
+	// Log-injection guard: a newline in the tag value would
+	// pollute log grep lines. The validator refuses bytes < 0x20.
+	srv := newWorkflowServer()
+	rr := do(srv, "POST", "/workflows", `{
+		"id": "wf-tag-ctl",
+		"name": "n",
+		"tags": {"k": "line1\nline2"},
+		"jobs": [{"name": "a", "command": "echo"}]
+	}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkflowAPI_Submit_Tags_OversizeValue_Rejected(t *testing.T) {
+	// Value > 128 bytes is refused.
+	srv := newWorkflowServer()
+	big := strings.Repeat("x", 129)
+	rr := do(srv, "POST", "/workflows", fmt.Sprintf(`{
+		"id": "wf-tag-big",
+		"name": "n",
+		"tags": {"k": "%s"},
+		"jobs": [{"name": "a", "command": "echo"}]
+	}`, big))
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
 	}
 }
 

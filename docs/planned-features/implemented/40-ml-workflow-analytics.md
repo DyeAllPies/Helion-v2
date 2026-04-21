@@ -225,25 +225,63 @@ Added in this feature:
     events-group-by.
   - `TestAnalyticsMLRuns_LimitClamped` — 10 000 → 500.
 
+## Follow-ups shipped (40b + 40c)
+
+### 40b — Workflow.Tags (2026-04-20)
+
+- `cpb.Workflow` gains a `Tags map[string]string` field
+  (JSON `tags,omitempty`). Carried verbatim from submission
+  through the persisted record and onto the enriched event
+  payload; `workflow_lifecycle.go` defensively copies the map
+  before publishing so a future mid-run tag mutation (e.g.
+  feature 40d "edit tags after submit") can't bleed into
+  already-fanned-out subscriber views.
+- `SubmitWorkflowRequest` accepts the tags map.
+  `validateWorkflowTags` enforces: ≤16 entries, keys + values
+  ≤128 bytes, no empty keys, no control bytes / NUL (log-
+  injection guard), and the `system.` prefix is reserved for
+  future sink-injected tags. Five new API tests in
+  `handlers_workflows_test.go` cover accept / too-many /
+  reserved-prefix / control-byte / oversize-value.
+- The enriched event constructor's tag path was already unit-
+  tested; 40b wires it to a real source instead of the
+  lifecycle's previous `nil` placeholder.
+
+### 40c — started_at + duration_ms (2026-04-20)
+
+- Migration 007 adds `started_at TIMESTAMPTZ` and
+  `duration_ms BIGINT` columns to `workflow_outcomes`. Both
+  nullable — a workflow rejected at dispatch never starts, so
+  "never ran" stays distinguishable from "ran for 0 ms".
+- `WorkflowCompletedWithCounts` / `WorkflowFailedWithCounts`
+  signatures now accept `startedAt, finishedAt time.Time`.
+  The constructor stamps the RFC3339Nano-formatted timestamp
+  on the payload and computes `duration_ms` as
+  `(finishedAt - startedAt).Milliseconds()`. Zero endpoints
+  produce absent payload keys. A finished-before-started
+  payload (clock skew / NTP correction) omits `duration_ms`
+  but keeps the raw timestamps as forensic signal.
+- The sink parses the payload's RFC3339Nano string back into
+  `time.Time`; malformed values become NULL columns rather
+  than failing the batch. The `MLRunRow` wire shape exposes
+  both fields as pointer types so SQL NULL stays JSON-absent.
+- Six new tests: the four pre-existing event tests updated
+  for the new signature, plus:
+  `TestWorkflowCompletedWithCounts_FinishedBeforeStarted_NoDuration`
+  (clock-skew guard),
+  `TestFlush_WorkflowCompleted_MissingTiming_WritesNulls`
+  (legacy events write NULL not bogus zeros).
+
 ## Deferred
 
 - **Dashboard ML Runs panel.** The REST endpoint is live and
   the E2E spec asserts against it, but the Analytics dashboard
   component doesn't yet render a dedicated panel for
-  `/api/analytics/ml-runs`. Feature 40b picks that up — purely
-  UX, no data-layer changes.
-- **Tags on Workflow submission.** `WorkflowCompletedWithCounts`
-  accepts a tags map but the Workflow struct doesn't yet carry
-  Tags (only Jobs do). The coordinator passes nil for now; a
-  future feature that adds `Workflow.Tags` can just populate
-  the map without touching the event constructor.
-- **Durations.** The `workflow_outcomes` table does not yet
-  carry `started_at` or `duration_ms`. The first-job-submitted
-  timestamp isn't in the workflow lifecycle's hot path today,
-  and inferring it from the events table would reintroduce the
-  expensive join the denormalised table is trying to avoid.
-  Feature 40c: thread the workflow's `StartedAt` into the
-  enriched event payload and add the `duration_ms` column.
+  `/api/analytics/ml-runs`. Feature 40d picks that up — purely
+  UX, no data-layer changes. The panel will sort by
+  `duration_ms DESC NULLS LAST` + filter by `tags.team` /
+  `tags.task` as the first pass, matching the queries the
+  started_at + tags columns were sized for.
 
 ## Acceptance criteria
 

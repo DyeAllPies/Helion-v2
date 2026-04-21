@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/DyeAllPies/Helion-v2/internal/events"
 	"github.com/jackc/pgx/v5"
@@ -126,13 +127,31 @@ func (s *Sink) upsertWorkflowOutcome(ctx context.Context, tx pgx.Tx, evt events.
 		}
 	}
 
+	// Feature 40c — started_at + duration_ms. Parsed tolerantly:
+	// a missing / malformed field becomes a NULL in the column,
+	// not a failed INSERT. Distinguishes "never started" from
+	// "ran for 0 ms" downstream.
+	startedAtRaw := extractString(evt.Data, "started_at")
+	var startedAtParam any // nil → NULL
+	if startedAtRaw != "" {
+		if t, err := time.Parse(time.RFC3339Nano, startedAtRaw); err == nil {
+			startedAtParam = t
+		}
+	}
+	durationMs := extractInt64(evt.Data, "duration_ms")
+	var durationParam any // nil → NULL
+	if durationMs > 0 {
+		durationParam = durationMs
+	}
+
 	_, err := tx.Exec(ctx, `
 		INSERT INTO workflow_outcomes (
 			workflow_id, status, completed_at,
 			job_count, success_count, failed_count,
-			failed_job, owner_principal, tags
+			failed_job, owner_principal, tags,
+			started_at, duration_ms
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (workflow_id) DO UPDATE SET
 			status          = EXCLUDED.status,
 			completed_at    = EXCLUDED.completed_at,
@@ -141,11 +160,14 @@ func (s *Sink) upsertWorkflowOutcome(ctx context.Context, tx pgx.Tx, evt events.
 			failed_count    = EXCLUDED.failed_count,
 			failed_job      = EXCLUDED.failed_job,
 			owner_principal = EXCLUDED.owner_principal,
-			tags            = EXCLUDED.tags
+			tags            = EXCLUDED.tags,
+			started_at      = EXCLUDED.started_at,
+			duration_ms     = EXCLUDED.duration_ms
 	`,
 		workflowID, outcome, evt.Timestamp,
 		jobCount, successCount, failedCount,
 		nilIfEmpty(failedJob), nilIfEmpty(ownerPrincipal), tagsJSON,
+		startedAtParam, durationParam,
 	)
 	return err
 }

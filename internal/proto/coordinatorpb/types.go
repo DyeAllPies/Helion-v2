@@ -603,4 +603,22 @@ type Workflow struct {
 	// workflow share does not silently strip access on jobs
 	// that had been given their own shares after start.
 	Shares []authz.Share `json:"shares,omitempty"`
+
+	// Feature 40 — free-form operator-supplied tags. Carried
+	// verbatim through submission, persisted on the workflow
+	// record, and forwarded onto the workflow.{completed,failed}
+	// event payload so the analytics sink writes them into the
+	// workflow_outcomes.tags JSONB column. Useful for
+	// operationally filtering runs by `team=ml` /
+	// `task=image-classification` / `env=staging`. Optional;
+	// omitempty keeps the pre-feature-40 JSON shape on records
+	// that don't set tags.
+	//
+	// Bounds (enforced at submission time — see
+	// handleSubmitWorkflow's validator): at most 16 tags; each
+	// key + value ≤ 128 bytes. The limit is a defensive cap
+	// against a malicious submitter pushing a 10 MB tag map
+	// through the event bus; real-world use fits comfortably
+	// inside those bounds.
+	Tags map[string]string `json:"tags,omitempty"`
 }

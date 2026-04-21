@@ -271,14 +271,22 @@ func WorkflowCompleted(workflowID string) Event {
 // pass. Tags + owner carry through from the submission record so
 // the dashboard can filter on them without a second lookup.
 //
+// Feature 40c — startedAt and finishedAt let the sink compute
+// duration_ms without a second job-store lookup. A zero
+// startedAt (the workflow was submitted but never started, e.g.
+// rejected at dispatch) produces an omitted duration_ms on the
+// payload; the sink then writes NULL into the column so "ran for
+// 0 ms" and "never ran" stay distinguishable downstream.
+//
 // Defensive copy on `tags`: callers often pass the workflow's
-// own map, which a later writer (status transition, share
-// mutation) could mutate under us. Copying here prevents a
-// subscriber from observing a torn tag set mid-mutation.
+// own map, which a later writer could mutate under us. Copying
+// here prevents a subscriber from observing a torn tag set
+// mid-mutation.
 func WorkflowCompletedWithCounts(
 	workflowID, ownerPrincipal string,
 	jobCount, successCount, failedCount int,
 	tags map[string]string,
+	startedAt, finishedAt time.Time,
 ) Event {
 	data := map[string]any{
 		"workflow_id":   workflowID,
@@ -295,6 +303,15 @@ func WorkflowCompletedWithCounts(
 			cp[k] = v
 		}
 		data["tags"] = cp
+	}
+	if !startedAt.IsZero() {
+		data["started_at"] = startedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !finishedAt.IsZero() {
+		data["finished_at"] = finishedAt.UTC().Format(time.RFC3339Nano)
+		if !startedAt.IsZero() && !finishedAt.Before(startedAt) {
+			data["duration_ms"] = finishedAt.Sub(startedAt).Milliseconds()
+		}
 	}
 	return NewEvent(TopicWorkflowCompleted, data)
 }
@@ -367,11 +384,12 @@ func WorkflowFailed(workflowID, failedJob string) Event {
 // WorkflowFailedWithCounts is the feature-40 enriched variant.
 // Same analytics sink contract as WorkflowCompletedWithCounts —
 // the row lands in workflow_outcomes with status='failed', the
-// failed-job attribution, counts, owner, and tags.
+// failed-job attribution, counts, owner, tags, and timing.
 func WorkflowFailedWithCounts(
 	workflowID, failedJob, ownerPrincipal string,
 	jobCount, successCount, failedCount int,
 	tags map[string]string,
+	startedAt, finishedAt time.Time,
 ) Event {
 	data := map[string]any{
 		"workflow_id":   workflowID,
@@ -389,6 +407,15 @@ func WorkflowFailedWithCounts(
 			cp[k] = v
 		}
 		data["tags"] = cp
+	}
+	if !startedAt.IsZero() {
+		data["started_at"] = startedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !finishedAt.IsZero() {
+		data["finished_at"] = finishedAt.UTC().Format(time.RFC3339Nano)
+		if !startedAt.IsZero() && !finishedAt.Before(startedAt) {
+			data["duration_ms"] = finishedAt.Sub(startedAt).Milliseconds()
+		}
 	}
 	return NewEvent(TopicWorkflowFailed, data)
 }

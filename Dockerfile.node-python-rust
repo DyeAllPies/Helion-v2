@@ -65,6 +65,7 @@ COPY examples/ml-mnist/ingest.py     /app/ml-mnist/ingest.py
 COPY examples/ml-mnist/preprocess.py /app/ml-mnist/preprocess.py
 COPY examples/ml-mnist/train.py      /app/ml-mnist/train.py
 COPY examples/ml-mnist/register.py   /app/ml-mnist/register.py
+COPY examples/ml-mnist/compare.py    /app/ml-mnist/compare.py
 COPY examples/ml-mnist/serve.py      /app/ml-mnist/serve.py
 ENV PYTHONPATH=/app/ml-iris:/app/ml-mnist
 

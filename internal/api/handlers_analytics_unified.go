@@ -478,6 +478,11 @@ type MLRunRow struct {
 	FailedJob      string            `json:"failed_job,omitempty"`
 	OwnerPrincipal string            `json:"owner_principal,omitempty"`
 	Tags           map[string]string `json:"tags,omitempty"`
+	// Feature 40c — nullable on the server side (the rollup
+	// never starts a run). omitempty keeps the JSON shape small
+	// for the "never started" case where both fields are absent.
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	DurationMs *int64     `json:"duration_ms,omitempty"`
 }
 
 type MLRunsResponse struct {
@@ -502,7 +507,8 @@ func (s *Server) handleAnalyticsMLRuns(w http.ResponseWriter, r *http.Request) {
 		       job_count, success_count, failed_count,
 		       COALESCE(failed_job, ''),
 		       COALESCE(owner_principal, ''),
-		       COALESCE(tags, '{}'::JSONB)
+		       COALESCE(tags, '{}'::JSONB),
+		       started_at, duration_ms
 		  FROM workflow_outcomes
 		 ORDER BY completed_at DESC
 		 LIMIT $1
@@ -518,10 +524,16 @@ func (s *Server) handleAnalyticsMLRuns(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var row MLRunRow
 		var tagsRaw []byte
+		// Feature 40c — started_at + duration_ms are nullable in
+		// the schema. Scan into pointer types so SQL NULL stays
+		// JSON-absent rather than rendering as 0 / epoch.
+		var startedAt *time.Time
+		var durationMs *int64
 		if err := rows.Scan(
 			&row.WorkflowID, &row.Status, &row.CompletedAt,
 			&row.JobCount, &row.SuccessCount, &row.FailedCount,
 			&row.FailedJob, &row.OwnerPrincipal, &tagsRaw,
+			&startedAt, &durationMs,
 		); err != nil {
 			slog.Error("ml-runs scan", slog.Any("err", err))
 			writeError(w, http.StatusInternalServerError, "scan failed")
@@ -535,6 +547,8 @@ func (s *Server) handleAnalyticsMLRuns(w http.ResponseWriter, r *http.Request) {
 				row.Tags = t
 			}
 		}
+		row.StartedAt = startedAt
+		row.DurationMs = durationMs
 		out = append(out, row)
 	}
 

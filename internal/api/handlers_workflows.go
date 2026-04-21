@@ -62,6 +62,13 @@ type SubmitWorkflowRequest struct {
 	Name     string               `json:"name"`
 	Priority *uint32              `json:"priority,omitempty"` // default priority for all jobs; 0-100
 	Jobs     []WorkflowJobRequest `json:"jobs"`
+	// Feature 40 — free-form tags propagated onto the workflow
+	// record + the workflow.{completed,failed} event payload so
+	// the analytics sink persists them into
+	// workflow_outcomes.tags. Bounds enforced by
+	// validateWorkflowTags: ≤16 entries, keys + values ≤128
+	// bytes, reserved prefix `system.` rejected.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // WorkflowJobResponse is a single job in the workflow response.
@@ -256,6 +263,14 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 		wfJobs[i] = wj
 	}
 
+	// Feature 40 — validate optional workflow tags before building
+	// the cpb.Workflow so a malformed tag map fails the submit
+	// with a 400 rather than being silently dropped.
+	if msg := validateWorkflowTags(req.Tags); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+
 	wf := &cpb.Workflow{
 		ID:   req.ID,
 		Name: req.Name,
@@ -264,6 +279,10 @@ func (s *Server) handleSubmitWorkflow(w http.ResponseWriter, r *http.Request) {
 		// as owner. Materialised child jobs inherit this at
 		// Start()-time (see cluster/workflow_submit.go).
 		OwnerPrincipal: principal.FromContext(r.Context()).ID,
+		// Feature 40 — carry the validated tag map verbatim onto the
+		// persisted record. Never mutated after submission;
+		// workflow_lifecycle.go copies defensively before publishing.
+		Tags: req.Tags,
 	}
 	if req.Priority != nil {
 		wf.Priority = *req.Priority
@@ -484,6 +503,67 @@ func (s *Server) handleCancelWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+// maxWorkflowTagEntries bounds the number of entries a single
+// submission can stamp on Workflow.Tags. Feature-40 tags land on
+// the event bus + JSONB column, so a malicious submitter pushing
+// a 10 MB tag map would blow up the analytics pipeline. 16 is
+// generous for real-world use (team/task/env/priority style
+// labels) while refusing the weaponised-map footgun.
+const maxWorkflowTagEntries = 16
+
+// maxWorkflowTagBytes caps the length of a single tag key or
+// value. Matches the Job.Tags bound used by the registry's
+// ValidateModel/ValidateDataset validators for consistency
+// across the kind-map surface.
+const maxWorkflowTagBytes = 128
+
+// validateWorkflowTags returns a non-empty error string when the
+// feature-40 Workflow.Tags map is malformed. Empty input passes.
+// Keys + values are byte-bounded; control bytes + NUL are
+// refused to keep the JSONB round-trip clean and to prevent a
+// log-injection attack via the workflow_outcomes.tags column
+// that some dashboards will render verbatim.
+func validateWorkflowTags(tags map[string]string) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	if len(tags) > maxWorkflowTagEntries {
+		return fmt.Sprintf(
+			"tags: at most %d entries (got %d)",
+			maxWorkflowTagEntries, len(tags),
+		)
+	}
+	for k, v := range tags {
+		if k == "" {
+			return "tags: empty key not allowed"
+		}
+		if len(k) > maxWorkflowTagBytes {
+			return fmt.Sprintf("tags: key %q > %d bytes", k, maxWorkflowTagBytes)
+		}
+		if len(v) > maxWorkflowTagBytes {
+			return fmt.Sprintf("tags: value for %q > %d bytes", k, maxWorkflowTagBytes)
+		}
+		for i := 0; i < len(k); i++ {
+			if k[i] < 0x20 || k[i] == 0x7f {
+				return fmt.Sprintf("tags: control byte 0x%02x in key %q", k[i], k)
+			}
+		}
+		for i := 0; i < len(v); i++ {
+			if v[i] < 0x20 || v[i] == 0x7f {
+				return fmt.Sprintf("tags: control byte 0x%02x in value for key %q", v[i], k)
+			}
+		}
+		// Reserved prefix — feature-40c may ship sink-injected
+		// tags like `system.duration_ms_bucket=high` that the
+		// operator should never overwrite from the submit
+		// surface.
+		if strings.HasPrefix(k, "system.") {
+			return fmt.Sprintf("tags: reserved prefix 'system.' in key %q", k)
+		}
+	}
+	return ""
+}
 
 func parseCondition(s string) cpb.DependencyCondition {
 	switch strings.ToLower(s) {

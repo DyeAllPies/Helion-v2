@@ -41,7 +41,8 @@ services:
         export HELION_TOKEN="$$(cat /app/state/root-token)"
         # HELION_COORDINATOR stays as coordinator:9090 (gRPC) for the
         # node binary. HELION_API_URL is the iris scripts' HTTP base.
-        export HELION_API_URL="http://coordinator:8080"
+        export HELION_API_URL="https://coordinator:8080"
+        export HELION_CA_FILE="/app/state/ca.pem"
         exec /usr/local/bin/helion-node
     # Feature 21 — label this node `runtime=go` so the MNIST walkthrough
     # can pin the train job to the Rust-runtime node via node_selector
@@ -69,7 +70,8 @@ services:
         export HELION_TOKEN="$$(cat /app/state/root-token)"
         # HELION_COORDINATOR stays as coordinator:9090 (gRPC) for the
         # node binary. HELION_API_URL is the iris scripts' HTTP base.
-        export HELION_API_URL="http://coordinator:8080"
+        export HELION_API_URL="https://coordinator:8080"
+        export HELION_CA_FILE="/app/state/ca.pem"
         exec /usr/local/bin/helion-node
     # Override the Rust runtime env the e2e overlay sets — the iris
     # demo is single-runtime. Keep the S3 backend wiring from the
@@ -121,7 +123,8 @@ services:
       - |
         until [ -s /app/state/root-token ]; do sleep 0.2; done
         export HELION_TOKEN="$$(cat /app/state/root-token)"
-        export HELION_API_URL="http://coordinator:8080"
+        export HELION_API_URL="https://coordinator:8080"
+        export HELION_CA_FILE="/app/state/ca.pem"
         exec /usr/local/bin/entrypoint-node-rust.sh
     environment:
       - PORT=8082

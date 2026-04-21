@@ -220,12 +220,21 @@ func (s *WorkflowStore) OnJobCompleted(ctx context.Context, jobID string, jobSta
 	}
 
 	// Snapshot event-payload inputs before releasing the lock so
-	// the feature-40 constructors see a consistent view. Tags are
-	// NOT currently carried on the Workflow type (only per-Job);
-	// passing nil here is the stable contract — a future tags-on-
-	// workflow feature can just populate the map without touching
-	// the event constructor.
+	// the feature-40 constructors see a consistent view. Tags
+	// carry through the submission — defensive copy here so a
+	// later Tags mutation (none exists today, but a feature-40d
+	// "edit tags post-submit" flow is plausible) doesn't bleed
+	// into subscribers' views of the already-published event.
 	ownerPrincipal := targetWorkflow.OwnerPrincipal
+	startedAt := targetWorkflow.StartedAt
+	finishedAt := targetWorkflow.FinishedAt
+	var tagsSnapshot map[string]string
+	if len(targetWorkflow.Tags) > 0 {
+		tagsSnapshot = make(map[string]string, len(targetWorkflow.Tags))
+		for k, v := range targetWorkflow.Tags {
+			tagsSnapshot[k] = v
+		}
+	}
 
 	s.mu.Unlock()
 
@@ -235,14 +244,16 @@ func (s *WorkflowStore) OnJobCompleted(ctx context.Context, jobID string, jobSta
 			s.eventBus.Publish(events.WorkflowCompletedWithCounts(
 				workflowID, ownerPrincipal,
 				jobCount, successCount, failedCount,
-				nil, // tags (reserved for future workflow-level tags)
+				tagsSnapshot,
+				startedAt, finishedAt,
 			))
 		}
 		if emitFailed {
 			s.eventBus.Publish(events.WorkflowFailedWithCounts(
 				workflowID, failedJobName, ownerPrincipal,
 				jobCount, successCount, failedCount,
-				nil, // tags (reserved for future workflow-level tags)
+				tagsSnapshot,
+				startedAt, finishedAt,
 			))
 		}
 	}
